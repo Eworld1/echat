@@ -157,13 +157,3 @@ export function verifyPassword(password: string, hashed: string): boolean {
 }
 
 // Make db proxy so ANY missing method won't crash
-return new Proxy(db, {
-  get(target, prop: any) {
-    if (prop in target) return (target as any)[prop];
-    // If server calls db.somethingThatDoesntExist, return a dummy async function that won't crash
-    return async (...args: any[]) => {
-      console.warn(`[DB] Missing method db.${prop} called - returning null to prevent crash`, args);
-      return null;
-    };
-  }
-}) as any;
