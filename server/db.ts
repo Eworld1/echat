@@ -146,3 +146,10 @@ class DB {
 
 export const db = new DB();
 export const generateId = () => crypto.randomBytes(12).toString('hex');
+export function hashPassword(password: string): string {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+export function verifyPassword(password: string, hashed: string): boolean {
+  return hashPassword(password) === hashed;
+}
