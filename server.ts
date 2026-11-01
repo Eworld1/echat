@@ -1412,7 +1412,6 @@ app.post('/api/users/:id/change-password', (req: Request, res: Response) => {
     }
 
     // Verify current password if user had one
-    const { hashPassword } = await import('./server/db.js');
     if (authUser.passwordHash && hashPassword(currentPassword) !== authUser.passwordHash) {
       return res.status(400).json({ error: 'Current password is incorrect' });
     }
