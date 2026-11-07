@@ -1,0 +1,25 @@
+# dependencies & build output
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+
+# secrets (use .env.example as the template)
+.env
+.env.*
+!.env.example
+
+# runtime data: user uploads and the JSON database never go to GitHub
+public/uploads/*
+!public/uploads/.gitkeep
+data/*.json
+data/uploads/
+!data/.gitkeep
+
+# tooling / OS / logs
+.aistudio/
+.vercel/
+bun.lock
+.DS_Store
+*.log
