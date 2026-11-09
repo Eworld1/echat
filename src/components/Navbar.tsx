@@ -40,10 +40,11 @@ import {
   Users2,
   Calendar,
   Settings as SettingsIcon
+  , Film
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 
-export type AppView = 'feed' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved';
+export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved';
 
 interface NavbarProps {
   currentView: AppView;
@@ -115,6 +116,15 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: <Users size={18} className="text-emerald-600" />,
       action: () => onNavigate('friends'),
       keywords: ['friends', 'friend requests', 'connections', 'people', 'network', 'requests']
+    },
+    {
+      id: 'page_reels',
+      title: 'Reels',
+      description: 'Create and watch short public videos',
+      category: 'Media',
+      icon: <Film size={18} className="text-fuchsia-600" />,
+      action: () => onNavigate('reels'),
+      keywords: ['reels', 'short videos', 'video feed', 'clips']
     },
     {
       id: 'page_profile',
@@ -804,6 +814,14 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button
+            onClick={() => onNavigate('reels')}
+            className={`h-full px-4 sm:px-6 border-b-3 flex items-center justify-center transition cursor-pointer ${currentView === 'reels' ? 'border-fuchsia-600 text-fuchsia-600' : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
+            title="Reels"
+          >
+            <Film size={22} strokeWidth={currentView === 'reels' ? 2.5 : 2} />
+          </button>
+
+          <button
             onClick={() => onNavigate('friends')}
             className={`h-full px-4 sm:px-8 border-b-3 flex items-center justify-center transition cursor-pointer relative ${
               currentView === 'friends'
@@ -907,9 +925,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                         onClick={() => {
                           setShowNotifications(false);
                           if (n.type === 'message') onOpenMessenger();
-                          else if ((n.type === 'post_tag' || n.type === 'post_share' || n.type === 'post_reaction' || n.type === 'post_comment') && n.targetId) {
+                          else if ((n.type === 'post_tag' || n.type === 'post_share' || n.type === 'post_reaction' || n.type === 'post_comment' || n.type === 'post_new') && n.targetId) {
                             onNavigate('feed', undefined, n.targetId);
-                          } else if (n.type === 'friend_request') onNavigate('friends');
+                          } else if (n.type === 'live_stream') onNavigate('feed');
+                          else if (n.type === 'friend_request') onNavigate('friends');
                           else if (n.type === 'friend_accept' || n.type === 'missed_call') onNavigate('profile', n.actorId);
                         }}
                         className={`p-3.5 flex items-start gap-3 hover:bg-slate-50 transition cursor-pointer ${

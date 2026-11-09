@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { WriteThroughSync, type PersistenceDriver, type Snapshot } from './persistence.js';
-import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem } from './types.js';
+import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem, SiteConfig } from './types.js';
 
 // FIX: Try multiple locations because AI Studio wipes process.cwd()/data on Republish
 const POSSIBLE_DATA_DIRS = [
@@ -24,6 +24,7 @@ export interface DatabaseSchema {
   pages: Page[];
   groups: Group[];
   events: EventItem[];
+  siteConfig: (SiteConfig & { id: string })[];
   auditLogs: AuditLog[];
 }
 
@@ -211,7 +212,8 @@ class Database {
               auditLogs: parsed.auditLogs || [],
               pages: (Array.isArray(parsed.pages) && parsed.pages.length > 0) ? parsed.pages : SEED_PAGES,
               groups: (Array.isArray(parsed.groups) && parsed.groups.length > 0) ? parsed.groups : SEED_GROUPS,
-              events: (Array.isArray(parsed.events) && parsed.events.length > 0) ? parsed.events : SEED_EVENTS
+              events: (Array.isArray(parsed.events) && parsed.events.length > 0) ? parsed.events : SEED_EVENTS,
+              siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.' }]
             },
             path: found.path
           };
@@ -238,7 +240,8 @@ class Database {
       auditLogs: [],
       pages: SEED_PAGES,
       groups: SEED_GROUPS,
-      events: SEED_EVENTS
+      events: SEED_EVENTS,
+      siteConfig: [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.' }]
     };
     this.saveToAll(initial);
     return { data: initial, path: defaultPath };
@@ -335,8 +338,22 @@ class Database {
       auditLogs: parsed.auditLogs || [],
       pages: Array.isArray(parsed.pages) && parsed.pages.length > 0 ? parsed.pages : SEED_PAGES,
       groups: Array.isArray(parsed.groups) && parsed.groups.length > 0 ? parsed.groups : SEED_GROUPS,
-      events: Array.isArray(parsed.events) && parsed.events.length > 0 ? parsed.events : SEED_EVENTS
+      events: Array.isArray(parsed.events) && parsed.events.length > 0 ? parsed.events : SEED_EVENTS,
+      siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.' }]
     };
+  }
+
+  getSiteConfig(): SiteConfig {
+    if (!this.data.siteConfig?.length) this.data.siteConfig = [{ id: 'site' }];
+    return this.data.siteConfig[0];
+  }
+
+  updateSiteConfig(updates: Partial<SiteConfig>): SiteConfig {
+    const current = this.getSiteConfig();
+    const updated = { ...current, ...updates, id: 'site', updatedAt: Date.now() };
+    this.data.siteConfig = [updated];
+    this.save();
+    return updated;
   }
 
   /**
@@ -837,6 +854,15 @@ class Database {
         (m.senderId === userB && m.receiverId === userA)
       )
       .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  getConversationPartners(userId: string): string[] {
+    const partners = new Set<string>();
+    for (const message of this.data.messages) {
+      if (message.senderId === userId) partners.add(message.receiverId);
+      else if (message.receiverId === userId) partners.add(message.senderId);
+    }
+    return [...partners];
   }
 
   addMessage(msg: Omit<Message, 'id' | 'createdAt' | 'status'> & { status?: 'sent' | 'delivered' | 'seen' }): Message {

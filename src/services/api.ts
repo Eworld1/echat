@@ -176,6 +176,18 @@ export const api = {
       return [];
     }
   },
+  async getConversationPartners(): Promise<string[]> {
+    const res = await fetch(apiUrl('/api/conversations'), { headers: getHeaders() });
+    return readResponse<string[]>(res, 'Could not load conversations');
+  },
+  async getSiteConfig(): Promise<import('../types').SiteConfig> {
+    const res = await fetch(apiUrl('/api/site-config'));
+    return readResponse<import('../types').SiteConfig>(res, 'Could not load welcome page settings');
+  },
+  async updateSiteConfig(config: import('../types').SiteConfig): Promise<import('../types').SiteConfig> {
+    const res = await fetch(apiUrl('/api/admin/site-config'), { method: 'PUT', headers: getHeaders(), body: JSON.stringify(config) });
+    return readResponse<import('../types').SiteConfig>(res, 'Could not save welcome page settings');
+  },
 
   async getUserProfile(id: string): Promise<{ user: User; posts: Post[]; friends: User[] }> {
     const res = await fetch(apiUrl(`/api/users/${id}`), { headers: getHeaders() });

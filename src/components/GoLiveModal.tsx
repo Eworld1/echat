@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
+import { liveRtcConfig } from '../utils/liveRtc';
 import { api } from '../services/api';
 import { LiveStream, LiveComment } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
@@ -44,7 +45,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   onStreamEnded
 }) => {
   const { user, isDeveloper } = useAuth();
-  const { onLiveComment, onLiveReaction, onLiveViewersUpdated } = useSocket();
+  const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveSignal, socket } = useSocket();
 
   const [streamTitle, setStreamTitle] = useState(`${user?.name || 'User'} is Live on EChat! 🔥`);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
@@ -58,9 +59,12 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [isVideoMuted, setIsVideoMuted] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const [videoQuality, setVideoQuality] = useState<'360p' | '720p' | '1080p' | '4k'>('720p');
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const livePeersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const livePendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Calculate account age in days
@@ -77,7 +81,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: {
+            width: { ideal: ({ '360p': 640, '720p': 1280, '1080p': 1920, '4k': 3840 } as const)[videoQuality] },
+            height: { ideal: ({ '360p': 360, '720p': 720, '1080p': 1080, '4k': 2160 } as const)[videoQuality] }
+          },
           audio: true
         });
         if (isMounted) {
@@ -105,6 +112,57 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       }
     };
   }, [isOpen, isEligible]);
+
+  useEffect(() => {
+    if (!isBroadcasting || !currentSession) return;
+    const stopSignalListener = onLiveSignal(async message => {
+      if (message.streamId !== currentSession.id) return;
+      const signal = message.signal;
+      try {
+        if (signal.type === 'watch') {
+          const stream = mediaStreamRef.current;
+          if (!stream) return;
+          livePeersRef.current.get(message.fromUserId)?.close();
+          const peer = new RTCPeerConnection(liveRtcConfig);
+          livePeersRef.current.set(message.fromUserId, peer);
+          stream.getTracks().forEach(track => peer.addTrack(track, stream));
+          peer.onicecandidate = event => {
+            if (event.candidate) socket.emit('live:signal', { targetUserId: message.fromUserId, streamId: currentSession.id, signal: { type: 'candidate', candidate: event.candidate } });
+          };
+          peer.onconnectionstatechange = () => {
+            if (peer.connectionState === 'closed' || peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
+              peer.close();
+              if (livePeersRef.current.get(message.fromUserId) === peer) livePeersRef.current.delete(message.fromUserId);
+            }
+          };
+          const offer = await peer.createOffer();
+          await peer.setLocalDescription(offer);
+          socket.emit('live:signal', { targetUserId: message.fromUserId, streamId: currentSession.id, signal: { type: 'offer', description: peer.localDescription } });
+        } else {
+          const peer = livePeersRef.current.get(message.fromUserId);
+          if (!peer) return;
+          if (signal.type === 'answer' && signal.description) {
+            await peer.setRemoteDescription(new RTCSessionDescription(signal.description));
+            const pending = livePendingCandidatesRef.current.get(message.fromUserId) || [];
+            livePendingCandidatesRef.current.delete(message.fromUserId);
+            for (const candidate of pending) await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+          if (signal.type === 'candidate' && signal.candidate) {
+            if (peer.remoteDescription) await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            else livePendingCandidatesRef.current.set(message.fromUserId, [...(livePendingCandidatesRef.current.get(message.fromUserId) || []), signal.candidate]);
+          }
+        }
+      } catch (error) {
+        console.warn('Could not establish the live video connection:', error);
+      }
+    });
+    return () => {
+      stopSignalListener();
+      livePeersRef.current.forEach(peer => peer.close());
+      livePeersRef.current.clear();
+      livePendingCandidatesRef.current.clear();
+    };
+  }, [isBroadcasting, currentSession?.id, onLiveSignal, socket]);
 
   // Listen for socket events while live
   useEffect(() => {
@@ -180,6 +238,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   const handleStartBroadcast = async () => {
     try {
+      if (!mediaStreamRef.current?.getVideoTracks().length) {
+        alert('Allow camera access before starting a live video.');
+        return;
+      }
       const res = await api.startLive(streamTitle);
       if (res.success && res.live) {
         setCurrentSession(res.live);
@@ -208,6 +270,20 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       setIsBroadcasting(false);
       onClose();
     }
+  };
+
+  const changeVideoQuality = async (quality: '360p' | '720p' | '1080p' | '4k') => {
+    setVideoQuality(quality);
+    const track = mediaStreamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    const dimensions = ({
+      '360p': { width: 640, height: 360 },
+      '720p': { width: 1280, height: 720 },
+      '1080p': { width: 1920, height: 1080 },
+      '4k': { width: 3840, height: 2160 }
+    } as const)[quality];
+    try { await track.applyConstraints({ width: { ideal: dimensions.width }, height: { ideal: dimensions.height } }); }
+    catch { alert('This camera or device cannot provide that quality. Choose a lower option.'); }
   };
 
   const handleSendComment = async (e: React.FormEvent) => {
@@ -338,6 +414,13 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                 </div>
               </div>
             </div>
+
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              Quality
+              <select value={videoQuality} onChange={e => void changeVideoQuality(e.target.value as typeof videoQuality)} className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-white">
+                <option value="360p">360p</option><option value="720p">720p</option><option value="1080p">1080p</option><option value="4k">4K</option>
+              </select>
+            </label>
 
             <div className="flex items-center gap-3">
               {isBroadcasting && (

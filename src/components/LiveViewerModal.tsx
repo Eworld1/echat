@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
+import { liveRtcConfig } from '../utils/liveRtc';
 import { api } from '../services/api';
 import { LiveStream, LiveComment } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
@@ -29,13 +30,17 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   if (!currentStream) return null;
 
   const { user } = useAuth();
-  const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped } = useSocket();
+  const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onLiveSignal, socket } = useSocket();
 
   const [liveData, setLiveData] = useState<LiveStream>(currentStream);
   const [commentInput, setCommentInput] = useState('');
   const [comments, setComments] = useState<LiveComment[]>(currentStream.comments || []);
   const [floatingReactions, setFloatingReactions] = useState<{ id: string; emoji: string; left: number }[]>([]);
   const [isMuted, setIsMuted] = useState(false);
+  const [remoteVideo, setRemoteVideo] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const peerRef = useRef<RTCPeerConnection | null>(null);
+  const queuedCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   const commentsEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -46,6 +51,52 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       api.leaveLive();
     };
   }, []);
+
+  useEffect(() => {
+    const peer = new RTCPeerConnection(liveRtcConfig);
+    peerRef.current = peer;
+    peer.ontrack = event => {
+      const incoming = event.streams[0] || new MediaStream([event.track]);
+      setRemoteVideo(incoming);
+      if (videoRef.current) videoRef.current.srcObject = incoming;
+    };
+    peer.onicecandidate = event => {
+      if (event.candidate) socket.emit('live:signal', {
+        targetUserId: currentStream.hostId,
+        streamId: currentStream.id,
+        signal: { type: 'candidate', candidate: event.candidate }
+      });
+    };
+    const unsubscribeSignal = onLiveSignal(async message => {
+      if (message.streamId !== currentStream.id || message.fromUserId !== currentStream.hostId) return;
+      try {
+        const signal = message.signal;
+        if (signal.type === 'offer' && signal.description) {
+          await peer.setRemoteDescription(new RTCSessionDescription(signal.description));
+          while (queuedCandidatesRef.current.length) {
+            const candidate = queuedCandidatesRef.current.shift();
+            if (candidate) await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+          const answer = await peer.createAnswer();
+          await peer.setLocalDescription(answer);
+          socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'answer', description: peer.localDescription } });
+        } else if (signal.type === 'candidate' && signal.candidate) {
+          if (peer.remoteDescription) await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          else queuedCandidatesRef.current.push(signal.candidate);
+        }
+      } catch (error) {
+        console.warn('Could not connect to live video:', error);
+      }
+    });
+    socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'watch' } });
+    return () => {
+      unsubscribeSignal();
+      peer.close();
+      peerRef.current = null;
+      queuedCandidatesRef.current = [];
+      setRemoteVideo(null);
+    };
+  }, [currentStream.id, currentStream.hostId, onLiveSignal, socket]);
 
   // Socket listeners for real-time live events
   useEffect(() => {
@@ -170,9 +221,9 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
         <div className="flex-1 min-h-[360px] sm:min-h-[460px] relative bg-black flex flex-col md:flex-row overflow-hidden">
           
           {/* Main Video Viewport */}
-          <div className="flex-1 relative flex items-center justify-center bg-radial from-slate-900 via-slate-950 to-black overflow-hidden">
-            {/* Visualizer and Live Host Graphic */}
-            <div className="flex flex-col items-center justify-center p-8 text-center">
+            <div className="flex-1 relative flex items-center justify-center bg-radial from-slate-900 via-slate-950 to-black overflow-hidden">
+            <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 h-full w-full object-contain ${remoteVideo ? 'block' : 'hidden'}`} />
+            {!remoteVideo && <div className="flex flex-col items-center justify-center p-8 text-center">
               <div className="relative mb-4">
                 <img
                   src={liveData.hostAvatar}
@@ -186,12 +237,12 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
                 <VerifiedBadge size={16} />
               </h3>
               <p className="text-xs text-rose-400 font-bold uppercase tracking-wider mt-1">
-                Broadcasting Live on EChat
+                Connecting to live video…
               </p>
               <p className="text-xs text-slate-400 mt-2 max-w-sm">
                 "{liveData.title}"
               </p>
-            </div>
+            </div>}
 
             {/* Floating Emojis Burst */}
             <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">

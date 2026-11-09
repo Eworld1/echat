@@ -69,7 +69,9 @@ export class MongoDriver implements PersistenceDriver {
     const raw = (doc as { data?: { buffer?: Uint8Array } | Uint8Array }).data;
     const bytes = raw && 'buffer' in raw && raw.buffer ? raw.buffer : (raw as Uint8Array | undefined);
     if (!bytes) return null;
-    return { mime: String((doc as { mime?: string }).mime || 'application/octet-stream'), data: Buffer.from(bytes) };
+    // MongoDB's BSON typings allow either a Buffer view or its backing ArrayBuffer.
+    // Normalize both forms to a Uint8Array before constructing the Node Buffer.
+    return { mime: String((doc as { mime?: string }).mime || 'application/octet-stream'), data: Buffer.from(new Uint8Array(bytes as any)) };
   }
 
   async close(): Promise<void> {

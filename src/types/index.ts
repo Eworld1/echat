@@ -53,12 +53,13 @@ export interface Message {
 
 export interface Notification {
   id: string; userId: string; actorId: string; actor?: User | null;
-  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'announcement'; // FIX: Added
+  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'announcement'; // FIX: Added
   targetId?: string; message: string; read: boolean; createdAt: number;
   callType?: 'audio' | 'video';
 }
 
 export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUsers: number; totalPosts: number; totalMessages: number; totalStories: number; pendingReports: number; activeSockets: number; uptimeSeconds: number; }
+export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; appName?: string; }
 export interface GlobalSearchResults { users: User[]; posts: Post[]; }
 export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
 export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }

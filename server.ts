@@ -102,6 +102,29 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ ok: true, uptime: process.uptime(), storage: db.persistenceStats ?? 'local-file' });
 });
 
+app.get('/api/site-config', (_req: Request, res: Response) => {
+  const { welcomeTitle, welcomeSubtitle, welcomeBgImage, welcomeLogo, primaryButtonText, secondaryText, appName } = db.getSiteConfig();
+  res.json({ welcomeTitle, welcomeSubtitle, welcomeBgImage, welcomeLogo, primaryButtonText, secondaryText, appName });
+});
+
+app.put('/api/admin/site-config', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser || !isDeveloperUser(authUser)) return res.status(403).json({ error: 'Administrator access required' });
+  const updates: Record<string, string> = {};
+  for (const [key, limit] of [['welcomeTitle', 90], ['welcomeSubtitle', 280], ['primaryButtonText', 36], ['secondaryText', 280], ['appName', 48]] as const) {
+    if (req.body[key] !== undefined) {
+      if (typeof req.body[key] !== 'string') return res.status(400).json({ error: `Invalid ${key}` });
+      updates[key] = req.body[key].trim().slice(0, limit);
+    }
+  }
+  if (req.body.welcomeBgImage !== undefined) {
+    const value = typeof req.body.welcomeBgImage === 'string' ? req.body.welcomeBgImage.trim() : '';
+    if (value && !/^https:\/\//i.test(value) && !value.startsWith('/uploads/')) return res.status(400).json({ error: 'Background must be an HTTPS image URL or uploaded image' });
+    updates.welcomeBgImage = value;
+  }
+  res.json(db.updateSiteConfig(updates));
+});
+
 // Upload a file (sent as a base64 data URL). Returns a server-relative URL.
 app.post('/api/upload', async (req: Request, res: Response) => {
   try {
@@ -723,6 +746,20 @@ app.post('/api/posts', (req: Request, res: Response) => {
     }
   }
 
+  if (safePrivacy === 'public' || safePrivacy === 'friends') {
+    for (const uid of authUser.friends.filter(id => !cleanTaggedIds.includes(id) && !db.isBlockedBetween(authUser.id, id))) {
+      const notification = db.addNotification({
+        userId: uid,
+        actorId: authUser.id,
+        type: 'post_new',
+        message: `${authUser.name} shared a new post`,
+        targetId: post.id,
+        read: false
+      });
+      socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
+    }
+  }
+
   const populated = populatePost(post);
   // Real-time push only for posts everyone may see; private ones reach just the people allowed to.
   if (safePrivacy === 'public') {
@@ -954,6 +991,12 @@ app.post('/api/stories/:id/view', (req: Request, res: Response) => {
 });
 
 // ----------------- MESSAGES / CHAT ROUTES -----------------
+app.get('/api/conversations', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  res.json(db.getConversationPartners(authUser.id));
+});
+
 app.get('/api/messages/:partnerId', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
@@ -1362,6 +1405,20 @@ app.post('/api/live/start', (req: Request, res: Response) => {
     ]
   };
 
+  socketManager.setLiveHost(activeLiveSession.id, activeLiveSession.hostId);
+
+  for (const uid of authUser.friends.filter(id => !db.isBlockedBetween(authUser.id, id))) {
+    const notification = db.addNotification({
+      userId: uid,
+      actorId: authUser.id,
+      type: 'live_stream',
+      message: `${authUser.name} is live: ${activeLiveSession.title}`,
+      targetId: activeLiveSession.id,
+      read: false
+    });
+    socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
+  }
+
   socketManager.broadcast({
     type: 'live_started',
     live: activeLiveSession
@@ -1380,6 +1437,7 @@ app.post('/api/live/stop', (req: Request, res: Response) => {
     }
 
     const endedHostId = activeLiveSession.hostId;
+    socketManager.clearLiveHost(activeLiveSession.id);
     activeLiveSession = null;
 
     socketManager.broadcast({
@@ -1636,9 +1694,15 @@ app.post('/api/pages/:id/posts', (req: Request, res: Response) => {
 });
 
 // ----------------- GROUPS ROUTES -----------------
-app.get('/api/groups', (_req: Request, res: Response) => {
+app.get('/api/groups', (req: Request, res: Response) => {
   try {
-    const groups = db.getGroups();
+    const viewer = getAuthUser(req);
+    const groups = db.getGroups()
+      .filter(group => group.privacy !== 'private' || Boolean(viewer && (group.members.includes(viewer.id) || group.ownerId === viewer.id || isDeveloperUser(viewer))))
+      .map(group => ({
+        ...group,
+        posts: (group.posts || []).filter(post => post.status === 'approved' || Boolean(viewer && (post.authorId === viewer.id || group.ownerId === viewer.id || isDeveloperUser(viewer))))
+      }));
     res.json(groups);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -1647,9 +1711,16 @@ app.get('/api/groups', (_req: Request, res: Response) => {
 
 app.get('/api/groups/:id', (req: Request, res: Response) => {
   try {
+    const viewer = getAuthUser(req);
     const group = db.getGroupById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
-    res.json(group);
+    if (group.privacy === 'private' && (!viewer || (!group.members.includes(viewer.id) && group.ownerId !== viewer.id && !isDeveloperUser(viewer)))) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    res.json({
+      ...group,
+      posts: (group.posts || []).filter(post => post.status === 'approved' || Boolean(viewer && (post.authorId === viewer.id || group.ownerId === viewer.id || isDeveloperUser(viewer))))
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

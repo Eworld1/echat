@@ -17,6 +17,7 @@ import {
   Flag,
   Users2,
   Calendar
+  , Film
 } from 'lucide-react';
 
 interface LeftSidebarProps {
@@ -60,6 +61,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
             <Compass size={20} />
           </div>
           <span className="truncate">{t('news_feed')}</span>
+        </button>
+
+        <button
+          onClick={() => onNavigate('reels')}
+          className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'reels' ? 'bg-fuchsia-50 text-fuchsia-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}
+        >
+          <div className="w-9 h-9 rounded-full bg-fuchsia-100 text-fuchsia-600 flex items-center justify-center"><Film size={19} /></div>
+          <span className="truncate">Reels</span>
         </button>
 
         {/* Friends */}

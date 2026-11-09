@@ -48,6 +48,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     const saved = localStorage.getItem('echat_sound');
     return saved !== null ? saved === 'true' : true;
   });
+  const [ringtone, setRingtone] = useState(() => localStorage.getItem('echat_ringtone') || 'classic');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
@@ -116,6 +117,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
   const handleSaveGeneralSettings = () => {
     localStorage.setItem('echat_notifications', String(notificationsEnabled));
     localStorage.setItem('echat_sound', String(soundEnabled));
+    localStorage.setItem('echat_ringtone', ringtone);
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 3000);
   };
@@ -476,6 +478,19 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                     }`}
                   />
                 </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 py-1">
+                <div>
+                  <div className="text-sm font-bold text-slate-900">Call ringtone</div>
+                  <div className="text-xs text-slate-500">Choose the sound used for incoming calls.</div>
+                </div>
+                <select value={ringtone} onChange={e => setRingtone(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                  <option value="classic">Classic</option>
+                  <option value="chime">Chime</option>
+                  <option value="digital">Digital</option>
+                  <option value="gentle">Gentle</option>
+                </select>
               </div>
 
               <div className="flex items-center justify-between py-1">

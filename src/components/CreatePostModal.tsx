@@ -12,6 +12,9 @@ interface CreatePostModalProps {
   isOpen: boolean;
   onClose: () => void;
   onPostCreated: () => void;
+  forcePublic?: boolean;
+  title?: string;
+  videoOnly?: boolean;
 }
 
 const FEELINGS = [
@@ -27,7 +30,10 @@ const FEELINGS = [
 export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   isOpen,
   onClose,
-  onPostCreated
+  onPostCreated,
+  forcePublic = false,
+  title,
+  videoOnly = false
 }) => {
   const { user } = useAuth();
   const { t } = usePreferences();
@@ -40,7 +46,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [feeling, setFeeling] = useState<string | null>(null);
   const [privacy, setPrivacy] = useState<'public' | 'friends' | 'only_me'>(
-    user?.privacySettings?.postVisibility === 'friends' || user?.privacySettings?.postVisibility === 'only_me'
+    forcePublic ? 'public' : user?.privacySettings?.postVisibility === 'friends' || user?.privacySettings?.postVisibility === 'only_me'
       ? user.privacySettings.postVisibility
       : 'public'
   );
@@ -56,6 +62,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setError('');
 
     const isVid = picked.type.startsWith('video');
+    if (videoOnly && !isVid) {
+      setError('Choose a video file to create a Reel.');
+      return;
+    }
     if (isVid && picked.size > 15 * 1024 * 1024) {
       setError('Video is too large. Maximum size is 15 MB.');
       return;
@@ -69,6 +79,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (videoOnly && (!mediaFile || mediaType !== 'video')) {
+      setError('Choose a video before publishing a Reel.');
+      return;
+    }
     if (!content.trim() && !mediaFile) return;
 
     setIsSubmitting(true);
@@ -80,7 +94,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         mediaUrl: uploadedUrl,
         mediaType: uploadedUrl ? mediaType : undefined,
         feeling: feeling || undefined,
-        privacy,
+        privacy: forcePublic ? 'public' : privacy,
         taggedUserIds: taggedFriends.map(f => f.id)
       });
 
@@ -112,7 +126,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="relative px-6 py-4 border-b border-slate-100 flex items-center justify-center">
-          <h3 className="text-base font-bold text-slate-900">{t('create_post')}</h3>
+          <h3 className="text-base font-bold text-slate-900">{title || t('create_post')}</h3>
           <button
             onClick={onClose}
             className="absolute right-4 p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition"
@@ -138,14 +152,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               </div>
               
               {/* Privacy selector */}
-              <button
+              {!forcePublic && <button
                 type="button"
                 onClick={() => setPrivacy(p => (p === 'public' ? 'friends' : p === 'friends' ? 'only_me' : 'public'))}
                 className="mt-0.5 inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded-md text-[11px] font-semibold text-slate-700 transition"
               >
                 {privacy === 'public' ? <Globe size={11} /> : privacy === 'friends' ? <Users size={11} /> : <Lock size={11} />}
                 <span>{privacy === 'public' ? 'Public' : privacy === 'friends' ? 'Friends' : 'Only me'}</span>
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -231,7 +245,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                 <Image size={20} />
                 <input
                   type="file"
-                  accept="image/*,video/*"
+                  accept={videoOnly ? 'video/*' : 'image/*,video/*'}
                   className="hidden"
                   onChange={handleMediaUpload}
                 />

@@ -5,7 +5,7 @@ import { AdminActivity } from './admin/AdminActivity';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { AdminStats, User, Post } from '../types';
+import { AdminStats, User, Post, SiteConfig } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import confetti from 'canvas-confetti';
 import {
@@ -45,7 +45,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [reportedPosts, setReportedPosts] = useState<Post[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'reports' | 'announce' | 'activity' | 'profile'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'reports' | 'announce' | 'activity' | 'profile' | 'welcome'>('overview');
   const [userSearch, setUserSearch] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -59,6 +59,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
   const [devWork, setDevWork] = useState(user?.work || '');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [welcomeConfig, setWelcomeConfig] = useState<SiteConfig>({});
+  const [isSavingWelcome, setIsSavingWelcome] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -69,6 +71,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
       setDevWork(user.work || '');
     }
   }, [user]);
+
+  useEffect(() => {
+    if (isDeveloper) api.getSiteConfig().then(setWelcomeConfig).catch(err => setErrorMsg(err.message || 'Could not load welcome page settings'));
+  }, [isDeveloper]);
 
   const handleClaimAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -207,6 +213,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
     }
   };
 
+  const handleSaveWelcome = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingWelcome(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const saved = await api.updateSiteConfig(welcomeConfig);
+      setWelcomeConfig(saved);
+      setSuccessMsg('Welcome page settings saved and published.');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Could not save welcome page settings');
+    } finally {
+      setIsSavingWelcome(false);
+    }
+  };
+
 
   const filteredUsers = usersList.filter(u =>
     u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
@@ -271,7 +293,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
             ['reports', 'Moderation', <AlertTriangle key="r" size={14} />],
             ['announce', 'Announcements', <Megaphone key="a" size={14} />],
             ['activity', 'Activity log', <Terminal key="l" size={14} />],
-            ['profile', 'My controls', <Shield key="p" size={14} />]
+            ['profile', 'My controls', <Shield key="p" size={14} />],
+            ['welcome', 'Welcome page', <Edit3 key="w" size={14} />]
           ] as const).map(([id, label, icon]) => (
             <button
               key={id}
@@ -561,6 +584,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
       )}
 
       {/* TAB 4: LIVE EVENT STREAM */}
+      {activeTab === 'welcome' && (
+        <form onSubmit={handleSaveWelcome} className="max-w-3xl rounded-2xl border border-slate-200 bg-white p-5 sm:p-7 shadow-sm space-y-5">
+          <div><h2 className="text-lg font-extrabold text-slate-900">Welcome page</h2><p className="mt-1 text-sm text-slate-500">Edit the public sign-in screen content and background.</p></div>
+          <label className="block text-sm font-semibold text-slate-700">Headline<input maxLength={90} value={welcomeConfig.welcomeTitle || ''} onChange={e => setWelcomeConfig(current => ({ ...current, welcomeTitle: e.target.value }))} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-normal" placeholder="Welcome to EChat" /></label>
+          <label className="block text-sm font-semibold text-slate-700">Welcome text<textarea maxLength={280} rows={3} value={welcomeConfig.welcomeSubtitle || ''} onChange={e => setWelcomeConfig(current => ({ ...current, welcomeSubtitle: e.target.value }))} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-normal" placeholder="Connect with friends and share moments." /></label>
+          <label className="block text-sm font-semibold text-slate-700">Background image URL<input value={welcomeConfig.welcomeBgImage || ''} onChange={e => setWelcomeConfig(current => ({ ...current, welcomeBgImage: e.target.value }))} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-normal" placeholder="https://example.com/welcome-background.jpg" /></label>
+          {welcomeConfig.welcomeBgImage && <img src={welcomeConfig.welcomeBgImage} alt="Welcome background preview" className="h-40 w-full rounded-xl object-cover" />}
+          <button disabled={isSavingWelcome} className="rounded-xl bg-purple-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-purple-800 disabled:opacity-60">{isSavingWelcome ? 'Saving…' : 'Save welcome page'}</button>
+        </form>
+      )}
       {activeTab === 'announce' && <AdminAnnouncements />}
 
       {activeTab === 'activity' && <AdminActivity />}

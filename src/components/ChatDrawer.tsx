@@ -17,13 +17,16 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose, onSelec
   const [users, setUsers] = useState<User[]>([]);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'online'>('all');
+  const [contactIds, setContactIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (isOpen) {
-      api.getUsers()
-        .then(list => {
+      Promise.all([api.getUsers(), api.getConversationPartners().catch(() => [])])
+        .then(([list, conversationPartners]) => {
           if (Array.isArray(list)) {
-            const filtered = list.filter(u => u && u.id !== user?.id);
+            const relevantIds = new Set([...(user?.friends || []), ...conversationPartners]);
+            const filtered = list.filter(u => u && u.id !== user?.id && relevantIds.has(u.id));
+            setContactIds(filtered.map(u => u.id));
             // Pin developer to top
             const sorted = filtered.sort((a, b) => {
               const aIsDev = a.isOfficialDeveloper || a.email?.toLowerCase().trim() === 'eldermoses89@gmail.com' ? 1 : 0;
@@ -38,6 +41,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose, onSelec
         .catch(err => {
           console.error('Failed to load users in ChatDrawer:', err);
           setUsers([]);
+          setContactIds([]);
         });
     }
   }, [isOpen, user?.id]);
@@ -102,7 +106,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose, onSelec
                 activeTab === 'all' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              All Contacts ({userList.length})
+              Friends & chats ({contactIds.length})
             </button>
             <button
               onClick={() => setActiveTab('online')}

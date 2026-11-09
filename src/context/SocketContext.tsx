@@ -65,6 +65,7 @@ interface SocketContextType {
   onLiveComment: (cb: (comment: LiveComment) => void) => () => void;
   onLiveReaction: (cb: (data: { emoji: string; userName?: string; userId?: string }) => void) => () => void;
   onLiveViewersUpdated: (cb: (count: number) => void) => () => void;
+  onLiveSignal: (cb: (data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void) => () => void;
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
@@ -146,7 +147,7 @@ function createFallbackMediaStream(callType: 'audio' | 'video'): MediaStream {
   return stream;
 }
 
-function startSynthRingtone(): () => void {
+function startSynthRingtone(ringtoneId = 'classic'): () => void {
   try {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return () => {};
@@ -154,23 +155,27 @@ function startSynthRingtone(): () => void {
     let isStopped = false;
     let timer: any = null;
 
+    const patterns: Record<string, number[]> = {
+      classic: [440, 480],
+      chime: [523, 659],
+      digital: [660, 880],
+      gentle: [392, 494]
+    };
+    const notes = patterns[ringtoneId] || patterns.classic;
     const playBeep = () => {
       if (isStopped || ctx.state === 'closed') return;
       try {
-        const osc1 = ctx.createOscillator();
-        const osc2 = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc1.frequency.value = 440;
-        osc2.frequency.value = 480;
         gain.gain.setValueAtTime(0.06, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.8);
-        osc1.connect(gain);
-        osc2.connect(gain);
         gain.connect(ctx.destination);
-        osc1.start();
-        osc2.start();
-        osc1.stop(ctx.currentTime + 1.8);
-        osc2.stop(ctx.currentTime + 1.8);
+        notes.forEach(frequency => {
+          const oscillator = ctx.createOscillator();
+          oscillator.frequency.value = frequency;
+          oscillator.connect(gain);
+          oscillator.start();
+          oscillator.stop(ctx.currentTime + 1.8);
+        });
       } catch {}
       if (!isStopped) {
         timer = setTimeout(playBeep, 3500);
@@ -189,40 +194,8 @@ function startSynthRingtone(): () => void {
 
 // Play phone ringtone using /ring.mp3 with synthesis fallback
 function startRingtone(): () => void {
-  let isStopped = false;
-  let audioEl: HTMLAudioElement | null = null;
-  let synthStop: (() => void) | null = null;
-
-  try {
-    audioEl = new Audio('/ring.mp3');
-    audioEl.loop = true;
-    audioEl.volume = 0.85;
-    const playPromise = audioEl.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        if (!isStopped) {
-          synthStop = startSynthRingtone();
-        }
-      });
-    }
-  } catch {
-    synthStop = startSynthRingtone();
-  }
-
-  return () => {
-    isStopped = true;
-    if (audioEl) {
-      try {
-        audioEl.pause();
-        audioEl.currentTime = 0;
-      } catch {}
-      audioEl = null;
-    }
-    if (synthStop) {
-      synthStop();
-      synthStop = null;
-    }
-  };
+  if (localStorage.getItem('echat_sound') === 'false') return () => {};
+  return startSynthRingtone(localStorage.getItem('echat_ringtone') || 'classic');
 }
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -265,6 +238,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const liveCommentListeners = useRef<Set<(comment: LiveComment) => void>>(new Set());
   const liveReactionListeners = useRef<Set<(data: { emoji: string; userName?: string; userId?: string }) => void>>(new Set());
   const liveViewersUpdatedListeners = useRef<Set<(count: number) => void>>(new Set());
+  const liveSignalListeners = useRef<Set<(data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void>>(new Set());
 
   // WebRTC teardown helper
   const cleanUpCallMedia = useCallback(() => {
@@ -490,6 +464,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
           case 'live_viewers_updated':
             liveViewersUpdatedListeners.current.forEach(cb => cb(data.viewersCount));
+            break;
+
+          case 'live:signal':
+            liveSignalListeners.current.forEach(cb => cb(data));
             break;
 
           // WebRTC Call Signaling (Supports call:initiate, call:offer, call:answer, call:ice-candidate, call:end, call:rejected)
@@ -1147,6 +1125,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => { liveViewersUpdatedListeners.current.delete(cb); };
   };
 
+  const onLiveSignal = (cb: (data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void) => {
+    liveSignalListeners.current.add(cb);
+    return () => { liveSignalListeners.current.delete(cb); };
+  };
+
   return (
     <SocketContext.Provider
       value={{
@@ -1179,7 +1162,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         onLiveStreamUpdated,
         onLiveComment,
         onLiveReaction,
-        onLiveViewersUpdated
+        onLiveViewersUpdated,
+        onLiveSignal
       }}
     >
       {children}

@@ -1,9 +1,11 @@
 import { initialsAvatar } from '../utils/avatar';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { TermsModal } from './TermsModal';
-import { MessageSquare, Calendar, Video, Sparkles, AlertCircle, Shield } from 'lucide-react';
+import { api } from '../services/api';
+import type { SiteConfig } from '../types';
+import { MessageSquare, Calendar, Video, Sparkles, AlertCircle, Shield, Eye, EyeOff } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -17,6 +19,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   // Form states
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [welcomeConfig, setWelcomeConfig] = useState<SiteConfig>({});
   const [name, setName] = useState('');
   const [dob, setDob] = useState('');
   const [bio, setBio] = useState('');
@@ -30,6 +34,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
+
+  useEffect(() => {
+    api.getSiteConfig().then(setWelcomeConfig).catch(() => {});
+  }, []);
 
   if (!isOpen) return null;
 
@@ -104,7 +112,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-cover bg-center bg-no-repeat"
       style={{
-        backgroundImage: `url('/assets/aistudio/bd3de880-e4c3-43a6-a9a3-f5f3393ff3a6_470c76c2.jpg')`
+        backgroundImage: `url('${welcomeConfig.welcomeBgImage || '/assets/aistudio/bd3de880-e4c3-43a6-a9a3-f5f3393ff3a6_470c76c2.jpg'}')`
       }}
     >
       {/* Dark tint overlay for readability */}
@@ -119,12 +127,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               <MessageSquare size={30} />
             </div>
             <h1 className="text-4xl sm:text-5xl font-black text-white tracking-tight">
-              Echat
+              {welcomeConfig.welcomeTitle || welcomeConfig.appName || 'Echat'}
             </h1>
           </div>
 
           <p className="text-xl sm:text-2xl font-light text-slate-100 leading-snug max-w-md mx-auto lg:mx-0">
-            Connect with friends, share 24-hour stories, and make crystal-clear calls with the people in your life.
+            {welcomeConfig.welcomeSubtitle || 'Connect with friends, share 24-hour stories, and make calls with the people in your life.'}
           </p>
 
           <div className="space-y-3 pt-2 hidden sm:block max-w-md mx-auto lg:mx-0 text-slate-200 text-sm">
@@ -199,14 +207,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 <label className="block text-[11px] font-bold text-slate-700 mb-1">
                   Password
                 </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                  className="w-full p-3.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden transition"
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    autoComplete="current-password"
+                    className="w-full p-3.5 pr-12 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden transition"
+                    required
+                  />
+                  <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-500 hover:text-blue-600 rounded-lg">
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
               </div>
 
               <button
@@ -261,14 +275,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 <label className="block text-[11px] font-bold text-slate-700 mb-1">
                   Password
                 </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="Create a strong password"
-                  className="w-full p-2.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="Create a strong password"
+                    autoComplete="new-password"
+                    className="w-full p-2.5 pr-11 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
+                    required
+                  />
+                  <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 text-slate-500 hover:text-blue-600 rounded-lg">
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </div>
               </div>
 
               {/* Date of Birth Field (Required, 18+ only) */}

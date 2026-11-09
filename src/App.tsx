@@ -7,6 +7,7 @@ import { Navbar } from './components/Navbar';
 import { LeftSidebar } from './components/LeftSidebar';
 import { RightSidebar } from './components/RightSidebar';
 import { Feed } from './components/Feed';
+import { Reels } from './pages/Reels';
 import { FriendsView } from './components/FriendsView';
 import { ProfileView } from './components/ProfileView';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -162,6 +163,8 @@ export function MainApp() {
               liveStream={currentLiveStream}
             />
           )}
+
+          {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} />}
 
           {currentView === 'friends' && (
             <FriendsView

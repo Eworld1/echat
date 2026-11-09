@@ -10,6 +10,7 @@ interface ClientConnection {
 export class SocketManager {
   private wss: WebSocketServer;
   private userSockets: Map<string, Set<WebSocket>> = new Map();
+  private liveHosts = new Map<string, string>();
 
   // Calls that are ringing and have not been answered, declined or cancelled yet.
   private pendingCalls = new Map<string, { callerId: string; receiverId: string; callType: 'audio' | 'video'; timer: ReturnType<typeof setTimeout> }>();
@@ -60,6 +61,14 @@ export class SocketManager {
 
   public getActiveCount(): number {
     return this.wss.clients.size;
+  }
+
+  public setLiveHost(streamId: string, hostId: string): void {
+    this.liveHosts.set(streamId, hostId);
+  }
+
+  public clearLiveHost(streamId: string): void {
+    this.liveHosts.delete(streamId);
   }
 
   private setupListeners() {
@@ -157,6 +166,18 @@ export class SocketManager {
           type: 'messages_seen',
           viewerId
         });
+        break;
+      }
+
+      case 'live:signal': {
+        const fromUserId = this.userIdOf(ws);
+        const { targetUserId, streamId, signal } = payload;
+        const hostId = typeof streamId === 'string' ? this.liveHosts.get(streamId) : undefined;
+        if (!fromUserId || !hostId || !signal || typeof signal !== 'object') break;
+        if (fromUserId !== hostId && targetUserId !== hostId) break;
+        const recipientId = fromUserId === hostId ? targetUserId : hostId;
+        if (typeof recipientId !== 'string' || recipientId === fromUserId) break;
+        this.sendToUser(recipientId, { type: 'live:signal', streamId, fromUserId, signal });
         break;
       }
 
