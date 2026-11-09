@@ -584,6 +584,18 @@ class Database {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  recordPostView(postId: string, viewerId: string): Post | null {
+    const post = this.getPostById(postId);
+    if (!post || post.authorId === viewerId || !this.canViewPost(post, viewerId)) return post || null;
+    if (!post.views) post.views = [];
+    if (!post.views.includes(viewerId)) {
+      post.views.push(viewerId);
+      post.viewsCount = post.views.length;
+      this.save();
+    }
+    return post;
+  }
+
   // ---------- Saved posts (bookmarks) ----------
   toggleSavedPost(userId: string, postId: string): { saved: boolean; savedPosts: string[] } | null {
     const user = this.getUserById(userId);
@@ -812,6 +824,10 @@ class Database {
       this.save();
     }
     return true;
+  }
+
+  getStoryById(storyId: string): Story | undefined {
+    return this.data.stories.find(s => s.id === storyId);
   }
 
   getConversation(userA: string, userB: string): Message[] {

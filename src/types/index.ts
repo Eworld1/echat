@@ -40,7 +40,7 @@ export interface Post {
 export interface Story {
   id: string; authorId: string; author?: User; // FIX: optional
   type: 'text' | 'image' | 'video'; mediaUrl?: string; text?: string;
-  backgroundGradient?: string; viewers: { userId: string; viewedAt: number }[];
+  backgroundGradient?: string; viewers: { userId: string; viewedAt: number; user?: Pick<User, 'id' | 'name' | 'avatar'> | null }[];
   createdAt: number; expiresAt: number;
 }
 

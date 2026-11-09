@@ -81,10 +81,10 @@ export const TermsModal: React.FC<TermsModalProps> = ({
           <section className="space-y-2">
             <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
               <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">3</span>
-              Age Verification & Safety (13+ Requirement)
+              Age Verification & Safety (18+ Requirement)
             </h3>
             <p>
-              You must be at least 13 years of age to register or use EChat. By submitting your Date of Birth, you certify under penalty of account forfeiture that the date provided is truthful and accurate. Accounts found to belong to individuals under the age of 13 will be deleted immediately.
+              You must be at least 18 years of age to register or use EChat. By submitting your Date of Birth, you certify under penalty of account forfeiture that the date provided is truthful and accurate. Accounts found to belong to individuals under the age of 18 will be deleted immediately.
             </p>
           </section>
 

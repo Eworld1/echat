@@ -245,8 +245,8 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       age--;
     }
 
-    if (age < 13) {
-      return res.status(400).json({ error: 'You must be at least 13 years old to create an account on Echat.' });
+    if (age < 18) {
+      return res.status(400).json({ error: 'You must be at least 18 years old to create an account on Echat.' });
     }
 
     const existing = db.getUserByEmail(cleanEmail);
@@ -673,6 +673,14 @@ app.get('/api/posts', (req: Request, res: Response) => {
   res.json(populated);
 });
 
+app.post('/api/posts/:id/view', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const post = db.recordPostView(req.params.id, authUser.id);
+  if (!post || !db.canViewPost(post, authUser.id)) return res.status(404).json({ error: 'Post not found' });
+  res.json({ viewsCount: post.viewsCount || 0 });
+});
+
 app.post('/api/posts', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
@@ -932,8 +940,17 @@ app.post('/api/stories/:id/view', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
-  db.viewStory(req.params.id, authUser.id);
-  res.json({ success: true });
+  const story = db.getStoryById(req.params.id);
+  if (!story || story.authorId !== authUser.id) db.viewStory(req.params.id, authUser.id);
+  const updated = db.getStoryById(req.params.id);
+  res.json({ success: true, story: updated ? {
+    ...updated,
+    author: db.sanitizeUser(db.getUserById(updated.authorId)!),
+    viewers: updated.authorId === authUser.id ? updated.viewers.map(v => {
+      const viewer = db.getUserById(v.userId);
+      return { ...v, user: viewer ? { id: viewer.id, name: viewer.name, avatar: viewer.avatar } : null };
+    }) : []
+  } : null });
 });
 
 // ----------------- MESSAGES / CHAT ROUTES -----------------

@@ -23,12 +23,15 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [replyText, setReplyText] = useState('');
-
   const currentStory = stories[currentIndex];
+  const [storyViewers, setStoryViewers] = useState(currentStory?.viewers || []);
 
   useEffect(() => {
     if (!currentStory) return;
-    api.viewStory(currentStory.id);
+    setStoryViewers(currentStory.viewers || []);
+    api.viewStory(currentStory.id).then(result => {
+      if (result.story?.id === currentStory.id) setStoryViewers(result.story.viewers || []);
+    }).catch(() => {});
   }, [currentIndex, currentStory]);
 
   // Story autoplay timer
@@ -215,11 +218,22 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
                   Viewers ({currentStory.viewers.length})
                 </span>
               </div>
-              <p className="text-xs text-white/80">
-                {currentStory.viewers.length === 0
-                  ? 'No views yet. Friends will see your story.'
-                  : `${currentStory.viewers.length} friends viewed your story in the last 24 hours.`}
-              </p>
+              {currentStory.viewers.length === 0 ? (
+                <p className="text-xs text-white/80">No views yet. Friends will see your story.</p>
+              ) : (
+                <div className="mt-2 max-h-32 overflow-y-auto space-y-2">
+                  {storyViewers.map(view => {
+                    const viewer = view.user;
+                    return (
+                      <div key={view.userId} className="flex items-center gap-2 text-xs text-white/90">
+                        <img src={viewer?.avatar || initialsAvatar(viewer?.name || 'Echat User')} alt="" className="w-7 h-7 rounded-full object-cover" />
+                        <span className="font-semibold truncate">{viewer?.name || 'Echat user'}</span>
+                        <span className="ml-auto text-white/60">{new Date(view.viewedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ) : (
             <form onSubmit={handleSendReply} className="flex items-center gap-2">

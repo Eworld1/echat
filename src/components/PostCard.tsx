@@ -1,7 +1,7 @@
 import { usePreferences } from '../context/PreferencesContext';
 import { SharePostModal, postPermalink } from './SharePostModal';
 import { initialsAvatar } from '../utils/avatar';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Post, ReactionType, User } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -19,7 +19,8 @@ import {
   Flag,
   Globe,
   Users,
-  Send
+  Send,
+  Download
 } from 'lucide-react';
 
 interface PostCardProps {
@@ -61,6 +62,21 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [editText, setEditText] = useState(post.content || '');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const node = cardRef.current;
+    if (!node || !user || post.authorId === user.id || typeof IntersectionObserver === 'undefined') return;
+    let recorded = false;
+    const observer = new IntersectionObserver(entries => {
+      if (recorded || !entries.some(entry => entry.isIntersecting)) return;
+      recorded = true;
+      api.recordPostView(post.id).then(({ viewsCount }) => onPostUpdated({ ...post, viewsCount })).catch(() => {});
+      observer.disconnect();
+    }, { threshold: 0.6 });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [post.id, user?.id]);
 
   // Safe author access
   const author: Partial<User> & { id: string; name: string; avatar: string } = post.author || {
@@ -169,7 +185,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   const displayName = isDevAuthor ? 'EChat Official - Developer' : author.name;
 
   return (
-    <div id={`post-${post.id}`} className="bg-white rounded-2xl shadow-xs border border-slate-200/90 overflow-hidden transition scroll-mt-20">
+    <div ref={cardRef} id={`post-${post.id}`} className="bg-white rounded-2xl shadow-xs border border-slate-200/90 overflow-hidden transition scroll-mt-20">
       {/* Post Header */}
       <div className="p-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -244,6 +260,19 @@ export const PostCard: React.FC<PostCardProps> = ({
                 <Share2 size={14} />
                 {t('copy_link')}
               </button>
+
+              {post.mediaUrl && (
+                <a
+                  href={post.mediaUrl}
+                  download
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => setShowOptions(false)}
+                  className="w-full text-left px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  <Download size={14} /> Download media
+                </a>
+              )}
 
               <button
                 onClick={() => {
@@ -442,6 +471,7 @@ export const PostCard: React.FC<PostCardProps> = ({
             {(post.comments || []).length} comments
           </button>
           <span>{post.sharesCount || 0} shares</span>
+          <span>{post.viewsCount || 0} views</span>
         </div>
       </div>
 

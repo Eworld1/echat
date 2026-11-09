@@ -69,8 +69,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     }
 
     const age = calculateAge(dob);
-    if (age < 13) {
-      setErrorMsg('You must be at least 13 years old to register on Echat.');
+    if (age < 18) {
+      setErrorMsg('You must be at least 18 years old to register on Echat.');
       return;
     }
 
@@ -144,7 +144,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               <div className="w-8 h-8 rounded-xl bg-white/15 backdrop-blur-md text-emerald-300 flex items-center justify-center border border-white/20">
                 <Calendar size={16} />
               </div>
-              <span className="font-medium">Safe community verified with Date of Birth (13+)</span>
+              <span className="font-medium">18+ community verified with Date of Birth</span>
             </div>
           </div>
         </div>
@@ -271,17 +271,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 />
               </div>
 
-              {/* Date of Birth Field (Required, min 13 years old) */}
+              {/* Date of Birth Field (Required, 18+ only) */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
                   <span>Date of Birth <span className="text-red-500">*</span></span>
-                  <span className="text-[10px] text-slate-500 font-normal">Must be at least 13 years old</span>
+                  <span className="text-[10px] text-slate-500 font-normal">Must be at least 18 years old</span>
                 </label>
                 <div className="relative">
                   <input
                     type="date"
                     value={dob}
-                    max={new Date(new Date().setFullYear(new Date().getFullYear() - 13)).toISOString().split('T')[0]}
+                    max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0]}
                     onChange={e => setDob(e.target.value)}
                     className="w-full p-2.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
                     required
@@ -388,7 +388,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               Terms & Conditions
             </button>
             <span>•</span>
-            <span className="text-slate-400">13+ Platform Safety</span>
+            <span className="text-slate-400">18+ Platform Safety</span>
             <span>•</span>
             <span className="text-slate-400">© 2026 EChat</span>
           </div>

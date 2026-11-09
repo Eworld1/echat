@@ -260,6 +260,10 @@ export const api = {
     const res = await fetch(apiUrl(`/api/posts/${postId}/save`), { method: 'POST', headers: getHeaders() });
     return readResponse<{ saved: boolean; savedPosts: string[] }>(res, 'Could not save this post');
   },
+  async recordPostView(postId: string): Promise<{ viewsCount: number }> {
+    const res = await fetch(apiUrl(`/api/posts/${postId}/view`), { method: 'POST', headers: getHeaders() });
+    return readResponse<{ viewsCount: number }>(res, 'Could not record post view');
+  },
   async getSavedPosts(): Promise<Post[]> {
     const res = await fetch(apiUrl('/api/saved'), { headers: getHeaders() });
     return readResponse<Post[]>(res, 'Could not load saved posts');
@@ -351,12 +355,12 @@ export const api = {
     return readResponse<Story>(res);
   },
 
-  async viewStory(id: string) {
+  async viewStory(id: string): Promise<{ success: boolean; story: Story | null }> {
     const res = await fetch(apiUrl(`/api/stories/${id}/view`), {
       method: 'POST',
       headers: getHeaders()
     });
-    return readResponse(res);
+    return readResponse<{ success: boolean; story: Story | null }>(res);
   },
 
   // Messages
