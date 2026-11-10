@@ -479,14 +479,13 @@ class Database {
   recordPostView(postId: string, viewerId: string): Post | null {
     const post = this.getPostById(postId);
     if (!post || post.authorId === viewerId || !this.canViewPost(post, viewerId)) return post || null;
-    if (!post.views) post.views = [];
-    if (!post.views.includes(viewerId)) {
-      post.views.push(viewerId);
-      if (!post.viewRecords) post.viewRecords = [];
-      post.viewRecords.push({ userId: viewerId, viewedAt: Date.now() });
-      post.viewsCount = post.views.length;
-      this.save();
-    }
+    const now = Date.now();
+    if (!post.viewRecords) post.viewRecords = (post.views || []).map(userId => ({ userId, viewedAt: post.createdAt }));
+    if (post.viewRecords.some(record => record.userId === viewerId && now - record.viewedAt < 24 * 60 * 60 * 1000)) return post;
+    post.viewRecords.push({ userId: viewerId, viewedAt: now });
+    post.views = [...new Set(post.viewRecords.map(record => record.userId))];
+    post.viewsCount = post.viewRecords.length;
+    this.save();
     return post;
   }
 

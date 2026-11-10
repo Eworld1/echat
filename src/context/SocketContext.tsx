@@ -49,6 +49,7 @@ interface SocketContextType {
   peerConnectionRef: React.MutableRefObject<RTCPeerConnection | null>;
   localStreamRef: React.MutableRefObject<MediaStream | null>;
   remoteStream: MediaStream | null;
+  registerCallAudioElement: (element: HTMLAudioElement | null) => void;
   socket: any;
   onNewMessage: (cb: (msg: Message) => void) => () => void;
   onMessageUpdated: (cb: (msg: Message) => void) => () => void;
@@ -88,11 +89,11 @@ const ICE_CONFIG: RTCConfiguration = {
         }]
       : [])
   ],
-  iceCandidatePoolSize: 4
+  iceCandidatePoolSize: 10
 };
 
 async function getCallIceConfig(): Promise<RTCConfiguration> {
-  try { return await api.getCallIceConfig(); }
+  try { return { ...await api.getCallIceConfig(), iceCandidatePoolSize: 10 }; }
   catch { return ICE_CONFIG; }
 }
 
@@ -158,6 +159,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const callAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const registerCallAudioElement = useCallback((element: HTMLAudioElement | null) => {
+    callAudioElementRef.current = element;
+  }, []);
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -168,6 +173,61 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const isSettingUpCallRef = useRef<boolean>(false);
   const processedCandidatesRef = useRef<Set<string>>(new Set());
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const preparedIncomingRef = useRef<{ id: string; promise: Promise<{ pc: RTCPeerConnection; stream: MediaStream }> } | null>(null);
+
+  const prepareIncomingCall = useCallback((call: IncomingCall) => {
+    if (preparedIncomingRef.current?.id === call.id) return;
+    const promise = (async () => {
+      const [stream, config] = await Promise.all([
+        navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
+          video: call.callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+        }),
+        getCallIceConfig()
+      ]);
+      const pc = new RTCPeerConnection({ ...config, iceCandidatePoolSize: 10 });
+      peerConnectionRef.current = pc;
+      localStreamRef.current = stream;
+      stream.getTracks().forEach(track => { track.enabled = true; pc.addTrack(track, stream); });
+      if (call.callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
+      pc.onicecandidate = event => {
+        if (!event.candidate) return;
+        const candidate = event.candidate.toJSON();
+        if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'call:ice-candidate', rawType: 'ice_candidate', targetUserId: call.callerId, candidate }));
+        if (call.id && !call.id.startsWith('ws_')) updateDoc(doc(firestore, 'calls', call.id), { receiverCandidates: arrayUnion(candidate) }).catch(() => {});
+      };
+      pc.ontrack = event => {
+        const remote = event.streams[0] || new MediaStream([event.track]);
+        remote.getAudioTracks().forEach(track => { track.enabled = true; });
+        remote.getVideoTracks().forEach(track => { track.enabled = true; });
+        const remoteStream = new MediaStream(remote.getTracks());
+        setRemoteStream(remoteStream);
+        const audio = callAudioElementRef.current;
+        if (audio && remoteStream.getAudioTracks().length) {
+          audio.srcObject = remoteStream;
+          audio.muted = false;
+          audio.volume = 1;
+          audio.play().catch(() => {});
+        }
+      };
+      pc.getReceivers().forEach(receiver => {
+        const withJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
+        if ('jitterBufferTarget' in withJitter) withJitter.jitterBufferTarget = 0;
+      });
+      if (call.offer) await pc.setRemoteDescription(new RTCSessionDescription(call.offer));
+      pc.getReceivers().forEach(receiver => {
+        const receiverWithJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
+        if ('jitterBufferTarget' in receiverWithJitter) receiverWithJitter.jitterBufferTarget = 0;
+      });
+      while (pendingCandidatesRef.current.length) {
+        const candidate = pendingCandidatesRef.current.shift();
+        if (candidate) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+      }
+      return { pc, stream };
+    })();
+    preparedIncomingRef.current = { id: call.id, promise };
+    promise.catch(error => console.warn('Could not prepare incoming call media:', error));
+  }, []);
 
   useEffect(() => {
     activeCallRef.current = activeCall;
@@ -207,6 +267,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch {}
       localStreamRef.current = null;
     }
+    preparedIncomingRef.current = null;
     if (peerConnectionRef.current) {
       const pc = peerConnectionRef.current;
       try {
@@ -264,14 +325,16 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           // If we are not already in an active connected call
           if (!activeCallRef.current || activeCallRef.current.status !== 'connected') {
             currentCallDocIdRef.current = docData.id;
-            setIncomingCall({
+            const call: IncomingCall = {
               id: docData.id,
               callerId: docData.callerId,
               callerName: docData.callerName || docData.caller?.name || 'User',
               callerAvatar: docData.callerAvatar || docData.caller?.avatar || '',
               callType: docData.type || docData.callType || 'audio',
               offer: docData.offer
-            });
+            };
+            setIncomingCall(call);
+            prepareIncomingCall(call);
 
             // Start ringing sound
             if (!stopRingtoneRef.current) {
@@ -298,7 +361,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (e) {
       console.warn('Could not set up Firestore call listener:', e);
     }
-  }, [user?.id]);
+  }, [user?.id, prepareIncomingCall]);
 
   // WebSocket for chat & feed real-time events
   useEffect(() => {
@@ -428,14 +491,16 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           case 'call:initiate':
           case 'incoming_call': {
             if (!incomingCall && !activeCallRef.current) {
-              setIncomingCall({
+              const call: IncomingCall = {
                 id: data.id || 'ws_' + Date.now(),
                 callerId: data.callerId,
                 callerName: data.callerName || 'User',
                 callerAvatar: data.callerAvatar || '',
                 callType: data.callType || 'video',
                 offer: data.offer
-              });
+              };
+              setIncomingCall(call);
+              prepareIncomingCall(call);
               if (!stopRingtoneRef.current) {
                 stopRingtoneRef.current = startRingtone();
               }
@@ -549,7 +614,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setIsConnected(false);
       cleanUpCallMedia();
     };
-  }, [user?.id, cleanUpCallMedia]);
+  }, [user?.id, cleanUpCallMedia, prepareIncomingCall]);
 
   // Start outgoing call
   const startCall = async (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => {
@@ -577,7 +642,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       // 2. Ask for camera/mic permission
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
         video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
       });
 
@@ -590,7 +655,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       localStreamRef.current = stream;
 
       // 3. Create WebRTC PeerConnection with STUN server stun:stun.l.google.com:19302
-      const pc = new RTCPeerConnection(await getCallIceConfig());
+      const pc = new RTCPeerConnection({ ...(await getCallIceConfig()), iceCandidatePoolSize: 10 });
       peerConnectionRef.current = pc;
 
       // Attach the ICE handler NOW, before any description is set. Candidates are produced as soon as
@@ -625,12 +690,22 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           console.warn('Error adding track:', e);
         }
       });
+      if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
 
       pc.ontrack = (event) => {
         const streamObj = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
         streamObj.getAudioTracks().forEach(t => { t.enabled = true; });
         streamObj.getVideoTracks().forEach(t => { t.enabled = true; });
-        setRemoteStream(new MediaStream(streamObj.getTracks()));
+        const remote = new MediaStream(streamObj.getTracks());
+        setRemoteStream(remote);
+        const audio = callAudioElementRef.current;
+        if (audio && remote.getAudioTracks().length) {
+          audio.srcObject = remote;
+          audio.muted = false;
+          audio.volume = 1;
+          audio.play().catch(() => {});
+        }
+        streamObj.getAudioTracks().forEach(track => { track.enabled = true; });
         event.track.onunmute = () => {
           setRemoteStream(new MediaStream(streamObj.getTracks()));
         };
@@ -754,6 +829,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const acceptCall = async () => {
     if (!incomingCall || !user) return;
 
+    // Unlock audio playback synchronously from the Answer button gesture.
+    callAudioElementRef.current?.play().catch(() => {});
+
     if (stopRingtoneRef.current) {
       stopRingtoneRef.current();
       stopRingtoneRef.current = null;
@@ -779,21 +857,27 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setIncomingCall(null);
 
     try {
-      // 1. Ask for microphone/camera permission
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
-      });
-
+      // Media and peer connection are prepared on the incoming ring screen where possible.
+      const prepared = preparedIncomingRef.current?.id === callDocId
+        ? await preparedIncomingRef.current.promise
+        : await (async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
+              video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+            });
+            const pc = new RTCPeerConnection({ ...(await getCallIceConfig()), iceCandidatePoolSize: 10 });
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
+            if (offer) await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            return { pc, stream };
+          })();
+      const { pc, stream } = prepared;
       if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
         stream.getTracks().forEach(t => t.stop());
+        pc.close();
         return;
       }
-
       localStreamRef.current = stream;
-
-      // 2. Setup RTCPeerConnection with STUN server stun:stun.l.google.com:19302
-      const pc = new RTCPeerConnection(await getCallIceConfig());
       peerConnectionRef.current = pc;
 
       // Send our candidates from the very first one (see startCall): the caller needs them to reach us.
@@ -813,17 +897,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       };
 
-      stream.getTracks().forEach(track => {
-        try {
-          track.enabled = true;
-          if (pc.signalingState !== 'closed') {
-            pc.addTrack(track, stream);
-          }
-        } catch (e) {
-          console.warn('Error adding track on receiver:', e);
-        }
-      });
-
       pc.ontrack = (event) => {
         const streamObj = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
         streamObj.getAudioTracks().forEach(t => { t.enabled = true; });
@@ -835,7 +908,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
 
       // 3. Set Remote Description (Caller's Offer)
-      if (offer && pc.signalingState !== 'closed') {
+      if (offer && !pc.remoteDescription && pc.signalingState !== 'closed') {
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         while (pendingCandidatesRef.current.length > 0) {
           const cand = pendingCandidatesRef.current.shift();
@@ -846,6 +919,17 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // 4. Create Answer
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+
+      // Deliver the answer over the live signaling socket immediately; Firestore remains the fallback.
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'call:answer',
+          rawType: 'call_answer',
+          callerId,
+          receiverId: user.id,
+          answer: { type: answer.type, sdp: answer.sdp }
+        }));
+      }
 
       // 5. Update Call Document in Firestore 'calls' collection
       if (callDocId && !callDocId.startsWith('ws_')) {
@@ -881,19 +965,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
 
-      // Also notify over WebSocket backup immediately
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          type: 'call:answer',
-          rawType: 'call_answer',
-          callerId,
-          receiverId: user.id,
-          answer: {
-            type: answer.type,
-            sdp: answer.sdp
-          }
-        }));
-      }
     } catch (err) {
       console.error('Failed to answer call:', err);
       setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to accept this call.' : 'Could not connect the call. Check your devices and network, then try again.');
@@ -1067,6 +1138,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         peerConnectionRef,
         localStreamRef,
         remoteStream,
+        registerCallAudioElement,
         socket: mockSocket,
         onNewMessage,
         onMessageUpdated,

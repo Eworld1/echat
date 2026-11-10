@@ -465,7 +465,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           <div className="flex-1 min-h-[360px] sm:min-h-[460px] relative bg-black flex flex-col md:flex-row overflow-hidden">
             
             {/* Video Viewport */}
-            <div className="flex-1 relative flex items-center justify-center bg-radial from-slate-900 to-black overflow-hidden">
+            <div className="flex-1 relative w-full h-full min-w-0 min-h-0 flex items-center justify-center bg-black overflow-hidden">
               
               {/* Video Element (Live Camera) */}
               <video
@@ -473,7 +473,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                 autoPlay
                 playsInline
                 muted
-                className={`w-full h-full object-cover ${isVideoMuted ? 'hidden' : 'block'}`}
+                className={`absolute inset-0 w-full h-full object-cover object-center ${isVideoMuted ? 'hidden' : 'block'}`}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }}
               />
 
               {/* Fallback Camera Simulation if no camera attached / permission denied */}

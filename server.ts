@@ -727,6 +727,33 @@ app.get('/api/posts', (req: Request, res: Response) => {
   res.json(populated);
 });
 
+app.get('/api/dashboard', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const posts = db.getPosts(authUser.id).filter(post => post.authorId === authUser.id);
+  const viewsByDay = Array.from({ length: 30 }, (_, index) => {
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() - (29 - index));
+    const start = day.getTime();
+    const end = start + 24 * 60 * 60 * 1000;
+    return { date: day.toISOString().slice(0, 10), views: posts.reduce((sum, post) => sum + (post.viewRecords || []).filter(record => record.viewedAt >= start && record.viewedAt < end).length, 0) };
+  });
+  const user = db.getUserById(authUser.id);
+  const ranked = [...posts].sort((a, b) => (b.viewsCount || 0) - (a.viewsCount || 0));
+  res.json({
+    stats: {
+      views: posts.reduce((sum, post) => sum + (post.viewsCount || 0), 0),
+      likes: posts.reduce((sum, post) => sum + post.reactions.length, 0),
+      comments: posts.reduce((sum, post) => sum + post.comments.length, 0),
+      followers: user?.friends?.length || 0,
+      posts: posts.length
+    },
+    viewsByDay,
+    posts: ranked.map(populatePost)
+  });
+});
+
 app.post('/api/posts/:id/view', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });

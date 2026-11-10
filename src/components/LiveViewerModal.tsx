@@ -173,11 +173,11 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="bg-slate-950 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-stretch justify-stretch bg-black animate-in fade-in duration-200">
+      <div className="bg-black w-full h-full min-w-0 min-h-0 shadow-2xl overflow-hidden flex flex-col">
         
         {/* Stream Header */}
-        <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/95 text-white">
+        <div className="absolute top-0 left-0 right-0 z-40 p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/70 text-white">
           <div className="flex items-center gap-3">
             <div className="relative">
               <img
@@ -226,11 +226,11 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
         </div>
 
         {/* Video Canvas & Live Chat Stream */}
-        <div className="flex-1 min-h-[360px] sm:min-h-[460px] relative bg-black flex flex-col md:flex-row overflow-hidden">
+        <div className="flex-1 min-h-0 w-full h-full relative bg-black overflow-hidden">
           
           {/* Main Video Viewport */}
-            <div className="flex-1 relative flex items-center justify-center bg-radial from-slate-900 via-slate-950 to-black overflow-hidden">
-            <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 h-full w-full object-contain ${remoteVideo ? 'block' : 'hidden'}`} />
+            <div className="absolute inset-0 w-full h-full relative bg-black overflow-hidden">
+            <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 w-full h-full object-cover object-center ${remoteVideo ? 'block' : 'hidden'}`} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }} />
             {!remoteVideo && <div className="flex flex-col items-center justify-center p-8 text-center">
               <div className="relative mb-4">
                 <img
@@ -299,7 +299,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
           </div>
 
           {/* Right Side: Live Chat Feed */}
-          <div className="w-full md:w-80 bg-slate-900/90 border-t md:border-t-0 md:border-l border-slate-800 flex flex-col h-64 md:h-auto">
+          <div className="absolute right-0 bottom-0 top-auto w-full md:w-80 bg-slate-900/75 backdrop-blur-sm border-l border-slate-800/70 flex flex-col max-h-[45%] md:top-0 md:max-h-none">
             <div className="px-3.5 py-2.5 border-b border-slate-800 text-[11px] font-bold uppercase tracking-wider text-slate-400">
               Live Chat Stream
             </div>

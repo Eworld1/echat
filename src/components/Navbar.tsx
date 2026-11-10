@@ -40,11 +40,11 @@ import {
   Users2,
   Calendar,
   Settings as SettingsIcon
-  , Film
+  , Film, BarChart3
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 
-export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved';
+export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
 interface NavbarProps {
   currentView: AppView;
@@ -1056,6 +1056,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ['pages', 'Pages', Flag],
                   ['groups', 'Groups', UsersRound],
                   ['events', 'Events', CalendarDays],
+                  ['dashboard', 'Dashboard', BarChart3],
                   ['saved', 'Saved Posts', Bookmark],
                   ['settings', 'Settings & Privacy', Settings2]
                 ] as const).map(([view, label, Icon]) => (

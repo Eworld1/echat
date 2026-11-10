@@ -22,6 +22,7 @@ import { InstallAppBanner } from './components/InstallAppBanner';
 import { Pages } from './pages/Pages';
 import { Groups } from './pages/Groups';
 import { Events } from './pages/Events';
+import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import type { AppView } from './components/Navbar';
 
@@ -192,6 +193,8 @@ export function MainApp() {
           {currentView === 'groups' && <Groups />}
 
           {currentView === 'events' && <Events />}
+
+          {currentView === 'dashboard' && <Dashboard />}
 
           {currentView === 'settings' && (
             <Settings onNavigateHome={() => handleNavigate('feed')} />

@@ -256,6 +256,10 @@ export const api = {
       return [];
     }
   },
+  async getDashboard(): Promise<{ stats: { views: number; likes: number; comments: number; followers: number; posts: number }; viewsByDay: { date: string; views: number }[]; posts: Post[] }> {
+    const res = await fetch(apiUrl('/api/dashboard'), { headers: getHeaders() });
+    return readResponse(res, 'Could not load dashboard');
+  },
 
   async createPost(data: {
     content: string;
