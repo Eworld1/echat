@@ -40,6 +40,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [content, setContent] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
   const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [additionalMediaUrls, setAdditionalMediaUrls] = useState<string[]>([]);
+  const [additionalMediaFiles, setAdditionalMediaFiles] = useState<File[]>([]);
   const [taggedFriends, setTaggedFriends] = useState<User[]>([]);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [error, setError] = useState('');
@@ -56,25 +58,63 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   if (!isOpen) return null;
 
   const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = e.target.files?.[0];
+    const pickedFiles = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!picked) return;
+    if (pickedFiles.length === 0) return;
     setError('');
 
-    const isVid = picked.type.startsWith('video');
-    if (videoOnly && !isVid) {
+    const hasVideo = pickedFiles.some(file => file.type.startsWith('video'));
+    if (videoOnly && (pickedFiles.length !== 1 || !hasVideo)) {
       setError('Choose a video file to create a Reel.');
       return;
     }
-    if (isVid && picked.size > 15 * 1024 * 1024) {
+    if (pickedFiles.length > 10) {
+      setError('You can add up to 10 images to a post.');
+      return;
+    }
+    if (hasVideo && pickedFiles.length > 1) {
+      setError('Choose one video or up to 10 images in a post.');
+      return;
+    }
+    if (pickedFiles.some(file => file.type.startsWith('video') && file.size > 15 * 1024 * 1024)) {
       setError('Video is too large. Maximum size is 15 MB.');
       return;
     }
-    const file = isVid ? picked : await compressImage(picked);
-    setMediaType(isVid ? 'video' : 'image');
-    setMediaFile(file);
-    if (mediaUrl.startsWith('blob:')) URL.revokeObjectURL(mediaUrl);
-    setMediaUrl(URL.createObjectURL(file));
+    const files = await Promise.all(pickedFiles.map(file => file.type.startsWith('video') ? file : compressImage(file)));
+    [mediaUrl, ...additionalMediaUrls].filter(url => url.startsWith('blob:')).forEach(URL.revokeObjectURL);
+    const urls = files.map(file => URL.createObjectURL(file));
+    setMediaType(hasVideo ? 'video' : 'image');
+    setMediaFile(files[0]);
+    setMediaUrl(urls[0]);
+    setAdditionalMediaFiles(files.slice(1));
+    setAdditionalMediaUrls(urls.slice(1));
+  };
+
+  const updateMediaOrder = (files: File[], urls: string[]) => {
+    setMediaFile(files[0] || null);
+    setMediaUrl(urls[0] || '');
+    setAdditionalMediaFiles(files.slice(1));
+    setAdditionalMediaUrls(urls.slice(1));
+    setMediaType(files[0]?.type.startsWith('video') ? 'video' : 'image');
+  };
+
+  const removeMediaAt = (index: number) => {
+    const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
+    const urls = [mediaUrl, ...additionalMediaUrls];
+    if (urls[index]?.startsWith('blob:')) URL.revokeObjectURL(urls[index]);
+    files.splice(index, 1);
+    urls.splice(index, 1);
+    updateMediaOrder(files, urls);
+  };
+
+  const moveMedia = (index: number, direction: -1 | 1) => {
+    const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
+    const urls = [mediaUrl, ...additionalMediaUrls];
+    const next = index + direction;
+    if (next < 0 || next >= files.length) return;
+    [files[index], files[next]] = [files[next], files[index]];
+    [urls[index], urls[next]] = [urls[next], urls[index]];
+    updateMediaOrder(files, urls);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -88,11 +128,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setIsSubmitting(true);
     setError('');
     try {
-      const uploadedUrl = mediaFile ? await api.uploadFile(mediaFile) : undefined;
+      const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
+      const uploadedUrls = await Promise.all(files.map(file => api.uploadFile(file)));
       await api.createPost({
         content: content.trim(),
-        mediaUrl: uploadedUrl,
-        mediaType: uploadedUrl ? mediaType : undefined,
+        mediaUrl: uploadedUrls[0],
+        mediaUrls: uploadedUrls,
+        mediaType: uploadedUrls.length ? mediaType : undefined,
         feeling: feeling || undefined,
         privacy: forcePublic ? 'public' : privacy,
         taggedUserIds: taggedFriends.map(f => f.id)
@@ -105,9 +147,11 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       });
 
       setContent('');
-      if (mediaUrl.startsWith('blob:')) URL.revokeObjectURL(mediaUrl);
+      [mediaUrl, ...additionalMediaUrls].filter(url => url.startsWith('blob:')).forEach(URL.revokeObjectURL);
       setMediaUrl('');
       setMediaFile(null);
+      setAdditionalMediaUrls([]);
+      setAdditionalMediaFiles([]);
       setTaggedFriends([]);
       setShowTagPicker(false);
       setFeeling(null);
@@ -210,18 +254,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           )}
 
           {mediaUrl && (
-            <div className="relative mt-3 rounded-2xl overflow-hidden border border-slate-200 bg-slate-50">
-              {mediaType === 'image' ? (
-                <img src={mediaUrl} alt="media preview" className="w-full max-h-72 object-cover" />
-              ) : (
-                <video src={mediaUrl} controls className="w-full max-h-72 object-cover" />
-              )}
-              <button
-                onClick={() => setMediaUrl('')}
-                className="absolute top-3 right-3 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full transition"
-              >
-                <X size={16} />
-              </button>
+            <div className={`mt-3 grid gap-2 ${mediaType === 'image' && additionalMediaUrls.length ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {[mediaUrl, ...additionalMediaUrls].map((url, index) => <div key={url} className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
+                {mediaType === 'video' ? <video src={url} controls className="max-h-72 w-full object-contain" /> : <img src={url} alt={`Post image ${index + 1}`} className="h-40 w-full object-cover" />}
+                <div className="absolute right-1 top-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
+                  {mediaType === 'image' && <><button type="button" disabled={index === 0} onClick={() => moveMedia(index, -1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image earlier">←</button><button type="button" disabled={index === additionalMediaUrls.length} onClick={() => moveMedia(index, 1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image later">→</button></>}
+                  <button type="button" onClick={() => removeMediaAt(index)} className="rounded-full bg-black/65 p-1.5 text-white" aria-label="Remove attachment"><X size={14} /></button>
+                </div>
+              </div>)}
             </div>
           )}
         </div>
@@ -246,6 +286,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                 <input
                   type="file"
                   accept={videoOnly ? 'video/*' : 'image/*,video/*'}
+                  multiple={!videoOnly}
                   className="hidden"
                   onChange={handleMediaUpload}
                 />

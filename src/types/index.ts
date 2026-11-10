@@ -25,10 +25,11 @@ export interface Comment {
 
 export interface Post {
   id: string; authorId: string; author?: User; // FIX: optional
-  content: string; mediaUrl?: string; mediaType?: 'image' | 'video';
+  content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video';
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
   viewsCount?: number; views?: string[]; isReported: boolean;
+  viewRecords?: { userId: string; viewedAt: number }[];
   reportReason?: string; createdAt: number; editedAt?: number;
   taggedUserIds?: string[];
   taggedUsers?: { id: string; name: string; avatar: string }[];
@@ -44,16 +45,17 @@ export interface Story {
   createdAt: number; expiresAt: number;
 }
 
+export interface MessageAttachment { url: string; name: string; mimeType: string; size: number; }
 export interface Message {
   id: string; conversationId?: string; // Optional
   senderId: string; receiverId: string;
   text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio';
-  audioDuration?: number; status: 'sent' | 'delivered' | 'seen'; createdAt: number;
+  audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number;
 }
 
 export interface Notification {
   id: string; userId: string; actorId: string; actor?: User | null;
-  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'announcement'; // FIX: Added
+  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement'; // FIX: Added
   targetId?: string; message: string; read: boolean; createdAt: number;
   callType?: 'audio' | 'video';
 }
@@ -62,7 +64,7 @@ export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUs
 export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; appName?: string; }
 export interface GlobalSearchResults { users: User[]; posts: Post[]; }
 export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
-export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
+export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; taggedPageIds?: string[]; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
 
 export interface PagePost {
   id: string;

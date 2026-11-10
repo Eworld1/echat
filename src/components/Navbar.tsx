@@ -97,6 +97,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
+  useEffect(() => {
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    setShowSearchDropdown(false);
+  }, [currentView]);
+
   // App Pages definition for search
   const searchablePages: PageItem[] = useMemo(() => [
     {
@@ -930,6 +936,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           } else if (n.type === 'live_stream') onNavigate('feed');
                           else if (n.type === 'friend_request') onNavigate('friends');
                           else if (n.type === 'friend_accept' || n.type === 'missed_call') onNavigate('profile', n.actorId);
+                          else if (n.type === 'page_follow') onNavigate('pages');
                         }}
                         className={`p-3.5 flex items-start gap-3 hover:bg-slate-50 transition cursor-pointer ${
                           !n.read ? 'bg-blue-50/50' : ''

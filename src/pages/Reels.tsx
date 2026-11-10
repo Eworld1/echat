@@ -64,6 +64,7 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
           onPostUpdated={updated => setPosts(current => current.map(item => item.id === updated.id ? updated : item))}
           onPostDeleted={id => setPosts(current => current.filter(item => item.id !== id))}
           onViewProfile={onViewProfile}
+          reelMode
         />
       ))}
 

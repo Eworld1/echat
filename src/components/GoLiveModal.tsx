@@ -60,6 +60,12 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [videoQuality, setVideoQuality] = useState<'360p' | '720p' | '1080p' | '4k'>('720p');
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState('');
+  const [availablePages, setAvailablePages] = useState<{ id: string; name: string }[]>([]);
+  const [taggedPageIds, setTaggedPageIds] = useState<string[]>([]);
+  const [pageSearch, setPageSearch] = useState('');
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -82,20 +88,22 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
+            ...(selectedCameraId ? { deviceId: { exact: selectedCameraId } } : {}),
             width: { ideal: ({ '360p': 640, '720p': 1280, '1080p': 1920, '4k': 3840 } as const)[videoQuality] },
             height: { ideal: ({ '360p': 360, '720p': 720, '1080p': 1080, '4k': 2160 } as const)[videoQuality] }
           },
-          audio: true
+          audio: { ...(selectedMicrophoneId ? { deviceId: { exact: selectedMicrophoneId } } : {}), echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
         if (isMounted) {
           mediaStreamRef.current = stream;
+          setDevices(await navigator.mediaDevices.enumerateDevices());
           if (videoPreviewRef.current) {
             videoPreviewRef.current.srcObject = stream;
           }
           setHasCameraPermission(true);
         }
       } catch (err) {
-        console.warn('Camera access not granted or unavailable, using broadcast studio simulator:', err);
+        console.warn('Camera or microphone access is unavailable:', err);
         if (isMounted) {
           setHasCameraPermission(false);
         }
@@ -111,7 +119,12 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         mediaStreamRef.current = null;
       }
     };
-  }, [isOpen, isEligible]);
+  }, [isOpen, isEligible, videoQuality, selectedCameraId, selectedMicrophoneId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    api.getPages().then(pages => setAvailablePages(pages.map(page => ({ id: page.id, name: page.name })))).catch(() => setAvailablePages([]));
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isBroadcasting || !currentSession) return;
@@ -123,7 +136,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           const stream = mediaStreamRef.current;
           if (!stream) return;
           livePeersRef.current.get(message.fromUserId)?.close();
-          const peer = new RTCPeerConnection(liveRtcConfig);
+          const iceConfig = await api.getCallIceConfig().catch(() => liveRtcConfig);
+          const peer = new RTCPeerConnection(iceConfig);
           livePeersRef.current.set(message.fromUserId, peer);
           stream.getTracks().forEach(track => peer.addTrack(track, stream));
           peer.onicecandidate = event => {
@@ -242,7 +256,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         alert('Allow camera access before starting a live video.');
         return;
       }
-      const res = await api.startLive(streamTitle);
+      const res = await api.startLive(streamTitle, taggedPageIds);
       if (res.success && res.live) {
         setCurrentSession(res.live);
         setComments(res.live.comments || []);
@@ -566,6 +580,29 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                   </div>
                 )}
               </div>
+
+              {!isBroadcasting && (
+                <div className="space-y-3 border-b border-slate-800 p-3">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Camera
+                    <select value={selectedCameraId} onChange={event => setSelectedCameraId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
+                      <option value="">Default camera</option>{devices.filter(device => device.kind === 'videoinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Camera'}</option>)}
+                    </select>
+                  </label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Microphone
+                    <select value={selectedMicrophoneId} onChange={event => setSelectedMicrophoneId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
+                      <option value="">Default microphone</option>{devices.filter(device => device.kind === 'audioinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Microphone'}</option>)}
+                    </select>
+                  </label>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Tag Pages ({taggedPageIds.length}/22)</label>
+                    <input value={pageSearch} onChange={event => setPageSearch(event.target.value)} placeholder="Search pages" className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder:text-slate-500" />
+                    <div className="mt-1 max-h-24 overflow-y-auto">{availablePages.filter(page => page.name.toLowerCase().includes(pageSearch.toLowerCase())).map(page => {
+                      const checked = taggedPageIds.includes(page.id);
+                      return <label key={page.id} className="flex cursor-pointer items-center gap-2 py-1 text-xs text-slate-300"><input type="checkbox" checked={checked} disabled={!checked && taggedPageIds.length >= 22} onChange={() => setTaggedPageIds(current => checked ? current.filter(id => id !== page.id) : [...current, page.id].slice(0, 22))} />{page.name}</label>;
+                    })}</div>
+                  </div>
+                </div>
+              )}
 
               {/* Comments Feed */}
               <div className="flex-1 overflow-y-auto p-3 space-y-2">

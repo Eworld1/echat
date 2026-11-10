@@ -78,6 +78,10 @@ export function MainApp() {
     targetProfileId?: string,
     targetPostId?: string
   ) => {
+    setActiveChatPartner(null);
+    setIsMessengerDrawerOpen(false);
+    setIsGoLiveOpen(false);
+    setActiveViewerStream(null);
     // Prevent non-developers from opening admin
     if (view === 'admin' && !isDeveloper) {
       setCurrentView('feed');

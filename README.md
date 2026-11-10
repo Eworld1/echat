@@ -40,7 +40,7 @@ See `.env.example`. Key ones:
 - `PORT` — server port (default `3000`)
 - `CORS_ORIGIN` — allowed browser origins, comma-separated (default `*`)
 - `VITE_API_URL` — backend base URL; empty = same origin
-- `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` — optional TURN relay for calls
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` — backend-only credentials used to mint temporary TURN tokens
 - `VITE_FIREBASE_*` — Firebase client config
 
 ## Project structure
@@ -100,7 +100,11 @@ Echat needs a **long-running Node process** (WebSocket server), so the backend c
 Check `https://YOUR-BACKEND/api/health`: `storage` shows `MongoDB` when durable storage is active.
 Without `MONGO_URI` the app falls back to a local JSON file (fine for development).
 
-Calls across mobile carriers usually need a TURN server: set `VITE_TURN_*`.
+Calls across restrictive NATs and mobile networks need TURN. Add `TWILIO_ACCOUNT_SID` and
+`TWILIO_AUTH_TOKEN` to the backend host (Render), not Vercel. The authenticated `/api/calls/ice-config`
+endpoint requests short-lived credentials for each call. Without these backend secrets, the app tries
+direct/STUN connectivity and some networks will not connect. The credentials are never built into the
+frontend bundle.
 
 ## Security notes
 

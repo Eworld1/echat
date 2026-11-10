@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Post, ReactionType, User } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
+import { assetUrl } from '../services/apiBase';
 import { VerifiedBadge } from './VerifiedBadge';
 import confetti from 'canvas-confetti';
 import {
@@ -20,7 +21,9 @@ import {
   Globe,
   Users,
   Send,
-  Download
+  Download,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 
 interface PostCardProps {
@@ -28,6 +31,8 @@ interface PostCardProps {
   onPostUpdated: (post: Post) => void;
   onPostDeleted: (postId: string) => void;
   onViewProfile: (userId: string) => void;
+  reelMode?: boolean;
+  detailMode?: boolean;
 }
 
 const REACTIONS: { type: ReactionType; label: string; emoji: string; color: string }[] = [
@@ -43,7 +48,9 @@ export const PostCard: React.FC<PostCardProps> = ({
   post,
   onPostUpdated,
   onPostDeleted,
-  onViewProfile
+  onViewProfile,
+  reelMode = false,
+  detailMode = false
 }) => {
   const { user, isDeveloper, updateUser } = useAuth();
   const { t } = usePreferences();
@@ -63,6 +70,30 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
   const cardRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showViewersModal, setShowViewersModal] = useState(false);
+  const [postViewers, setPostViewers] = useState<{ id: string; name: string; avatar: string; viewedAt: number }[]>([]);
+  const [loadingViewers, setLoadingViewers] = useState(false);
+  const [isReelMuted, setIsReelMuted] = useState(true);
+
+  const openPostDetail = () => {
+    if (detailMode || showDetailModal) return;
+    window.history.pushState({ echatPostDetail: post.id }, '', `${window.location.pathname}${window.location.search}#post-${encodeURIComponent(post.id)}`);
+    setShowDetailModal(true);
+  };
+
+  const closePostDetail = () => {
+    setShowDetailModal(false);
+    if (window.history.state?.echatPostDetail === post.id) window.history.back();
+  };
+
+  useEffect(() => {
+    if (!showDetailModal) return;
+    const handlePopState = () => setShowDetailModal(false);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [showDetailModal]);
 
   useEffect(() => {
     const node = cardRef.current;
@@ -77,6 +108,33 @@ export const PostCard: React.FC<PostCardProps> = ({
     observer.observe(node);
     return () => observer.disconnect();
   }, [post.id, user?.id]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!reelMode || !video || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= 0.65);
+      if (visible) video.play().catch(() => {});
+      else video.pause();
+    }, { threshold: [0, 0.65, 1] });
+    observer.observe(video);
+    return () => { observer.disconnect(); video.pause(); };
+  }, [reelMode, post.id]);
+
+  const handleCardClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (detailMode) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button,a,input,textarea,select,video,[role="dialog"]')) return;
+    openPostDetail();
+  };
+
+  const handleLoadPostViewers = async () => {
+    setShowViewersModal(true);
+    setLoadingViewers(true);
+    try { setPostViewers(await api.getPostViewers(post.id)); }
+    catch (err) { alert(err instanceof Error ? err.message : 'Could not load viewers.'); }
+    finally { setLoadingViewers(false); }
+  };
 
   // Safe author access
   const author: Partial<User> & { id: string; name: string; avatar: string } = post.author || {
@@ -101,6 +159,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   const isSaved = Boolean(user?.savedPosts?.includes(post.id));
+  const postMediaUrls = post.mediaUrls?.length ? post.mediaUrls : (post.mediaUrl ? [post.mediaUrl] : []);
 
   const handleToggleSave = async () => {
     if (!user) return;
@@ -185,7 +244,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   const displayName = isDevAuthor ? 'EChat Official - Developer' : author.name;
 
   return (
-    <div ref={cardRef} id={`post-${post.id}`} className="bg-white rounded-2xl shadow-xs border border-slate-200/90 overflow-hidden transition scroll-mt-20">
+    <div ref={cardRef} id={`post-${post.id}`} onClick={handleCardClick} role={detailMode ? undefined : 'button'} tabIndex={detailMode ? undefined : 0} onKeyDown={detailMode ? undefined : e => { if (e.key === 'Enter' && e.target === e.currentTarget) openPostDetail(); }} className={`bg-white rounded-2xl shadow-xs border border-slate-200/90 overflow-hidden transition scroll-mt-20 ${detailMode ? '' : 'cursor-pointer'}`}>
       {/* Post Header */}
       <div className="p-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -261,9 +320,9 @@ export const PostCard: React.FC<PostCardProps> = ({
                 {t('copy_link')}
               </button>
 
-              {post.mediaUrl && (
+              {postMediaUrls.length > 0 && (
                 <a
-                  href={post.mediaUrl}
+                  href={assetUrl(postMediaUrls[0])}
                   download
                   target="_blank"
                   rel="noreferrer"
@@ -427,17 +486,16 @@ export const PostCard: React.FC<PostCardProps> = ({
       )}
 
       {/* Post Media (Image / Video) */}
-      {post.mediaUrl && (
-        <div className="relative bg-slate-900 max-h-[500px] overflow-hidden flex items-center justify-center">
+      {postMediaUrls.length > 0 && (
+        <div className={`relative bg-slate-900 overflow-hidden flex items-center justify-center ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`}>
           {post.mediaType === 'video' ? (
-            <video src={post.mediaUrl} controls className="w-full max-h-[500px] object-contain" />
+            <video ref={videoRef} src={assetUrl(postMediaUrls[0])} controls playsInline preload={reelMode ? 'metadata' : 'none'} muted={reelMode ? isReelMuted : false} className={`w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
           ) : (
-            <img
-              src={post.mediaUrl}
-              alt="post attachment"
-              className="w-full max-h-[500px] object-cover cursor-pointer hover:opacity-95 transition"
-            />
+            <div className={`grid w-full gap-0.5 ${postMediaUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {postMediaUrls.slice(0, 10).map((mediaUrl, index) => <img key={`${post.id}-${index}`} src={assetUrl(mediaUrl)} alt={`Post attachment ${index + 1}`} loading="lazy" className={`w-full object-cover cursor-pointer hover:opacity-95 transition ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'} ${postMediaUrls.length > 4 && index > 3 ? 'hidden' : ''}`} />)}
+            </div>
           )}
+          {reelMode && <button type="button" onClick={event => { event.stopPropagation(); setIsReelMuted(value => !value); }} aria-label={isReelMuted ? 'Unmute Reel' : 'Mute Reel'} className="absolute bottom-3 right-3 rounded-full bg-black/70 p-2 text-white">{isReelMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>}
         </div>
       )}
 
@@ -471,7 +529,9 @@ export const PostCard: React.FC<PostCardProps> = ({
             {(post.comments || []).length} comments
           </button>
           <span>{post.sharesCount || 0} shares</span>
-          <span>{post.viewsCount || 0} views</span>
+          {user?.id === post.authorId ? (
+            <button onClick={handleLoadPostViewers} className="hover:underline" title="See who viewed this post">Viewed by {post.viewsCount || 0}</button>
+          ) : <span>{post.viewsCount || 0} views</span>}
         </div>
       </div>
 
@@ -642,6 +702,24 @@ export const PostCard: React.FC<PostCardProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {showDetailModal && !detailMode && (
+        <div role="dialog" aria-modal="true" aria-label="Post details" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-2 sm:p-5" onClick={closePostDetail}>
+          <div className="relative max-h-[96vh] w-full max-w-3xl overflow-y-auto rounded-2xl" onClick={e => e.stopPropagation()}>
+            <button onClick={closePostDetail} aria-label="Close post" className="sticky top-2 z-20 float-right mr-2 mt-2 rounded-full bg-white p-2 text-slate-700 shadow"><span aria-hidden="true">×</span></button>
+            <PostCard post={post} onPostUpdated={onPostUpdated} onPostDeleted={onPostDeleted} onViewProfile={onViewProfile} detailMode />
+          </div>
+        </div>
+      )}
+
+      {showViewersModal && (
+        <div role="dialog" aria-modal="true" aria-label="Post viewers" className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onClick={() => setShowViewersModal(false)}>
+          <section className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-900">Post viewers</h2><button onClick={() => setShowViewersModal(false)} className="rounded-full p-2 hover:bg-slate-100" aria-label="Close">×</button></div>
+            {loadingViewers ? <p className="py-6 text-center text-sm text-slate-500">Loading viewers…</p> : postViewers.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">No viewers yet.</p> : <div className="max-h-[60vh] space-y-3 overflow-y-auto">{postViewers.map(viewer => <div key={viewer.id} className="flex items-center gap-3"><img src={viewer.avatar || initialsAvatar(viewer.name)} alt="" className="h-10 w-10 rounded-full object-cover"/><span className="flex-1 text-sm font-semibold text-slate-800">{viewer.name}</span><time className="text-xs text-slate-500">{new Date(viewer.viewedAt).toLocaleString()}</time></div>)}</div>}
+          </section>
         </div>
       )}
     </div>

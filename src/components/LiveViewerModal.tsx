@@ -53,45 +53,53 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   }, []);
 
   useEffect(() => {
-    const peer = new RTCPeerConnection(liveRtcConfig);
-    peerRef.current = peer;
-    peer.ontrack = event => {
-      const incoming = event.streams[0] || new MediaStream([event.track]);
-      setRemoteVideo(incoming);
-      if (videoRef.current) videoRef.current.srcObject = incoming;
-    };
-    peer.onicecandidate = event => {
-      if (event.candidate) socket.emit('live:signal', {
-        targetUserId: currentStream.hostId,
-        streamId: currentStream.id,
-        signal: { type: 'candidate', candidate: event.candidate }
-      });
-    };
+    let cancelled = false;
+    let peer: RTCPeerConnection | null = null;
+    void api.getCallIceConfig().catch(() => liveRtcConfig).then(iceConfig => {
+      if (cancelled) return;
+      peer = new RTCPeerConnection(iceConfig);
+      peerRef.current = peer;
+      peer.ontrack = event => {
+        const incoming = event.streams[0] || new MediaStream([event.track]);
+        setRemoteVideo(incoming);
+        if (videoRef.current) videoRef.current.srcObject = incoming;
+      };
+      peer.onicecandidate = event => {
+        if (event.candidate) socket.emit('live:signal', {
+          targetUserId: currentStream.hostId,
+          streamId: currentStream.id,
+          signal: { type: 'candidate', candidate: event.candidate }
+        });
+      };
+      socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'watch' } });
+    });
     const unsubscribeSignal = onLiveSignal(async message => {
       if (message.streamId !== currentStream.id || message.fromUserId !== currentStream.hostId) return;
+      const activePeer = peer;
+      if (!activePeer) return;
       try {
         const signal = message.signal;
         if (signal.type === 'offer' && signal.description) {
-          await peer.setRemoteDescription(new RTCSessionDescription(signal.description));
+          await activePeer.setRemoteDescription(new RTCSessionDescription(signal.description));
           while (queuedCandidatesRef.current.length) {
             const candidate = queuedCandidatesRef.current.shift();
-            if (candidate) await peer.addIceCandidate(new RTCIceCandidate(candidate));
+            if (candidate) await activePeer.addIceCandidate(new RTCIceCandidate(candidate));
           }
-          const answer = await peer.createAnswer();
-          await peer.setLocalDescription(answer);
-          socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'answer', description: peer.localDescription } });
+          const answer = await activePeer.createAnswer();
+          await activePeer.setLocalDescription(answer);
+          socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'answer', description: activePeer.localDescription } });
         } else if (signal.type === 'candidate' && signal.candidate) {
-          if (peer.remoteDescription) await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          if (activePeer.remoteDescription) await activePeer.addIceCandidate(new RTCIceCandidate(signal.candidate));
           else queuedCandidatesRef.current.push(signal.candidate);
         }
       } catch (error) {
         console.warn('Could not connect to live video:', error);
       }
     });
-    socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'watch' } });
     return () => {
       unsubscribeSignal();
-      peer.close();
+      cancelled = true;
+      peer?.close();
       peerRef.current = null;
       queuedCandidatesRef.current = [];
       setRemoteVideo(null);

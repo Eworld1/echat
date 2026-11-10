@@ -1,4 +1,5 @@
 import { wsUrl } from '../services/apiBase';
+import { api } from '../services/api';
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import { Message, Post, Story, LiveStream, LiveComment, Notification as AppNotification } from '../types';
@@ -43,7 +44,6 @@ interface SocketContextType {
   acceptCall: () => Promise<void>;
   rejectCall: () => Promise<void>;
   endCall: () => Promise<void>;
-  simulatePartnerAnswer: () => Promise<void>;
   sendTyping: (receiverId: string, isTyping: boolean) => void;
   markSeen: (senderId: string) => void;
   peerConnectionRef: React.MutableRefObject<RTCPeerConnection | null>;
@@ -51,6 +51,7 @@ interface SocketContextType {
   remoteStream: MediaStream | null;
   socket: any;
   onNewMessage: (cb: (msg: Message) => void) => () => void;
+  onMessageUpdated: (cb: (msg: Message) => void) => () => void;
   onPostUpdated: (cb: (post: Post) => void) => () => void;
   onPostDeleted: (cb: (postId: string) => void) => () => void;
   onNotification: (cb: (notification: AppNotification) => void) => () => void;
@@ -85,66 +86,14 @@ const ICE_CONFIG: RTCConfiguration = {
           username: import.meta.env.VITE_TURN_USERNAME ?? '',
           credential: import.meta.env.VITE_TURN_CREDENTIAL ?? ''
         }]
-      : [{
-          urls: [
-            'turn:openrelay.metered.ca:80',
-            'turn:openrelay.metered.ca:443',
-            'turn:openrelay.metered.ca:443?transport=tcp'
-          ],
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        }])
+      : [])
   ],
   iceCandidatePoolSize: 4
 };
 
-// Generates fallback media stream with real audio and video tracks if camera/mic is denied or unavailable in iframe
-function createFallbackMediaStream(callType: 'audio' | 'video'): MediaStream {
-  const stream = new MediaStream();
-
-  // Create subtle audio tone track
-  try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (AudioCtx) {
-      const audioCtx = new AudioCtx();
-      const dest = audioCtx.createMediaStreamDestination();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      gain.gain.value = 0.001; // barely audible tone
-      osc.connect(gain);
-      gain.connect(dest);
-      osc.start();
-      dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
-    }
-  } catch (err) {
-    console.warn('AudioContext fallback warning:', err);
-  }
-
-  // Create synthetic video track
-  if (callType === 'video') {
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 480;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#1877F2';
-        ctx.fillRect(0, 0, 640, 480);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = 'bold 28px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Echat HD Stream', 320, 240);
-      }
-      if ((canvas as any).captureStream) {
-        const vStream = (canvas as any).captureStream(25);
-        vStream.getVideoTracks().forEach((track: MediaStreamTrack) => stream.addTrack(track));
-      }
-    } catch (err) {
-      console.warn('Canvas capture fallback warning:', err);
-    }
-  }
-
-  return stream;
+async function getCallIceConfig(): Promise<RTCConfiguration> {
+  try { return await api.getCallIceConfig(); }
+  catch { return ICE_CONFIG; }
 }
 
 function startSynthRingtone(ringtoneId = 'classic'): () => void {
@@ -226,6 +175,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Subscriptions
   const messageListeners = useRef<Set<(msg: Message) => void>>(new Set());
+  const messageUpdatedListeners = useRef<Set<(msg: Message) => void>>(new Set());
   const postUpdateListeners = useRef<Set<(post: Post) => void>>(new Set());
   const postDeleteListeners = useRef<Set<(postId: string) => void>>(new Set());
   const notificationListeners = useRef<Set<(n: AppNotification) => void>>(new Set());
@@ -419,6 +369,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           case 'new_message':
           case 'message_sent':
             messageListeners.current.forEach(cb => cb(data.message));
+            break;
+
+          case 'message_updated':
+            messageUpdatedListeners.current.forEach(cb => cb(data.message));
             break;
 
           case 'new_notification':
@@ -622,20 +576,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     try {
       // 2. Ask for camera/mic permission
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: callType === 'video'
-        });
-      } catch (mediaErr) {
-        console.warn('getUserMedia failed, trying audio fallback or synthetic stream:', mediaErr);
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch {
-          stream = createFallbackMediaStream(callType);
-        }
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+      });
 
       if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
         stream.getTracks().forEach(t => t.stop());
@@ -646,7 +590,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       localStreamRef.current = stream;
 
       // 3. Create WebRTC PeerConnection with STUN server stun:stun.l.google.com:19302
-      const pc = new RTCPeerConnection(ICE_CONFIG);
+      const pc = new RTCPeerConnection(await getCallIceConfig());
       peerConnectionRef.current = pc;
 
       // Attach the ICE handler NOW, before any description is set. Candidates are produced as soon as
@@ -799,6 +743,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     } catch (err) {
       console.error('Failed to initiate call:', err);
+      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to start this call.' : 'Could not start the call. Check your microphone, camera, and network, then try again.');
       cleanUpCallMedia();
     } finally {
       isSettingUpCallRef.current = false;
@@ -835,20 +780,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     try {
       // 1. Ask for microphone/camera permission
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: callType === 'video'
-        });
-      } catch (mediaErr) {
-        console.warn('getUserMedia failed on receiver:', mediaErr);
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch {
-          stream = createFallbackMediaStream(callType);
-        }
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+      });
 
       if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
         stream.getTracks().forEach(t => t.stop());
@@ -858,7 +793,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       localStreamRef.current = stream;
 
       // 2. Setup RTCPeerConnection with STUN server stun:stun.l.google.com:19302
-      const pc = new RTCPeerConnection(ICE_CONFIG);
+      const pc = new RTCPeerConnection(await getCallIceConfig());
       peerConnectionRef.current = pc;
 
       // Send our candidates from the very first one (see startCall): the caller needs them to reach us.
@@ -961,6 +896,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     } catch (err) {
       console.error('Failed to answer call:', err);
+      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to accept this call.' : 'Could not connect the call. Check your devices and network, then try again.');
       cleanUpCallMedia();
     }
   };
@@ -1017,27 +953,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     cleanUpCallMedia();
   };
 
-  // Helper for single-tab developer demo testing: simulates partner answering
-  const simulatePartnerAnswer = async () => {
-    if (!activeCall || !peerConnectionRef.current) return;
-    if (stopRingtoneRef.current) {
-      stopRingtoneRef.current();
-      stopRingtoneRef.current = null;
-    }
-
-    // Set remote stream with synthetic stream so caller sees video/audio immediately
-    const simStream = createFallbackMediaStream(activeCall.callType);
-    setRemoteStream(simStream);
-    setActiveCall(prev => prev ? { ...prev, status: 'connected' } : null);
-
-    const docId = currentCallDocIdRef.current;
-    if (docId) {
-      try {
-        await updateDoc(doc(firestore, 'calls', docId), { status: 'connected' });
-      } catch {}
-    }
-  };
-
   const sendTyping = (receiverId: string, isTyping: boolean) => {
     if (!socketRef.current || !user || socketRef.current.readyState !== WebSocket.OPEN) return;
     socketRef.current.send(JSON.stringify({
@@ -1068,6 +983,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const onNewMessage = (cb: (msg: Message) => void) => {
     messageListeners.current.add(cb);
     return () => { messageListeners.current.delete(cb); };
+  };
+
+  const onMessageUpdated = (cb: (msg: Message) => void) => {
+    messageUpdatedListeners.current.add(cb);
+    return () => { messageUpdatedListeners.current.delete(cb); };
   };
 
   const onNotification = (cb: (n: AppNotification) => void) => {
@@ -1142,7 +1062,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         acceptCall,
         rejectCall,
         endCall,
-        simulatePartnerAnswer,
         sendTyping,
         markSeen,
         peerConnectionRef,
@@ -1150,6 +1069,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         remoteStream,
         socket: mockSocket,
         onNewMessage,
+        onMessageUpdated,
         onPostUpdated,
         onPostDeleted,
         onNotification,

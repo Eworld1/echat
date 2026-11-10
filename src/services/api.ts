@@ -5,6 +5,7 @@ import type {
   Post,
   Story,
   Message,
+  MessageAttachment,
   Notification,
   AdminStats,
   GlobalSearchResults,
@@ -64,6 +65,10 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
 }
 
 export const api = {
+  async getCallIceConfig(): Promise<RTCConfiguration> {
+    const res = await fetch(apiUrl('/api/calls/ice-config'), { headers: getHeaders(), cache: 'no-store' });
+    return readResponse<RTCConfiguration>(res, 'Could not load call network configuration');
+  },
   // File upload (profile photos, cover photos, media). Returns a loadable URL.
   async uploadFile(file: File): Promise<string> {
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -255,6 +260,7 @@ export const api = {
   async createPost(data: {
     content: string;
     mediaUrl?: string;
+    mediaUrls?: string[];
     mediaType?: 'image' | 'video';
     feeling?: string;
     privacy?: 'public' | 'friends' | 'only_me';
@@ -275,6 +281,10 @@ export const api = {
   async recordPostView(postId: string): Promise<{ viewsCount: number }> {
     const res = await fetch(apiUrl(`/api/posts/${postId}/view`), { method: 'POST', headers: getHeaders() });
     return readResponse<{ viewsCount: number }>(res, 'Could not record post view');
+  },
+  async getPostViewers(postId: string): Promise<{ id: string; name: string; avatar: string; viewedAt: number }[]> {
+    const res = await fetch(apiUrl(`/api/posts/${postId}/viewers`), { headers: getHeaders() });
+    return readResponse<{ id: string; name: string; avatar: string; viewedAt: number }[]>(res, 'Could not load post viewers');
   },
   async getSavedPosts(): Promise<Post[]> {
     const res = await fetch(apiUrl('/api/saved'), { headers: getHeaders() });
@@ -393,6 +403,7 @@ export const api = {
     mediaUrl?: string;
     mediaType?: 'image' | 'video' | 'audio';
     audioDuration?: number;
+    attachments?: MessageAttachment[];
   }): Promise<Message> {
     const res = await fetch(apiUrl('/api/messages'), {
       method: 'POST',
@@ -400,6 +411,11 @@ export const api = {
       body: JSON.stringify(data)
     });
     return readResponse<Message>(res);
+  },
+
+  async editMessage(messageId: string, text: string): Promise<Message> {
+    const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'PUT', headers: getHeaders(), body: JSON.stringify({ text }) });
+    return readResponse<Message>(res, 'Could not edit this message');
   },
 
   async markMessagesSeen(partnerId: string) {
@@ -539,11 +555,11 @@ export const api = {
     return readResponse<{ live: LiveStream | null }>(res);
   },
 
-  async startLive(title?: string): Promise<{ success: boolean; live: LiveStream }> {
+  async startLive(title?: string, taggedPageIds: string[] = []): Promise<{ success: boolean; live: LiveStream }> {
     const res = await fetch(apiUrl('/api/live/start'), {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ title })
+      body: JSON.stringify({ title, taggedPageIds })
     });
     return readResponse(res, 'Failed to start live stream');
   },

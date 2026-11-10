@@ -1,6 +1,6 @@
 import { usePreferences } from '../context/PreferencesContext';
 import { initialsAvatar } from '../utils/avatar';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
@@ -32,6 +32,8 @@ export const Feed: React.FC<FeedProps> = ({
   const [posts, setPosts] = useState<Post[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartY = useRef<number | null>(null);
 
   const loadPosts = async () => {
     setIsLoading(true);
@@ -71,8 +73,18 @@ export const Feed: React.FC<FeedProps> = ({
     setPosts(prev => prev.filter(p => p.id !== postId));
   };
 
+  const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = touchStartY.current;
+    touchStartY.current = null;
+    const end = event.changedTouches[0]?.clientY;
+    if (start === null || end === undefined || window.scrollY > 4 || end - start < 90 || isRefreshing) return;
+    setIsRefreshing(true);
+    loadPosts().finally(() => setIsRefreshing(false));
+  };
+
   return (
-    <div className="max-w-[620px] mx-auto pb-16 space-y-4">
+    <div className="max-w-[620px] mx-auto pb-16 space-y-4" onTouchStart={event => { touchStartY.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={handleTouchEnd}>
+      {isRefreshing && <p className="py-1 text-center text-xs font-semibold text-blue-600">Refreshing feed…</p>}
       {/* Active Live Stream Banner */}
       {liveStream && (
         <LiveFeedBanner

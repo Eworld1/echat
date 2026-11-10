@@ -36,130 +36,9 @@ export function hashPassword(password: string): string {
 // account is claimed through POST /api/admin/claim using the ADMIN_BOOTSTRAP_PASSWORD secret.
 const SEED_USERS: User[] = [];
 
-const SEED_PAGES: Page[] = [
-  {
-    id: 'page_tech_hub',
-    name: 'Tech & Code Community',
-    category: 'Technology & Gaming',
-    bio: 'Official Echat Developer & Tech enthusiast community. Coding, architecture, and innovation.',
-    cover: 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80',
-    avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80',
-    ownerId: 'user_admin_elder',
-    ownerName: 'Elder Moses',
-    followers: ['user_admin_elder'],
-    likes: ['user_admin_elder'],
-    posts: [
-      {
-        id: 'ppost_1',
-        pageId: 'page_tech_hub',
-        authorId: 'user_admin_elder',
-        content: 'Welcome to the Tech & Code page! We are excited to build high-performance WebRTC and real-time social tools.',
-        mediaUrl: 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?auto=format&fit=crop&w=1200&q=80',
-        mediaType: 'image',
-        createdAt: Date.now() - 3600000,
-        likes: ['user_admin_elder'],
-        comments: []
-      }
-    ],
-    createdAt: Date.now() - 86400000
-  },
-  {
-    id: 'page_echat_hq',
-    name: 'Echat Official',
-    category: 'Social Network',
-    bio: 'Official news, release updates, and announcements from the Echat platform team.',
-    cover: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&w=1200&q=80',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-    ownerId: 'user_admin_elder',
-    ownerName: 'Elder Moses',
-    followers: ['user_admin_elder'],
-    likes: ['user_admin_elder'],
-    posts: [
-      {
-        id: 'ppost_2',
-        pageId: 'page_echat_hq',
-        authorId: 'user_admin_elder',
-        content: '🎉 Echat upgrade deployed: Pages, Groups, Events, and full Settings & Privacy are now live!',
-        mediaUrl: '',
-        createdAt: Date.now() - 1800000,
-        likes: ['user_admin_elder'],
-        comments: []
-      }
-    ],
-    createdAt: Date.now() - 172800000
-  }
-];
-
-const SEED_GROUPS: Group[] = [
-  {
-    id: 'group_react_devs',
-    name: 'React & Modern Web Masters',
-    privacy: 'public',
-    description: 'A global community sharing tips, performance tricks, UI patterns, and Vite/React architecture.',
-    cover: 'https://images.unsplash.com/photo-1633356122544-f134324a6cee?auto=format&fit=crop&w=1200&q=80',
-    avatar: 'https://images.unsplash.com/photo-1633356122544-f134324a6cee?auto=format&fit=crop&w=400&q=80',
-    ownerId: 'user_admin_elder',
-    ownerName: 'Elder Moses',
-    members: ['user_admin_elder'],
-    posts: [
-      {
-        id: 'gpost_1',
-        groupId: 'group_react_devs',
-        authorId: 'user_admin_elder',
-        authorName: 'Elder Moses',
-        authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-        content: 'What are your favorite practices for low-latency WebRTC and state synchronization in React 18+?',
-        status: 'approved',
-        likes: ['user_admin_elder'],
-        comments: [],
-        createdAt: Date.now() - 7200000
-      }
-    ],
-    createdAt: Date.now() - 86400000 * 2
-  },
-  {
-    id: 'group_creators',
-    name: 'Global Creators & Innovators',
-    privacy: 'public',
-    description: 'Connect with artists, video editors, music makers, and digital creators on Echat.',
-    cover: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=1200&q=80',
-    avatar: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=400&q=80',
-    ownerId: 'user_admin_elder',
-    ownerName: 'Elder Moses',
-    members: ['user_admin_elder'],
-    posts: [],
-    createdAt: Date.now() - 86400000 * 3
-  }
-];
-
-const SEED_EVENTS: EventItem[] = [
-  {
-    id: 'event_hackathon_2026',
-    title: 'Echat Global Hackathon 2026',
-    date: '2026-11-15T18:00:00.000Z',
-    location: 'Virtual Live Stream & Freetown Tech Center',
-    cover: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1200&q=80',
-    description: 'Join developers, designers, and entrepreneurs from around the globe to build next-generation social apps.',
-    ownerId: 'user_admin_elder',
-    ownerName: 'Elder Moses',
-    going: ['user_admin_elder'],
-    interested: [],
-    createdAt: Date.now() - 86400000
-  },
-  {
-    id: 'event_founder_talk',
-    title: 'Founder Live Q&A: The Future of Echat',
-    date: '2026-11-20T17:00:00.000Z',
-    location: 'Echat Video Auditorium',
-    cover: 'https://images.unsplash.com/photo-1475721027785-f74eccf877e2?auto=format&fit=crop&w=1200&q=80',
-    description: 'Elder Moses answers questions about upcoming features, WebRTC audio/video quality, and developer tooling.',
-    ownerId: 'user_admin_elder',
-    ownerName: 'Elder Moses',
-    going: ['user_admin_elder'],
-    interested: [],
-    createdAt: Date.now() - 43200000
-  }
-];
+const SEED_PAGES: Page[] = [];
+const SEED_GROUPS: Group[] = [];
+const SEED_EVENTS: EventItem[] = [];
 
 class Database {
   private data: DatabaseSchema;
@@ -170,8 +49,7 @@ class Database {
     const loaded = this.load();
     this.data = loaded.data;
     this.currentDbPath = loaded.path;
-    this.neutralizeLegacyAdmin();
-    console.log(`[DB] Loaded ${this.data.users.length} users, ${this.data.pages?.length || 0} pages, ${this.data.groups?.length || 0} groups, ${this.data.events?.length || 0} events from ${this.currentDbPath}`);
+    this.removeLegacyTestAccounts();
   }
 
   private findExistingDbFile(): { path: string; raw: string } | null {
@@ -195,7 +73,7 @@ class Database {
       if (found) {
         const parsed = JSON.parse(found.raw);
         if (parsed && Array.isArray(parsed.users) && parsed.users.length > 0) {
-          // MERGE: Keep all existing users, just ensure Elder Moses exists
+          // Preserve existing user records. Legacy demo accounts are removed after loading.
           let users = parsed.users;
           const hasElder = users.some((u: User) => u.email.toLowerCase() === 'eldermoses89@gmail.com');
           if (!hasElder) {
@@ -271,24 +149,21 @@ class Database {
     }
   }
 
-  /**
-   * Older versions shipped a demo admin ("user_admin_elder") with a public password. If it exists in
-   * stored data, strip its privileges and credentials so nobody can log in or act as the admin with it.
-   */
-  private neutralizeLegacyAdmin(): void {
-    const legacy = this.data.users.find(u => u.id === 'user_admin_elder');
-    if (!legacy) return;
-    const isBackdoor =
-      legacy.role === 'developer' ||
-      legacy.passwordHash === hashPassword('admin123') ||
-      legacy.email?.toLowerCase() === 'eldermoses89@gmail.com';
-    if (!isBackdoor) return;
-    legacy.role = 'user';
-    legacy.isOfficialDeveloper = false;
-    legacy.email = 'legacy-admin@echat.local';
-    legacy.passwordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
-    legacy.name = legacy.name || 'Former Admin';
-    console.warn('[DB] Security: neutralised the legacy demo admin account (user_admin_elder).');
+  /** Remove the known demo profile and its owned content from persisted app data. */
+  private removeLegacyTestAccounts(): void {
+    const removedIds = new Set(this.data.users
+      .filter(user => user.id === 'user_admin_elder' || /^elder moses\s*\(test\)$/i.test(user.name.trim()))
+      .map(user => user.id));
+    const hasSeedContent = this.data.pages.some(page => ['page_tech_hub', 'page_echat_hq'].includes(page.id)) || this.data.groups.some(group => ['group_react_devs', 'group_creators'].includes(group.id)) || this.data.events.some(event => ['event_hackathon_2026', 'event_founder_talk'].includes(event.id));
+    if (!removedIds.size && !hasSeedContent) return;
+    this.data.users = this.data.users.filter(user => !removedIds.has(user.id));
+    this.data.posts = this.data.posts.filter(post => !removedIds.has(post.authorId));
+    this.data.stories = this.data.stories.filter(story => !removedIds.has(story.authorId));
+    this.data.messages = this.data.messages.filter(message => !removedIds.has(message.senderId) && !removedIds.has(message.receiverId));
+    this.data.notifications = this.data.notifications.filter(notification => !removedIds.has(notification.userId) && !removedIds.has(notification.actorId));
+    this.data.pages = this.data.pages.filter(page => !removedIds.has(page.ownerId) && !['page_tech_hub', 'page_echat_hq'].includes(page.id));
+    this.data.groups = this.data.groups.filter(group => !removedIds.has(group.ownerId) && !['group_react_devs', 'group_creators'].includes(group.id));
+    this.data.events = this.data.events.filter(event => !removedIds.has(event.ownerId) && !['event_hackathon_2026', 'event_founder_talk'].includes(event.id));
     this.save();
   }
 
@@ -367,7 +242,7 @@ class Database {
       if (!driver) {
         const uri = process.env.MONGO_URI;
         if (!uri) {
-          console.log('[DB] MONGO_URI not set: using the local JSON file. Data is lost whenever the host wipes its disk.');
+          console.info('[DB] MONGO_URI not set: using the local JSON file.');
           return;
         }
         const { MongoDriver } = await import('./mongoDriver.js');
@@ -380,10 +255,10 @@ class Database {
       const hasStored = (stored.users?.length ?? 0) > 0;
       if (hasStored) {
         this.data = this.normalize(stored as unknown as Partial<DatabaseSchema>);
-        this.neutralizeLegacyAdmin();
-        console.log(`[DB] ${driver.name}: loaded ${this.data.users.length} users, ${this.data.posts.length} posts, ${this.data.messages.length} messages`);
+        this.removeLegacyTestAccounts();
+        console.info(`[DB] ${driver.name}: loaded ${this.data.users.length} users, ${this.data.posts.length} posts, ${this.data.messages.length} messages`);
       } else {
-        console.log(`[DB] ${driver.name} is empty: migrating the current data into it`);
+        console.info(`[DB] ${driver.name} is empty: migrating the current data into it`);
       }
 
       this.driver = driver;
@@ -391,7 +266,7 @@ class Database {
       this.sync.prime(hasStored ? stored : {});
       await this.sync.flush(); // pushes anything that exists only locally (first-run migration)
       this.saveToAll(this.data); // keep the local file as a warm backup
-      console.log(`[DB] ${driver.name} persistence is ON`);
+      console.info(`[DB] ${driver.name} persistence is ON`);
     } catch (err) {
       this.sync = null;
       console.error('[DB] Durable storage unavailable, continuing with the local file only:', err);
@@ -428,7 +303,7 @@ class Database {
     if (!json || !Array.isArray(json.users) || json.users.length === 0) return false;
     this.data = json;
     this.save();
-    console.log(`[DB] Restored backup with ${json.users.length} users`);
+    console.info(`[DB] Restored backup with ${json.users.length} users`);
     return true;
   }
 
@@ -607,10 +482,19 @@ class Database {
     if (!post.views) post.views = [];
     if (!post.views.includes(viewerId)) {
       post.views.push(viewerId);
+      if (!post.viewRecords) post.viewRecords = [];
+      post.viewRecords.push({ userId: viewerId, viewedAt: Date.now() });
       post.viewsCount = post.views.length;
       this.save();
     }
     return post;
+  }
+
+  getPostViewRecords(postId: string): { userId: string; viewedAt: number }[] {
+    const post = this.getPostById(postId);
+    if (!post) return [];
+    const records = post.viewRecords ?? (post.views || []).map(userId => ({ userId, viewedAt: post.createdAt }));
+    return [...records].sort((a, b) => b.viewedAt - a.viewedAt);
   }
 
   // ---------- Saved posts (bookmarks) ----------
@@ -663,13 +547,14 @@ class Database {
     mediaType?: 'image' | 'video',
     feeling?: string,
     privacy: 'public' | 'friends' | 'only_me' = 'public',
-    extras: { taggedUserIds?: string[]; sharedPostId?: string } = {}
+    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[] } = {}
   ): Post {
     const newPost: Post = {
       id: 'post_' + crypto.randomBytes(6).toString('hex'),
       authorId,
       content,
       mediaUrl,
+      ...(extras.mediaUrls?.length ? { mediaUrls: extras.mediaUrls.slice(0, 10) } : {}),
       mediaType,
       feeling,
       privacy,
@@ -876,12 +761,22 @@ class Database {
       mediaUrl: msg.mediaUrl,
       mediaType: msg.mediaType,
       audioDuration: msg.audioDuration,
+      attachments: msg.attachments?.slice(0, 10),
       status: msg.status || 'sent',
       createdAt: Date.now()
     };
     this.data.messages.push(newMsg);
     this.save();
     return newMsg;
+  }
+
+  editMessage(messageId: string, senderId: string, text: string): Message | null {
+    const message = this.data.messages.find(item => item.id === messageId && item.senderId === senderId);
+    if (!message || !message.text || Date.now() - message.createdAt > 15 * 60 * 1000) return null;
+    message.text = text;
+    message.editedAt = Date.now();
+    this.save();
+    return message;
   }
 
   updateMessageStatus(messageId: string, status: 'delivered' | 'seen'): Message | null {

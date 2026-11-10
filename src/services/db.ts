@@ -34,8 +34,6 @@ import type {
   AdminStats 
 } from '../types';
 
-export const ADMIN_EMAIL = 'eldermoses89@gmail.com';
-
 export function hashPassword(password: string): string {
   return 'hashed_' + btoa(password || '');
 }
@@ -150,7 +148,6 @@ export async function createUser(data: {
   // 1. FIRST call createUserWithEmailAndPassword in Firebase Auth
   const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
   const uid = userCredential.user.uid;
-  const isDeveloper = cleanEmail === ADMIN_EMAIL;
 
   const newUser: User = {
     id: uid,
@@ -164,10 +161,10 @@ export async function createUser(data: {
     location: data.location || 'Global',
     work: data.work || '',
     education: data.education || '',
-    role: isDeveloper ? 'developer' : 'user',
-    isVerified: isDeveloper,
-    isOfficialDeveloper: isDeveloper,
-    boostsCount: isDeveloper ? 420 : 0,
+    role: 'user',
+    isVerified: false,
+    isOfficialDeveloper: false,
+    boostsCount: 0,
     boostedBy: [],
     isBlocked: false,
     isOnline: true,
@@ -195,7 +192,6 @@ export async function loginUser(email: string, password: string): Promise<User> 
       await setDoc(doc(db, 'users', uid), { ...user, id: uid }, { merge: true });
       user = { ...user, id: uid };
     } else {
-      const isDeveloper = cleanEmail === ADMIN_EMAIL;
       user = {
         id: uid,
         name: userCredential.user.displayName || cleanEmail.split('@')[0],
@@ -208,10 +204,10 @@ export async function loginUser(email: string, password: string): Promise<User> 
         location: 'Global',
         work: '',
         education: '',
-        role: isDeveloper ? 'developer' : 'user',
-        isVerified: isDeveloper,
-        isOfficialDeveloper: isDeveloper,
-        boostsCount: isDeveloper ? 420 : 0,
+        role: 'user',
+        isVerified: false,
+        isOfficialDeveloper: false,
+        boostsCount: 0,
         boostedBy: [],
         isBlocked: false,
         isOnline: true,
@@ -248,62 +244,6 @@ export async function updateUser(id: string, updates: Partial<User>): Promise<Us
   const docRef = doc(db, 'users', id);
   await updateDoc(docRef, updates as any);
   return getUserById(id);
-}
-
-// Ensure SEED user eldermoses89@gmail.com exists
-export async function ensureSeedAdminUser(): Promise<void> {
-  try {
-    const existing = await getUserByEmail(ADMIN_EMAIL);
-    if (!existing) {
-      console.log('Seed user not found in Firestore, ensuring existence...');
-      try {
-        await createUser({
-          name: 'Elder Moses',
-          email: ADMIN_EMAIL,
-          password: 'admin123',
-          dob: '1995-06-15',
-          bio: 'Founder & Super Admin at Echat.',
-          location: 'Sierra Leone, SL',
-          work: 'Lead Architect @ Echat Network',
-          education: 'Computer Science'
-        });
-        console.log('Seed admin user created successfully.');
-      } catch (authErr: any) {
-        if (authErr?.code === 'auth/email-already-in-use') {
-          console.log('Seed user already in Auth, creating firestore doc.');
-          const seedUid = 'user_admin_elder';
-          const seedUser: User = {
-            id: seedUid,
-            name: 'Elder Moses',
-            email: ADMIN_EMAIL,
-            dob: '1995-06-15',
-            passwordHash: '', // never store a password hash (or a known demo password) in Firestore
-            avatar: initialsAvatar('Elder Moses'),
-            coverPhoto: gradientCover('Elder Moses'),
-            bio: 'Founder & Super Admin at Echat.',
-            location: 'Sierra Leone, SL',
-            work: 'Lead Architect @ Echat Network',
-            education: 'Computer Science',
-            role: 'developer',
-            isVerified: true,
-            isOfficialDeveloper: true,
-            boostsCount: 420,
-            boostedBy: [],
-            isBlocked: false,
-            isOnline: true,
-            lastSeen: Date.now(),
-            createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
-            friends: [],
-            friendRequestsSent: [],
-            friendRequestsReceived: []
-          };
-          await setDoc(doc(db, 'users', seedUid), seedUser, { merge: true });
-        }
-      }
-    }
-  } catch (err) {
-    console.error('ensureSeedAdminUser check failed:', err);
-  }
 }
 
 // ----------------- POSTS -----------------
@@ -713,7 +653,6 @@ export const firestoreDb = {
   rejectFriendRequest,
   unfriend,
   getAdminStats,
-  ensureSeedAdminUser
 };
 
 export default firestoreDb;

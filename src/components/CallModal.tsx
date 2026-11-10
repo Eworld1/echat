@@ -20,7 +20,6 @@ const CallModalView: React.FC = () => {
     acceptCall, 
     rejectCall, 
     endCall, 
-    simulatePartnerAnswer, 
     localStreamRef, 
     remoteStream, 
     peerConnectionRef 
@@ -33,7 +32,6 @@ const CallModalView: React.FC = () => {
   const [isVideoDisabled, setIsVideoDisabled] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [ringingSeconds, setRingingSeconds] = useState(0);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
 
   // Call duration counter
@@ -43,17 +41,6 @@ const CallModalView: React.FC = () => {
       interval = setInterval(() => setCallDuration(p => p + 1), 1000);
     } else {
       setCallDuration(0);
-    }
-    return () => { if (interval) clearInterval(interval); };
-  }, [activeCall?.status]);
-
-  // Outgoing ringing duration counter
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-    if (activeCall?.status === 'calling' || activeCall?.status === 'ringing') {
-      interval = setInterval(() => setRingingSeconds(p => p + 1), 1000);
-    } else {
-      setRingingSeconds(0);
     }
     return () => { if (interval) clearInterval(interval); };
   }, [activeCall?.status]);
@@ -308,14 +295,6 @@ const CallModalView: React.FC = () => {
                     {activeCall.status !== 'connected' && (
                       <p className="text-xs text-slate-400 mt-1">Connecting peer-to-peer via WebRTC...</p>
                     )}
-                    {ringingSeconds >= 2 && activeCall.status !== 'connected' && (
-                      <button 
-                        onClick={simulatePartnerAnswer} 
-                        className="mt-6 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-full shadow-lg transition"
-                      >
-                        Answer as {activeCall.partnerName} (Test)
-                      </button>
-                    )}
                   </div>
                 )}
 
@@ -362,7 +341,7 @@ const CallModalView: React.FC = () => {
                 </p>
                 
 
-                {activeCall.status === 'connected' ? (
+                {activeCall.status === 'connected' && (
                   <div className="flex items-center gap-1.5 mt-8">
                     <span className="w-2 h-6 bg-emerald-500 rounded-full animate-bounce" />
                     <span className="w-2 h-10 bg-emerald-400 rounded-full animate-bounce [animation-delay:0.15s]" />
@@ -370,15 +349,6 @@ const CallModalView: React.FC = () => {
                     <span className="w-2 h-12 bg-emerald-400 rounded-full animate-bounce [animation-delay:0.45s]" />
                     <span className="w-2 h-5 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.6s]" />
                   </div>
-                ) : (
-                  ringingSeconds >= 2 && (
-                    <button 
-                      onClick={simulatePartnerAnswer} 
-                      className="mt-6 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-full shadow-lg transition"
-                    >
-                      Answer as {activeCall.partnerName} (Test)
-                    </button>
-                  )
                 )}
               </div>
             )}

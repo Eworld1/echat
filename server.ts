@@ -65,7 +65,7 @@ fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 app.get('/uploads/:name', async (req: Request, res: Response, next) => {
   try {
     const name = req.params.name;
-    if (!/^[a-f0-9-]{36}\.(jpg|png|webp|gif|mp4|webm|ogg|mp3|m4a)$/.test(name)) return next();
+    if (!/^[a-f0-9-]{36}\.(jpg|png|webp|gif|mp4|webm|ogg|mp3|m4a|pdf|doc|docx)$/.test(name)) return next();
     const target = path.join(UPLOADS_DIR, name);
     if (fs.existsSync(target)) return next(); // normal case: express.static below serves it
     const stored = await db.getStoredFile(name);
@@ -94,12 +94,40 @@ const UPLOAD_MIME_EXT: Record<string, string> = {
   'audio/webm': 'webm',
   'audio/ogg': 'ogg',
   'audio/mpeg': 'mp3',
-  'audio/mp4': 'm4a'
+  'audio/mp4': 'm4a',
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx'
 };
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // base64 adds ~33%, must stay under the 25mb JSON limit
 
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ ok: true, uptime: process.uptime(), storage: db.persistenceStats ?? 'local-file' });
+});
+
+app.get('/api/calls/ice-config', async (req: Request, res: Response) => {
+  if (!getAuthUser(req)) return res.status(401).json({ error: 'Not authenticated' });
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken) return res.status(503).json({ error: 'TURN credentials are not configured on the server' });
+  try {
+    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Tokens.json`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({ Ttl: '3600' })
+    });
+    const payload = await response.json() as { ice_servers?: RTCIceServer[]; message?: string };
+    if (!response.ok || !Array.isArray(payload.ice_servers) || payload.ice_servers.length === 0) {
+      return res.status(502).json({ error: 'Could not create temporary TURN credentials' });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ iceServers: payload.ice_servers });
+  } catch {
+    res.status(502).json({ error: 'TURN credential service is unavailable' });
+  }
 });
 
 app.get('/api/site-config', (_req: Request, res: Response) => {
@@ -175,6 +203,7 @@ function safeEqual(a: string, b: string): boolean {
 function getAuthUser(req: Request) {
   const userId = req.headers['x-user-id'] as string;
   if (!userId) return null;
+  if (userId === 'user_admin_elder') return null;
   let user = db.getUserById(userId);
   if (!user && userId.trim()) {
     // Never grant developer rights here: the admin account is created only through /api/auth/register.
@@ -230,6 +259,9 @@ app.post('/api/auth/sync-profile', (req: Request, res: Response) => {
 app.post('/api/auth/register', (req: Request, res: Response) => {
   try {
     const { name, email, password, dob, avatar, bio, location, termsAccepted } = req.body;
+    if (req.body?.id === 'user_admin_elder' || (typeof name === 'string' && /^elder moses\s*\(test\)$/i.test(name.trim()))) {
+      return res.status(410).json({ error: 'This legacy demo account was removed.' });
+    }
     if (!name || !email || !password || !dob) {
       return res.status(400).json({ error: 'Name, email, password, and Date of Birth are required' });
     }
@@ -381,7 +413,6 @@ app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
     // Without an email provider the code must not be handed to the requester: that would let
     // anyone reset anyone's password. It is shown only in dev, or if explicitly enabled.
     const exposeToken = !isProd || process.env.ALLOW_RESET_TOKEN_IN_RESPONSE === 'true';
-    if (!exposeToken) console.log(`[Echat] Password reset code for ${email}: ${token}`);
     res.json({ success: true, message: genericMessage, ...(exposeToken ? { token } : {}) });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -704,12 +735,28 @@ app.post('/api/posts/:id/view', (req: Request, res: Response) => {
   res.json({ viewsCount: post.viewsCount || 0 });
 });
 
+app.get('/api/posts/:id/viewers', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const post = db.getPostById(req.params.id);
+  if (!post || post.authorId !== authUser.id) return res.status(404).json({ error: 'Post not found' });
+  const viewers = db.getPostViewRecords(post.id).map(record => {
+    const viewer = db.getUserById(record.userId);
+    return viewer ? { id: viewer.id, name: viewer.name, avatar: viewer.avatar, viewedAt: record.viewedAt } : null;
+  }).filter((viewer): viewer is NonNullable<typeof viewer> => Boolean(viewer));
+  res.json(viewers);
+});
+
 app.post('/api/posts', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
   const { content, mediaUrl, mediaType, feeling, privacy, taggedUserIds } = req.body;
-  if (!content && !mediaUrl) {
+  const requestedMediaUrls = Array.isArray(req.body.mediaUrls) ? req.body.mediaUrls : [];
+  if (requestedMediaUrls.length > 10) return res.status(400).json({ error: 'A post can include at most 10 images' });
+  const mediaUrls = requestedMediaUrls.filter((url: unknown): url is string => typeof url === 'string' && (/^https:\/\//i.test(url) || url.startsWith('/uploads/'))).slice(0, 10);
+  const primaryMediaUrl = mediaUrls[0] || (typeof mediaUrl === 'string' ? mediaUrl : undefined);
+  if (!content && !primaryMediaUrl) {
     return res.status(400).json({ error: 'Post must contain text or media' });
   }
   const safePrivacy = privacy === 'friends' || privacy === 'only_me' ? privacy : 'public';
@@ -724,11 +771,11 @@ app.post('/api/posts', (req: Request, res: Response) => {
   const post = db.createPost(
     authUser.id,
     content || '',
-    mediaUrl,
+    primaryMediaUrl,
     mediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds }
+    { taggedUserIds: cleanTaggedIds, mediaUrls }
   );
 
   // Tell each tagged friend (not for private "only me" posts)
@@ -777,11 +824,17 @@ app.post('/api/posts/:id/react', (req: Request, res: Response) => {
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
   const { type } = req.body;
+  const before = db.getPostById(req.params.id);
+  const hadReaction = Boolean(before?.reactions.some(reaction => reaction.userId === authUser.id));
   const post = db.toggleReaction(req.params.id, authUser.id, type || 'like');
   if (!post) return res.status(404).json({ error: 'Post not found' });
 
   const populated = populatePost(post);
   socketManager.broadcast({ type: 'post_updated', post: populated });
+  if (!hadReaction && post.authorId !== authUser.id) {
+    const notification = db.addNotification({ userId: post.authorId, actorId: authUser.id, type: 'post_reaction', message: `${authUser.name} liked your post`, targetId: post.id, read: false });
+    socketManager.sendToUser(post.authorId, { type: 'new_notification', notification: populateNotification(notification) });
+  }
 
   res.json(populated);
 });
@@ -800,6 +853,10 @@ app.post('/api/posts/:id/comment', (req: Request, res: Response) => {
 
   const populated = populatePost(result.post);
   socketManager.broadcast({ type: 'post_updated', post: populated });
+  if (result.post.authorId !== authUser.id) {
+    const notification = db.addNotification({ userId: result.post.authorId, actorId: authUser.id, type: 'post_comment', message: `${authUser.name} commented on your post`, targetId: result.post.id, read: false });
+    socketManager.sendToUser(result.post.authorId, { type: 'new_notification', notification: populateNotification(notification) });
+  }
 
   res.json(populated);
 });
@@ -1010,7 +1067,10 @@ app.post('/api/messages', (req: Request, res: Response) => {
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
   const { receiverId, text, mediaUrl, mediaType, audioDuration } = req.body;
-  if (!receiverId || (!text && !mediaUrl)) {
+  const inputAttachments = Array.isArray(req.body.attachments) ? req.body.attachments : [];
+  if (inputAttachments.length > 10) return res.status(400).json({ error: 'Attach up to 10 files per message' });
+  const attachments = inputAttachments.filter((file: any) => file && typeof file.url === 'string' && (/^https:\/\//i.test(file.url) || file.url.startsWith('/uploads/')) && typeof file.name === 'string' && typeof file.mimeType === 'string' && Number.isFinite(file.size) && file.size >= 0).slice(0, 10);
+  if (!receiverId || (!text && !mediaUrl && attachments.length === 0)) {
     return res.status(400).json({ error: 'Recipient and message content required' });
   }
 
@@ -1028,6 +1088,7 @@ app.post('/api/messages', (req: Request, res: Response) => {
     mediaUrl,
     mediaType,
     audioDuration,
+    attachments,
     status
   });
 
@@ -1047,11 +1108,27 @@ app.post('/api/messages', (req: Request, res: Response) => {
     text ? String(text).slice(0, 80)
     : mediaType === 'audio' ? 'sent you a voice message'
     : mediaType === 'video' ? 'sent you a video'
+    : attachments.length ? `sent you ${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`
     : 'sent you a photo';
   const notif = db.upsertMessageNotification(receiverId, authUser.id, text ? `${authUser.name}: ${what}` : `${authUser.name} ${what}`);
   socketManager.sendToUser(receiverId, { type: 'new_notification', notification: populateNotification(notif) });
 
   res.json(message);
+});
+
+app.put('/api/messages/:id', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (!text || text.length > 4000) return res.status(400).json({ error: 'Message text must be 1 to 4000 characters' });
+  const current = db.getConversationPartners(authUser.id).flatMap(partnerId => db.getConversation(authUser.id, partnerId)).find(message => message.id === req.params.id);
+  if (!current || current.senderId !== authUser.id) return res.status(404).json({ error: 'Message not found' });
+  if (!current.text || Date.now() - current.createdAt > 15 * 60 * 1000) return res.status(403).json({ error: 'Messages can only be edited within 15 minutes' });
+  const updated = db.editMessage(current.id, authUser.id, text);
+  if (!updated) return res.status(403).json({ error: 'This message can no longer be edited' });
+  socketManager.sendToUser(updated.senderId, { type: 'message_updated', message: updated });
+  socketManager.sendToUser(updated.receiverId, { type: 'message_updated', message: updated });
+  res.json(updated);
 });
 
 app.post('/api/messages/seen', (req: Request, res: Response) => {
@@ -1113,7 +1190,7 @@ app.post('/api/admin/claim', (req: Request, res: Response) => {
 
     const claimed = db.claimAdmin(authUser.id, ADMIN_EMAIL);
     if (!claimed) return res.status(404).json({ error: 'User not found' });
-    console.log(`[Echat] Admin access claimed by user ${authUser.id}`);
+    console.info(`[Echat] Admin access claimed by user ${authUser.id}`);
     audit(claimed, 'admin.claim', { type: 'user', id: claimed.id, name: claimed.name });
     res.json({ user: db.sanitizeUser(claimed) });
   } catch (e: any) {
@@ -1348,6 +1425,7 @@ interface LiveSession {
   hostEmail: string;
   isHostVerified?: boolean;
   title: string;
+  taggedPageIds: string[];
   viewersCount: number;
   reactionsCount: number;
   startedAt: number;
@@ -1380,7 +1458,7 @@ app.post('/api/live/start', (req: Request, res: Response) => {
     });
   }
 
-  const { title } = req.body;
+  const { title, taggedPageIds } = req.body;
   activeLiveSession = {
     id: 'live_' + crypto.randomBytes(6).toString('hex'),
     hostId: authUser.id,
@@ -1389,6 +1467,7 @@ app.post('/api/live/start', (req: Request, res: Response) => {
     hostEmail: authUser.email,
     isHostVerified: authUser.isVerified ?? isDev,
     title: title?.trim() || `${authUser.name} is Live on EChat!`,
+    taggedPageIds: Array.isArray(taggedPageIds) ? [...new Set<string>(taggedPageIds.filter((id: unknown): id is string => typeof id === 'string' && Boolean(db.getPageById(id))))].slice(0, 22) : [],
     viewersCount: 1,
     reactionsCount: 0,
     startedAt: Date.now(),
@@ -1417,6 +1496,18 @@ app.post('/api/live/start', (req: Request, res: Response) => {
       read: false
     });
     socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
+  }
+
+  const taggedPageAudience = new Set<string>();
+  for (const pageId of activeLiveSession.taggedPageIds) {
+    const page = db.getPageById(pageId);
+    if (!page) continue;
+    for (const uid of [...page.followers, page.ownerId]) {
+      if (uid === authUser.id || taggedPageAudience.has(uid) || db.isBlockedBetween(authUser.id, uid)) continue;
+      taggedPageAudience.add(uid);
+      const notification = db.addNotification({ userId: uid, actorId: authUser.id, type: 'live_stream', message: `${authUser.name} is live with ${page.name}: ${activeLiveSession.title}`, targetId: activeLiveSession.id, read: false });
+      socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
+    }
   }
 
   socketManager.broadcast({
@@ -1637,10 +1728,16 @@ app.post('/api/pages/:id/follow', (req: Request, res: Response) => {
     const authUser = getAuthUser(req);
     if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
+    const pageBefore = db.getPageById(req.params.id);
+    const wasFollowing = Boolean(pageBefore?.followers.includes(authUser.id));
     const updated = db.togglePageFollow(req.params.id, authUser.id);
     if (!updated) return res.status(404).json({ error: 'Page not found' });
 
     socketManager.broadcast({ type: 'page_updated', page: updated });
+    if (!wasFollowing && updated.ownerId !== authUser.id) {
+      const notification = db.addNotification({ userId: updated.ownerId, actorId: authUser.id, type: 'page_follow', message: `${authUser.name} followed your page`, targetId: updated.id, read: false });
+      socketManager.sendToUser(updated.ownerId, { type: 'new_notification', notification: populateNotification(notification) });
+    }
     res.json(updated);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -1974,7 +2071,7 @@ async function startServer() {
         }
       } catch {
         fs.rmSync(viteCachePath, { recursive: true, force: true });
-        console.log('[Echat] Cleared corrupted vite cache');
+        console.info('[Echat] Cleared corrupted vite cache');
       }
     }
   } catch {
@@ -2017,7 +2114,7 @@ async function startServer() {
   });
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Echat] Server on ${PORT}`);
+    console.info(`[Echat] Server on ${PORT}`);
   });
 
   // Dev only: also answer on :5173 so http://localhost:5173 works like a Vite dev server.
@@ -2025,7 +2122,7 @@ async function startServer() {
     const altServer = http.createServer(app);
     altServer.on('error', () => { /* port busy: ignore */ });
     altServer.listen(5173, '0.0.0.0', () => {
-      console.log('[vite] Local: http://localhost:5173/');
+      console.info('[vite] Local: http://localhost:5173/');
     });
   }
 

@@ -15,16 +15,11 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
 import { 
-  createUser as dbCreateUser, 
   getUserById, 
-  getUserByEmail, 
-  ensureSeedAdminUser,
-  hashPassword 
+  getUserByEmail
 } from '../services/db';
 import { User } from '../types';
 import { api } from '../services/api';
-
-const ADMIN_EMAIL = 'eldermoses89@gmail.com';
 
 interface AuthContextType {
   user: User | null;
@@ -65,9 +60,13 @@ function syncServerProfile(profile: { name: string; avatar: string; coverPhoto: 
   }).catch(() => { /* server may be waking up; retried on next load */ });
 }
 
+function isRemovedDemoAccount(profile: Pick<User, 'id' | 'name'>): boolean {
+  return profile.id === 'user_admin_elder' || /^elder moses\s*\(test\)$/i.test(profile.name.trim());
+}
+
 // Friends and friend requests live on the Echat server, not in Firebase. Without this merge the
 // UI keeps showing the stale Firebase copy, so "Add Friend" appears to do nothing.
-async function withServerSocial<T extends { friends: string[]; friendRequestsSent: string[]; friendRequestsReceived: string[]; savedPosts?: string[]; blockedUsers?: string[]; privacySettings?: unknown }>(profile: T): Promise<T> {
+async function withServerSocial<T extends { friends: string[]; friendRequestsSent: string[]; friendRequestsReceived: string[]; savedPosts?: string[]; blockedUsers?: string[]; privacySettings?: unknown; role?: User['role']; isVerified?: boolean; isOfficialDeveloper?: boolean }>(profile: T): Promise<T> {
   try {
     const me = await api.getMe();
     if (!me) return profile;
@@ -78,7 +77,10 @@ async function withServerSocial<T extends { friends: string[]; friendRequestsSen
       friendRequestsReceived: me.friendRequestsReceived ?? profile.friendRequestsReceived,
       savedPosts: me.savedPosts ?? profile.savedPosts ?? [],
       blockedUsers: me.blockedUsers ?? profile.blockedUsers ?? [],
-      privacySettings: me.privacySettings ?? profile.privacySettings
+      privacySettings: me.privacySettings ?? profile.privacySettings,
+      role: me.role ?? profile.role,
+      isVerified: me.isVerified ?? profile.isVerified,
+      isOfficialDeveloper: me.isOfficialDeveloper ?? profile.isOfficialDeveloper
     };
   } catch {
     return profile;
@@ -103,6 +105,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let profile = await getUserById(currentFirebaseUser.uid);
         if (!profile && currentFirebaseUser.email) {
           profile = await getUserByEmail(currentFirebaseUser.email);
+        }
+        if (profile && isRemovedDemoAccount(profile)) {
+          await signOut(auth);
+          localStorage.removeItem('echat_user_id');
+          localStorage.removeItem('echat_token');
+          setUser(null);
+          setIsLoading(false);
+          return;
         }
         if (profile) {
           localStorage.setItem('echat_user_id', profile.id);
@@ -150,23 +160,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    ensureSeedAdminUser().catch(console.error);
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
           const userDoc = await getUserById(firebaseUser.uid);
-          if (userDoc) {
+          if (userDoc && isRemovedDemoAccount(userDoc)) {
+            await signOut(auth);
+            localStorage.removeItem('echat_user_id');
+            localStorage.removeItem('echat_token');
+            setUser(null);
+          } else if (userDoc) {
             localStorage.setItem('echat_user_id', userDoc.id);
             localStorage.setItem('echat_token', userDoc.id);
-            setUser(userDoc);
+            setUser(await withServerSocial(userDoc));
             syncServerProfile(userDoc);
             withServerSocial(userDoc).then(setUser);
           } else if (firebaseUser.email) {
             const byEmail = await getUserByEmail(firebaseUser.email);
-            if (byEmail) {
+            if (byEmail && isRemovedDemoAccount(byEmail)) {
+              await signOut(auth);
+              localStorage.removeItem('echat_user_id');
+              localStorage.removeItem('echat_token');
+              setUser(null);
+            } else if (byEmail) {
               localStorage.setItem('echat_user_id', byEmail.id);
               localStorage.setItem('echat_token', byEmail.id);
-              setUser(byEmail);
+              setUser(await withServerSocial(byEmail));
               syncServerProfile(byEmail);
               withServerSocial(byEmail).then(setUser);
             }
@@ -196,7 +215,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile = await getUserByEmail(cleanEmail);
       }
       if (!profile) {
-        const isDeveloper = cleanEmail === ADMIN_EMAIL;
         profile = {
           id: uid,
           name: cred.user.displayName || cleanEmail.split('@')[0],
@@ -209,10 +227,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           location: 'Global',
           work: '',
           education: '',
-          role: isDeveloper ? 'developer' : 'user',
-          isVerified: isDeveloper,
-          isOfficialDeveloper: isDeveloper,
-          boostsCount: isDeveloper ? 420 : 0,
+          role: 'user',
+          isVerified: false,
+          isOfficialDeveloper: false,
+          boostsCount: 0,
           boostedBy: [],
           isBlocked: false,
           isOnline: true,
@@ -224,6 +242,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         await setDoc(doc(db, 'users', uid), profile, { merge: true });
       } else {
+        if (isRemovedDemoAccount(profile)) {
+          await signOut(auth);
+          throw new Error('This legacy demo account was removed. Please use your personal account.');
+        }
         await updateDoc(doc(db, 'users', profile.id), {
           isOnline: true,
           lastSeen: Date.now()
@@ -244,6 +266,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         await api.register({ name: profile.name, email: cleanEmail, password, dob: profile.dob || '2000-01-01', id: profile.id, termsAccepted: true });
       } catch {}
+      setUser(await withServerSocial(profile));
 
     } catch (firebaseErr: any) {
       console.warn('Firebase login failed, trying backend fallback:', firebaseErr);
@@ -276,8 +299,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, data.password);
       const uid = userCredential.user.uid;
-      const isDeveloper = cleanEmail === ADMIN_EMAIL;
-
       const newUser: User = {
         id: uid,
         name: data.name,
@@ -291,10 +312,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         location: data.location || 'Global',
         work: '',
         education: '',
-        role: isDeveloper ? 'developer' : 'user',
-        isVerified: isDeveloper,
-        isOfficialDeveloper: isDeveloper,
-        boostsCount: isDeveloper ? 420 : 0,
+        role: 'user',
+        isVerified: false,
+        isOfficialDeveloper: false,
+        boostsCount: 0,
         boostedBy: [],
         isBlocked: false,
         isOnline: true,
@@ -315,9 +336,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // ✅ FIX: Also create in Express backend so friends/call API works
       try {
         await api.register({ ...data, email: cleanEmail, id: uid });
-      } catch (e) {
-        console.log('Backend sync (expected if already exists):', e);
+      } catch {
+        // Firebase remains authoritative; backend registration may already exist.
       }
+      setUser(await withServerSocial(newUser));
 
       // Profile picture chosen from the device gallery: shrink, upload, then save it on the profile.
       if (data.avatarFile) {
@@ -404,7 +426,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(prev => (prev ? { ...prev, ...updated } : updated));
   };
 
-  const isDeveloper = Boolean(user && user.email?.toLowerCase().trim() === ADMIN_EMAIL);
+  const isDeveloper = Boolean(user && user.role === 'developer' && user.isOfficialDeveloper);
 
   return (
     <AuthContext.Provider value={{ 

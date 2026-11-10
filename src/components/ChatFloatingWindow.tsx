@@ -3,6 +3,7 @@ import { User, Message } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
+import { assetUrl } from '../services/apiBase';
 import { VoiceRecorder } from './VoiceRecorder';
 import {
   Phone,
@@ -16,7 +17,9 @@ import {
   Check,
   CheckCheck,
   Play,
-  Pause
+  Pause,
+  Pencil,
+  Download
 } from 'lucide-react';
 
 interface ChatFloatingWindowProps {
@@ -32,7 +35,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
     sendTyping,
     markSeen,
     startCall,
-    onNewMessage
+    onNewMessage,
+    onMessageUpdated
   } = useSocket();
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -41,6 +45,10 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingMessageText, setEditingMessageText] = useState('');
+  const [isUploadingFiles, setIsUploadingFiles] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
@@ -91,6 +99,11 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
     };
   }, [partner.id, user?.id]);
 
+  useEffect(() => onMessageUpdated(message => {
+    setMessages(current => current.map(item => item.id === message.id ? message : item));
+    setEditingMessageId(null);
+  }), [onMessageUpdated]);
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -107,8 +120,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
     }, 1500);
   };
 
-  const handleSend = async (mediaData?: { mediaUrl: string; mediaType: 'image' | 'video' | 'audio'; audioDuration?: number }) => {
-    if ((!inputText.trim() && !mediaData) || !user) return;
+  const handleSend = async (mediaData?: { mediaUrl: string; mediaType: 'image' | 'video' | 'audio'; audioDuration?: number }, attachments?: { url: string; name: string; mimeType: string; size: number }[]) => {
+    if ((!inputText.trim() && !mediaData && !attachments?.length) || !user) return;
 
     const payload = {
       receiverId: partner.id,
@@ -117,7 +130,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
         mediaUrl: mediaData.mediaUrl,
         mediaType: mediaData.mediaType,
         audioDuration: mediaData.audioDuration
-      })
+      }),
+      ...(attachments?.length ? { attachments } : {})
     };
 
     setInputText('');
@@ -140,18 +154,38 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
     });
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleEditMessage = async (messageId: string) => {
+    try {
+      const updated = await api.editMessage(messageId, editingMessageText.trim());
+      setMessages(current => current.map(item => item.id === updated.id ? updated : item));
+      setEditingMessageId(null);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not edit this message.');
+    }
+  };
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      handleSend({
-        mediaUrl: reader.result as string,
-        mediaType: file.type.startsWith('video') ? 'video' : 'image'
-      });
-    };
-    reader.readAsDataURL(file);
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!files.length) return;
+    if (files.length > 10) { alert('Choose up to 10 files at a time.'); return; }
+    if (files.some(file => file.size > 15 * 1024 * 1024)) { alert('Each file must be 15 MB or smaller.'); return; }
+    setIsUploadingFiles(true);
+    setUploadProgress(0);
+    try {
+      const attachments = [];
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        attachments.push({ url: await api.uploadFile(file), name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size });
+        setUploadProgress(Math.round(((index + 1) / files.length) * 100));
+      }
+      await handleSend(undefined, attachments);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not upload the selected files.');
+    } finally {
+      setIsUploadingFiles(false);
+      setUploadProgress(0);
+    }
   };
 
   const playVoiceMessage = (msgId: string, url?: string) => {
@@ -285,6 +319,18 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                   />
                 )}
 
+                {msg.attachments?.map((attachment, attachmentIndex) => {
+                  const url = assetUrl(attachment.url);
+                  const isImage = attachment.mimeType.startsWith('image/');
+                  const isVideo = attachment.mimeType.startsWith('video/');
+                  return <div key={`${msg.id}-file-${attachmentIndex}`} className="mb-2 min-w-36 max-w-full">
+                    {isImage ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} loading="lazy" className="max-h-48 rounded-lg object-cover" /></a>
+                      : isVideo ? <video src={url} controls playsInline className="max-h-48 max-w-full rounded-lg" />
+                      : <a href={url} download={attachment.name} className="flex items-center gap-2 rounded-lg border border-current/20 p-2 text-xs underline"><Download size={14} />{attachment.name}</a>}
+                    <div className="mt-1 flex items-center justify-between gap-3 text-[10px] opacity-70"><span className="truncate">{attachment.name}</span><span className="shrink-0">{(attachment.size / (1024 * 1024)).toFixed(2)} MB</span><a href={url} download={attachment.name} aria-label={`Download ${attachment.name}`} className="shrink-0 underline">Download</a></div>
+                  </div>;
+                })}
+
                 {/* Voice Note Audio Player */}
                 {msg.mediaType === 'audio' && (
                   <div className="flex items-center gap-2 py-1">
@@ -310,7 +356,12 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                 )}
 
                 {/* Text Content */}
-                {msg.text && <p className="leading-relaxed break-words">{msg.text}</p>}
+                {msg.text && editingMessageId === msg.id ? (
+                  <div className="min-w-52 space-y-2">
+                    <textarea value={editingMessageText} onChange={event => setEditingMessageText(event.target.value)} maxLength={4000} rows={3} className="w-full rounded-lg border border-white/30 bg-white/10 p-2 text-sm text-current outline-none" />
+                    <div className="flex justify-end gap-2"><button onClick={() => setEditingMessageId(null)} className="rounded-lg px-2 py-1 text-xs">Cancel</button><button onClick={() => void handleEditMessage(msg.id)} disabled={!editingMessageText.trim()} className="rounded-lg bg-white/20 px-2 py-1 text-xs font-bold disabled:opacity-50">Save</button></div>
+                  </div>
+                ) : msg.text && <p className="leading-relaxed break-words">{msg.text}{msg.editedAt && <span className="ml-1 text-[10px] opacity-70">Edited</span>}</p>}
               </div>
 
               {/* Status and Timestamp */}
@@ -332,6 +383,9 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                       </span>
                     )}
                   </span>
+                )}
+                {isMe && msg.text && !msg.editedAt && Date.now() - msg.createdAt <= 15 * 60 * 1000 && editingMessageId !== msg.id && (
+                  <button onClick={() => { setEditingMessageId(msg.id); setEditingMessageText(msg.text || ''); }} className="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-slate-200" title="Edit within 15 minutes"><Pencil size={10} />Edit</button>
                 )}
               </div>
             </div>
@@ -373,6 +427,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
 
       {/* Footer / Input Area */}
       <div className="p-2.5 bg-white border-t border-slate-100">
+        {isUploadingFiles && <div className="mb-2"><div className="mb-1 flex justify-between text-[10px] text-slate-500"><span>Uploading attachments…</span><span>{uploadProgress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-blue-600 transition-all" style={{ width: `${uploadProgress}%` }} /></div></div>}
         {isRecordingVoice ? (
           <VoiceRecorder
             onSendVoice={handleVoiceSend}
@@ -384,7 +439,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
               <Image size={18} />
               <input
                 type="file"
-                accept="image/*,video/*"
+                accept="image/*,video/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                multiple
                 className="hidden"
                 onChange={handleImageUpload}
               />
