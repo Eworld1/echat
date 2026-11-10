@@ -162,10 +162,17 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const remoteTracksRef = useRef<Map<string, MediaStreamTrack>>(new Map());
   const callAudioElementRef = useRef<HTMLAudioElement | null>(null);
   const registerCallAudioElement = useCallback((element: HTMLAudioElement | null) => {
     callAudioElementRef.current = element;
-  }, []);
+    if (element && remoteStream) {
+      element.srcObject = remoteStream;
+      element.muted = false;
+      element.volume = 1;
+      void element.play().catch(() => {});
+    }
+  }, [remoteStream]);
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -177,6 +184,25 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const processedCandidatesRef = useRef<Set<string>>(new Set());
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const preparedIncomingRef = useRef<{ id: string; promise: Promise<{ pc: RTCPeerConnection; stream: MediaStream }> } | null>(null);
+
+  const publishRemoteTracks = useCallback((extraTrack?: MediaStreamTrack) => {
+    const pc = peerConnectionRef.current;
+    for (const receiver of pc?.getReceivers() || []) {
+      const track = receiver.track;
+      if (track && track.readyState !== 'ended') remoteTracksRef.current.set(track.id, track);
+    }
+    if (extraTrack && extraTrack.readyState !== 'ended') remoteTracksRef.current.set(extraTrack.id, extraTrack);
+    for (const [id, track] of remoteTracksRef.current) if (track.readyState === 'ended') remoteTracksRef.current.delete(id);
+    const stream = new MediaStream([...remoteTracksRef.current.values()]);
+    setRemoteStream(stream);
+    const audio = callAudioElementRef.current;
+    if (audio && stream.getAudioTracks().length) {
+      audio.srcObject = stream;
+      audio.muted = false;
+      audio.volume = 1;
+      void audio.play().catch(() => {});
+    }
+  }, []);
 
   const prepareIncomingCall = useCallback((call: IncomingCall) => {
     if (preparedIncomingRef.current?.id === call.id) return;
@@ -200,18 +226,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (call.id && !call.id.startsWith('ws_')) updateDoc(doc(firestore, 'calls', call.id), { receiverCandidates: arrayUnion(candidate) }).catch(() => {});
       };
       pc.ontrack = event => {
-        const remote = event.streams[0] || new MediaStream([event.track]);
-        remote.getAudioTracks().forEach(track => { track.enabled = true; });
-        remote.getVideoTracks().forEach(track => { track.enabled = true; });
-        const remoteStream = new MediaStream(remote.getTracks());
-        setRemoteStream(remoteStream);
-        const audio = callAudioElementRef.current;
-        if (audio && remoteStream.getAudioTracks().length) {
-          audio.srcObject = remoteStream;
-          audio.muted = false;
-          audio.volume = 1;
-          audio.play().catch(() => {});
-        }
+        event.track.enabled = true;
+        event.track.onunmute = () => publishRemoteTracks(event.track);
+        event.track.onmute = () => publishRemoteTracks(event.track);
+        event.track.onended = () => publishRemoteTracks();
+        publishRemoteTracks(event.track);
       };
       pc.getReceivers().forEach(receiver => {
         const withJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
@@ -230,7 +249,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     })();
     preparedIncomingRef.current = { id: call.id, promise };
     promise.catch(error => console.warn('Could not prepare incoming call media:', error));
-  }, []);
+  }, [publishRemoteTracks]);
 
   useEffect(() => {
     activeCallRef.current = activeCall;
@@ -272,6 +291,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       localStreamRef.current = null;
     }
     preparedIncomingRef.current = null;
+    remoteTracksRef.current.clear();
     if (peerConnectionRef.current) {
       const pc = peerConnectionRef.current;
       try {
@@ -294,8 +314,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const addOrQueueCandidate = useCallback(async (candidate: RTCIceCandidateInit) => {
     const pc = peerConnectionRef.current;
-    if (!pc || pc.signalingState === 'closed') return;
-    if (!pc.remoteDescription || !pc.remoteDescription.type) {
+    // A caller can emit ICE candidates while its offer is still being sent. Keep them
+    // until the incoming call has created its peer connection and applied the offer.
+    if (!pc || pc.signalingState === 'closed' || !pc.remoteDescription || !pc.remoteDescription.type) {
       pendingCandidatesRef.current.push(candidate);
       return;
     }
@@ -588,7 +609,19 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           }
 
           case 'call-switch-type': {
-            setActiveCall(current => current && current.partnerId === data.fromUserId ? { ...current, callType: data.callType === 'video' ? 'video' : 'audio' } : current);
+            const callType: 'video' | 'audio' = data.callType === 'video' ? 'video' : 'audio';
+            const call = activeCallRef.current;
+            if (call && call.partnerId === data.fromUserId) {
+              if (callType === 'audio') {
+                const pc = peerConnectionRef.current;
+                const videoSender = pc?.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender;
+                if (videoSender) await videoSender.replaceTrack(null).catch(() => {});
+                localStreamRef.current?.getVideoTracks().forEach(track => { track.enabled = false; });
+              }
+              const updated = { ...call, callType };
+              activeCallRef.current = updated;
+              setActiveCall(updated);
+            }
             break;
           }
 
@@ -704,23 +737,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
       if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
 
-      pc.ontrack = (event) => {
-        const streamObj = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-        streamObj.getAudioTracks().forEach(t => { t.enabled = true; });
-        streamObj.getVideoTracks().forEach(t => { t.enabled = true; });
-        const remote = new MediaStream(streamObj.getTracks());
-        setRemoteStream(remote);
-        const audio = callAudioElementRef.current;
-        if (audio && remote.getAudioTracks().length) {
-          audio.srcObject = remote;
-          audio.muted = false;
-          audio.volume = 1;
-          audio.play().catch(() => {});
-        }
-        streamObj.getAudioTracks().forEach(track => { track.enabled = true; });
-        event.track.onunmute = () => {
-          setRemoteStream(new MediaStream(streamObj.getTracks()));
-        };
+      pc.ontrack = event => {
+        event.track.enabled = true;
+        event.track.onunmute = () => publishRemoteTracks(event.track);
+        event.track.onmute = () => publishRemoteTracks(event.track);
+        event.track.onended = () => publishRemoteTracks();
+        publishRemoteTracks(event.track);
       };
 
       // 4. Create SDP Offer
@@ -909,14 +931,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       };
 
-      pc.ontrack = (event) => {
-        const streamObj = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-        streamObj.getAudioTracks().forEach(t => { t.enabled = true; });
-        streamObj.getVideoTracks().forEach(t => { t.enabled = true; });
-        setRemoteStream(new MediaStream(streamObj.getTracks()));
-        event.track.onunmute = () => {
-          setRemoteStream(new MediaStream(streamObj.getTracks()));
-        };
+      pc.ontrack = event => {
+        event.track.enabled = true;
+        event.track.onunmute = () => publishRemoteTracks(event.track);
+        event.track.onmute = () => publishRemoteTracks(event.track);
+        event.track.onended = () => publishRemoteTracks();
+        publishRemoteTracks(event.track);
       };
 
       // 3. Set Remote Description (Caller's Offer)

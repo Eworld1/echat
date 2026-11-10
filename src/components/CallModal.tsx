@@ -35,7 +35,14 @@ const CallModalView: React.FC = () => {
   const [isMinimized, setIsMinimized] = useState(false);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [cameraToast, setCameraToast] = useState('');
+  const [callControlError, setCallControlError] = useState('');
   const [micLevel, setMicLevel] = useState(0);
+
+  useEffect(() => {
+    if (!activeCall) return;
+    const track = localStreamRef.current?.getVideoTracks()[0];
+    setIsVideoDisabled(activeCall.callType === 'audio' || !track || !track.enabled);
+  }, [activeCall?.callType, activeCall?.id, activeCall?.status, remoteStream, localStreamRef]);
 
   useEffect(() => {
     const track = localStreamRef?.current?.getAudioTracks()[0];
@@ -120,12 +127,13 @@ const CallModalView: React.FC = () => {
     const stream = localStreamRef?.current;
     const pc = peerConnectionRef?.current;
     if (!stream || !pc) return;
-    const sender = pc.getSenders().find(item => item.track?.kind === 'video') || pc.getSenders().find(item => !item.track);
+    const sender = pc.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender || pc.getSenders().find(item => item.track?.kind === 'video') || pc.getSenders().find(item => !item.track);
     if (isVideoDisabled) {
       let track = stream.getVideoTracks()[0];
       if (!track || track.readyState === 'ended') {
         const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facingMode } }, audio: false });
         track = camera.getVideoTracks()[0];
+        stream.getVideoTracks().forEach(old => { stream.removeTrack(old); old.stop(); });
         stream.addTrack(track);
       }
       if (sender) await sender.replaceTrack(track);
@@ -138,6 +146,7 @@ const CallModalView: React.FC = () => {
       if (track) track.enabled = false;
       setIsVideoDisabled(true);
     }
+    setCallControlError('');
   };
 
   // Control: Switch Camera (Front / Back on mobile/tablets or between webcams)
@@ -146,16 +155,21 @@ const CallModalView: React.FC = () => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices.filter(device => device.kind === 'videoinput');
-      const currentId = localStreamRef.current?.getVideoTracks()[0]?.getSettings().deviceId;
+      const currentTrack = localStreamRef.current?.getVideoTracks()[0];
+      const settings = currentTrack?.getSettings();
+      const currentId = settings?.deviceId;
       const currentIndex = cameras.findIndex(device => device.deviceId === currentId);
-      const nextMode = facingMode === 'user' ? 'environment' : 'user';
-      const nextCamera = cameras.length > 1 ? cameras[(currentIndex + 1 + cameras.length) % cameras.length] : undefined;
+      const currentMode = settings?.facingMode === 'environment' ? 'environment' : settings?.facingMode === 'user' ? 'user' : facingMode;
+      const nextMode = currentMode === 'user' ? 'environment' : 'user';
+      const preferred = cameras.find(device => nextMode === 'environment' ? /back|rear|environment/i.test(device.label) : /front|user|facetime/i.test(device.label));
+      const nextCamera = cameras.length > 1 ? (currentIndex >= 0 ? cameras[(currentIndex + 1) % cameras.length] : preferred || cameras[0]) : undefined;
       const newStream = await navigator.mediaDevices.getUserMedia({ video: nextCamera ? { deviceId: { exact: nextCamera.deviceId } } : { facingMode: { ideal: nextMode } }, audio: false });
 
       const newVideoTrack = newStream.getVideoTracks()[0];
       if (newVideoTrack && localStreamRef?.current) {
         const oldTrack = localStreamRef.current.getVideoTracks()[0];
-        const sender = peerConnectionRef?.current?.getSenders().find((s: RTCRtpSender) => s.track?.kind === 'video');
+        const pc = peerConnectionRef.current;
+        const sender = pc?.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender || pc?.getSenders().find((s: RTCRtpSender) => s.track?.kind === 'video') || pc?.getSenders().find(item => !item.track);
         if (sender) await sender.replaceTrack(newVideoTrack);
         if (oldTrack) {
           localStreamRef.current.removeTrack(oldTrack);
@@ -166,6 +180,7 @@ const CallModalView: React.FC = () => {
         // Replace track in peer connection senders
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = localStreamRef.current;
+          localVideoRef.current.play().catch(() => {});
         }
         setFacingMode(nextMode);
         const label = nextCamera?.label || newVideoTrack.label;
@@ -175,6 +190,7 @@ const CallModalView: React.FC = () => {
       }
     } catch (err) {
       console.warn('Switch camera error:', err);
+      setCallControlError('Could not switch camera. Check camera permission and try again.');
     }
   };
 
@@ -182,7 +198,7 @@ const CallModalView: React.FC = () => {
     const pc = peerConnectionRef.current; const stream = localStreamRef.current;
     if (!activeCall || !pc) return;
     if (activeCall.callType === 'video') {
-      const sender = pc.getSenders().find(item => item.track?.kind === 'video');
+      const sender = pc.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender || pc.getSenders().find(item => item.track?.kind === 'video');
       if (sender) await sender.replaceTrack(null);
       stream?.getVideoTracks().forEach(track => { track.enabled = false; });
       setIsVideoDisabled(true); switchCallType('audio');
@@ -191,11 +207,12 @@ const CallModalView: React.FC = () => {
     const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facingMode } }, audio: false });
     const track = camera.getVideoTracks()[0];
     if (!track) return;
-    const videoSender = pc.getSenders().find(item => item.track?.kind === 'video') || pc.getSenders().find(item => !item.track);
-    if (videoSender) await videoSender.replaceTrack(track); else pc.addTrack(track, stream || camera);
+    const videoSender = pc.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender || pc.getSenders().find(item => item.track?.kind === 'video') || pc.getSenders().find(item => !item.track);
     if (stream) { stream.getVideoTracks().forEach(old => { stream.removeTrack(old); old.stop(); }); stream.addTrack(track); }
     else localStreamRef.current = camera;
-    setIsVideoDisabled(false); switchCallType('video');
+    if (videoSender) await videoSender.replaceTrack(track); else pc.addTrack(track, localStreamRef.current || camera);
+    if (localVideoRef.current && localStreamRef.current) { localVideoRef.current.srcObject = localStreamRef.current; localVideoRef.current.play().catch(() => {}); }
+    setIsVideoDisabled(false); setCallControlError(''); switchCallType('video');
   };
 
   const formatTime = (secs: number) => {
@@ -308,7 +325,7 @@ const CallModalView: React.FC = () => {
 
           {/* Main Video & Audio Area */}
           <div className="flex-1 relative bg-slate-900 flex items-center justify-center overflow-hidden">
-            {(activeCall.callType === 'video' || Boolean(remoteStream?.getVideoTracks().length)) && !isVideoDisabled && Boolean(remoteStream?.getVideoTracks().some(track => !track.muted && track.readyState === 'live')) ? (
+            {activeCall.callType === 'video' && Boolean(remoteStream?.getVideoTracks().some(track => !track.muted && track.readyState === 'live')) ? (
               <>
                 {/* Full Screen Remote Video */}
                 {remoteStream && remoteStream.getVideoTracks().length > 0 ? (
@@ -339,7 +356,7 @@ const CallModalView: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-white font-medium mt-5 text-base">
-                      {activeCall.status === 'connected' ? 'Video connecting...' : 'Waiting for answer...'}
+                      {remoteStream?.getVideoTracks().length && remoteStream.getVideoTracks().every(track => track.muted) ? 'Their camera is off' : activeCall.status === 'connected' ? 'Video connecting...' : 'Waiting for answer...'}
                     </p>
                     {activeCall.status !== 'connected' && (
                       <p className="text-xs text-slate-400 mt-1">Connecting peer-to-peer via WebRTC...</p>
@@ -416,10 +433,10 @@ const CallModalView: React.FC = () => {
               {isMicMuted ? <MicOff size={20} /> : <Mic size={20} />}
             </button>
 
-            {(
+            {activeCall.callType === 'video' && (
               <>
                 <button
-                  onClick={() => { void toggleVideo(); }}
+                  onClick={() => { void toggleVideo().catch(error => { console.warn('Could not toggle call camera:', error); setCallControlError('Could not change camera. Check camera permissions and try again.'); }); }}
                   className={`p-4 rounded-full transition shadow-md active:scale-95 ${
                     isVideoDisabled ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'bg-slate-800 text-white hover:bg-slate-700'
                   }`}
@@ -428,7 +445,7 @@ const CallModalView: React.FC = () => {
                   {isVideoDisabled ? <Video size={20} /> : <VideoOff size={20} />}
                 </button>
 
-                {!isVideoDisabled && activeCall.callType === 'video' && <button
+                {!isVideoDisabled && <button
                   onClick={switchCamera}
                   className="p-4 rounded-full bg-slate-800 text-white hover:bg-slate-700 transition shadow-md active:scale-95"
                   title="Switch Camera"
@@ -437,9 +454,10 @@ const CallModalView: React.FC = () => {
                 </button>}
               </>
             )}
-            <button onClick={() => { void changeCallMode(); }} className="rounded-full bg-slate-800 px-3 py-3 text-xs font-bold text-white hover:bg-slate-700" title={activeCall.callType === 'video' ? 'Switch to audio' : 'Switch to video'}>
+            <button onClick={() => { void changeCallMode().catch(error => { console.warn('Could not switch call mode:', error); setCallControlError('Could not switch call mode. Please retry.'); }); }} className="rounded-full bg-slate-800 px-3 py-3 text-xs font-bold text-white hover:bg-slate-700" title={activeCall.callType === 'video' ? 'Switch to audio' : 'Switch to video'}>
               {activeCall.callType === 'video' ? 'Switch to Audio' : 'Switch to Video'}
             </button>
+            {callControlError && <span role="status" className="max-w-40 text-center text-[10px] text-rose-300">{callControlError}</span>}
             {cameraToast && <span className="text-xs text-white">{cameraToast}</span>}
 
             <button
