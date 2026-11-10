@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Trash2, Send, Play, Pause } from 'lucide-react';
+import { Mic, Square, Trash2, Send, Play, Pause, Volume2 } from 'lucide-react';
 
 interface VoiceRecorderProps {
   onSendVoice: (audioDataUrl: string, durationSeconds: number) => void;
@@ -11,24 +11,36 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSendVoice, onCan
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackVolume, setPlaybackVolume] = useState(100);
+  const [boost, setBoost] = useState(true);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<any>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
 
   useEffect(() => {
     startRecording();
     return () => {
       stopRecording();
+      void audioContextRef.current?.close();
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000, channelCount: 1 } });
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const context: AudioContext = new AudioCtx({ sampleRate: 48000 });
+      const input = context.createMediaStreamSource(stream);
+      const gain = context.createGain(); gain.gain.value = 2;
+      const compressor = context.createDynamicsCompressor(); compressor.threshold.value = -24; compressor.knee.value = 20; compressor.ratio.value = 3; compressor.attack.value = 0.005; compressor.release.value = 0.2;
+      const destination = context.createMediaStreamDestination(); input.connect(gain); gain.connect(compressor); compressor.connect(destination);
+      audioContextRef.current = context; gainNodeRef.current = gain;
+      const mediaRecorder = new MediaRecorder(destination.stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -47,6 +59,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSendVoice, onCan
         };
         // Stop all tracks
         stream.getTracks().forEach(track => track.stop());
+        destination.stream.getTracks().forEach(track => track.stop());
       };
 
       mediaRecorder.start();
@@ -86,14 +99,28 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSendVoice, onCan
   const togglePlayback = () => {
     if (!audioPlayerRef.current && recordedAudioUrl) {
       audioPlayerRef.current = new Audio(recordedAudioUrl);
-      audioPlayerRef.current.onended = () => setIsPlaying(false);
+    }
+    if (audioPlayerRef.current && gainNodeRef.current && audioContextRef.current) {
+      try {
+        const element = audioPlayerRef.current;
+        if (!(element as any).__echatBoostNode) {
+          const source = audioContextRef.current.createMediaElementSource(element);
+          source.connect(gainNodeRef.current).connect(audioContextRef.current.destination);
+          (element as any).__echatBoostNode = true;
+        }
+        gainNodeRef.current.gain.value = boost ? 1.8 * playbackVolume / 100 : playbackVolume / 100;
+        audioPlayerRef.current.volume = 1;
+        void audioContextRef.current.resume();
+      } catch { }
     }
     if (audioPlayerRef.current) {
+      audioPlayerRef.current.onended = () => setIsPlaying(false);
       if (isPlaying) {
         audioPlayerRef.current.pause();
         setIsPlaying(false);
       } else {
-        audioPlayerRef.current.play();
+        audioPlayerRef.current.volume = 1;
+        audioPlayerRef.current.play().catch(() => {});
         setIsPlaying(true);
       }
     }
@@ -138,6 +165,8 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSendVoice, onCan
             <span className="h-2 w-1 bg-blue-400 rounded-full animate-pulse [animation-delay:100ms]" />
           </div>
           <span className="text-xs font-mono font-bold text-slate-700">{formatSecs(duration)}</span>
+          <label className="flex items-center gap-1 text-[10px] text-slate-500"><Volume2 size={13} /><input aria-label="Voice note volume" type="range" min="0" max="200" value={playbackVolume} onChange={event => { const volume = Number(event.target.value); setPlaybackVolume(volume); if (gainNodeRef.current) gainNodeRef.current.gain.value = (boost ? 1.8 : 1) * volume / 100; if (audioPlayerRef.current) audioPlayerRef.current.volume = 1; }} className="w-14" /></label>
+          <button type="button" onClick={() => { setBoost(value => !value); if (gainNodeRef.current) gainNodeRef.current.gain.value = (!boost ? 1.8 : 1) * playbackVolume / 100; }} className={`rounded px-1.5 py-1 text-[10px] font-bold ${boost ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'}`}>Boost</button>
         </div>
       )}
 

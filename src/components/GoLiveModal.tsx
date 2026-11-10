@@ -71,6 +71,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [captionLanguage, setCaptionLanguage] = useState('en-US');
   const [liveCaption, setLiveCaption] = useState('');
   const [sourceError, setSourceError] = useState('');
+  const [cameraRetry, setCameraRetry] = useState(0);
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -107,6 +108,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       const current = mediaStreamRef.current;
       if (current) {
         current.getVideoTracks().forEach(track => { current.removeTrack(track); track.stop(); });
+        for (const peer of livePeersRef.current.values()) {
+          const sender = peer.getSenders().find(item => item.track?.kind === 'video');
+          if (sender) await sender.replaceTrack(screenVideo);
+        }
         current.addTrack(screenVideo);
         const screenAudio = screen.getAudioTracks()[0];
         if (screenAudio) current.addTrack(screenAudio);
@@ -119,7 +124,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         try {
           const camera = await navigator.mediaDevices.getUserMedia({ video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : true, audio: false });
           const track = camera.getVideoTracks()[0]; const active = mediaStreamRef.current;
-          if (active && track) { active.getVideoTracks().forEach(old => { active.removeTrack(old); old.stop(); }); active.addTrack(track); if (videoPreviewRef.current) { videoPreviewRef.current.srcObject = active; videoPreviewRef.current.play().catch(() => {}); } }
+          if (active && track) { for (const peer of livePeersRef.current.values()) { const sender = peer.getSenders().find(item => item.track?.kind === 'video'); if (sender) await sender.replaceTrack(track).catch(() => {}); } active.getVideoTracks().forEach(old => { active.removeTrack(old); old.stop(); }); active.addTrack(track); if (videoPreviewRef.current) { videoPreviewRef.current.srcObject = active; videoPreviewRef.current.play().catch(() => {}); } }
         } catch { setSourceError('Capture card not found - check USB / OBS Virtual Camera is running.'); }
       };
     } catch (error) {
@@ -153,9 +158,15 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         });
         if (isMounted) {
           mediaStreamRef.current = stream;
+          const liveTrack = stream.getVideoTracks()[0];
+          for (const peer of livePeersRef.current.values()) {
+            const sender = peer.getSenders().find(item => item.track?.kind === 'video');
+            if (sender && liveTrack) await sender.replaceTrack(liveTrack).catch(() => {});
+          }
           setDevices(await navigator.mediaDevices.enumerateDevices());
           if (videoPreviewRef.current) {
             videoPreviewRef.current.srcObject = stream;
+            videoPreviewRef.current.play().catch(() => {});
           }
           setHasCameraPermission(true);
         }
@@ -185,7 +196,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         mediaStreamRef.current = null;
       }
     };
-  }, [isOpen, isEligible, videoQuality, selectedCameraId, selectedMicrophoneId]);
+  }, [isOpen, isEligible, videoQuality, selectedCameraId, selectedMicrophoneId, cameraRetry]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -460,7 +471,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         </div>
       ) : (
         /* CASE B: User is ELIGIBLE (Developer or >= 60 days) */
-        <div className="bg-slate-950 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
+        <div className="bg-slate-950 w-full max-w-4xl h-[90dvh] max-h-[90vh] rounded-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col">
           
           {/* Top Bar */}
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 text-white">
@@ -528,10 +539,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           </div>
 
           {/* Main Broadcast Stage */}
-          <div className="flex-1 min-h-[360px] sm:min-h-[460px] relative bg-black flex flex-col md:flex-row overflow-hidden">
+          <div className="flex-1 min-h-0 relative bg-black flex flex-col md:flex-row overflow-hidden">
             
             {/* Video Viewport */}
-            <div className="flex-1 relative w-full h-full min-w-0 min-h-0 flex items-center justify-center bg-black overflow-hidden">
+            <div className="flex-1 relative w-full h-[38%] md:h-full min-h-[180px] md:min-h-0 min-w-0 flex items-center justify-center bg-black overflow-hidden">
               
               {/* Video Element (Live Camera) */}
               <video
@@ -544,8 +555,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               />
 
               {/* Fallback Camera Simulation if no camera attached / permission denied */}
-              {isVideoMuted || hasCameraPermission === false && (
-                <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
+              {(isVideoMuted || hasCameraPermission === false || hasCameraPermission === null) && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950 p-8 text-center text-slate-300">
                   <div className="relative mb-4">
                     <img
                       src={user?.avatar}
@@ -556,8 +567,9 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                   </div>
                   <h3 className="text-lg font-bold text-white">{user?.name}</h3>
                   <p className="text-xs text-slate-400 max-w-xs mt-1">
-                    {isVideoMuted ? 'Camera video is temporarily paused' : 'Broadcasting HD Studio Feed with Audio & Interactive Chat'}
+                    {isVideoMuted ? 'Camera video is temporarily paused' : hasCameraPermission === false ? 'Camera access is blocked. Allow camera access and try again.' : 'Starting camera preview…'}
                   </p>
+                  {hasCameraPermission === false && <button type="button" onClick={() => { setSourceError(''); setHasCameraPermission(null); setCameraRetry(value => value + 1); }} className="mt-3 rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white">Retry Camera</button>}
                 </div>
               )}
 
@@ -590,7 +602,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               </div>
 
               {/* Hardware Control Buttons Overlay */}
-              <div className="absolute bottom-4 left-4 right-4 z-20 flex items-center justify-between pointer-events-auto">
+              <div className="absolute bottom-4 left-4 right-4 z-20 flex items-center justify-start pointer-events-auto">
                 <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md p-1.5 rounded-2xl border border-white/10">
                   <button
                     onClick={toggleVideo}
@@ -613,20 +625,11 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                   </button>
                 </div>
 
-                {!isBroadcasting ? (
-                  <button
-                    onClick={handleStartBroadcast}
-                    className="px-6 py-2.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-extrabold text-sm rounded-2xl shadow-xl shadow-rose-600/40 flex items-center gap-2 transition hover:scale-105 cursor-pointer"
-                  >
-                    <Radio size={18} />
-                    Go Live Now
-                  </button>
-                ) : null}
               </div>
             </div>
 
             {/* Right Side: Live Comments & Stream Info */}
-            <div className="w-full md:w-80 bg-slate-900 border-t md:border-t-0 md:border-l border-slate-800 flex flex-col h-64 md:h-auto">
+            <div className="w-full md:w-80 bg-slate-900 border-t md:border-t-0 md:border-l border-slate-800 flex flex-col h-[45%] min-h-0 md:h-auto">
               {/* Title Header */}
               <div className="p-3 border-b border-slate-800">
                 {!isBroadcasting ? (
@@ -651,7 +654,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               </div>
 
               {!isBroadcasting && (
-                <div className="space-y-3 border-b border-slate-800 p-3">
+                <div className="max-h-[25vh] shrink-0 space-y-2 overflow-y-auto border-b border-slate-800 p-3">
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Camera
                     <select value={selectedCameraId} onChange={event => setSelectedCameraId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
                       <option value="">Default camera</option>{devices.filter(device => device.kind === 'videoinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Camera'}</option>)}
@@ -718,6 +721,11 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
             </div>
 
           </div>
+
+          {!isBroadcasting && <div className="sticky bottom-0 z-40 flex shrink-0 gap-2 border-t border-slate-800 bg-slate-950 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <button type="button" onClick={onClose} className="rounded-xl border border-slate-700 px-5 py-3 font-bold text-slate-200">Cancel</button>
+            <button type="button" onClick={handleStartBroadcast} disabled={!mediaStreamRef.current?.getVideoTracks().length || hasCameraPermission === false} className="flex-1 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-5 py-3 text-base font-extrabold text-white shadow-lg disabled:cursor-not-allowed disabled:opacity-50"><Radio size={18} className="mr-2 inline" />Go Live</button>
+          </div>}
 
         </div>
       )}

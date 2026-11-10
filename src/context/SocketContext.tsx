@@ -70,6 +70,7 @@ interface SocketContextType {
   onLiveSignal: (cb: (data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void) => () => void;
   onLiveCaption: (cb: (data: { streamId: string; text: string; createdAt: number }) => void) => () => void;
   sendLiveCaption: (streamId: string, text: string) => void;
+  switchCallType: (callType: 'audio' | 'video') => void;
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
@@ -586,6 +587,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             break;
           }
 
+          case 'call-switch-type': {
+            setActiveCall(current => current && current.partnerId === data.fromUserId ? { ...current, callType: data.callType === 'video' ? 'video' : 'audio' } : current);
+            break;
+          }
+
           default:
             break;
         }
@@ -594,7 +600,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     };
     };
-
     // Reconnect immediately when the phone/tab wakes up or the network returns.
     const reconnectNow = () => {
       const cur = socketRef.current;
@@ -1135,6 +1140,13 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const sendLiveCaption = useCallback((streamId: string, text: string) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'live-caption', streamId, text }));
   }, []);
+  const switchCallType = useCallback((callType: 'audio' | 'video') => {
+    const call = activeCallRef.current;
+    if (!call) return;
+    setActiveCall(current => current ? { ...current, callType } : null);
+    activeCallRef.current = { ...call, callType };
+    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'call-switch-type', targetUserId: call.partnerId, callType }));
+  }, []);
 
   return (
     <SocketContext.Provider
@@ -1172,7 +1184,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         onLiveViewersUpdated,
         onLiveSignal,
         onLiveCaption,
-        sendLiveCaption
+        sendLiveCaption,
+        switchCallType
       }}
     >
       {children}

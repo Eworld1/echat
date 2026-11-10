@@ -46,6 +46,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const [voiceVolume, setVoiceVolume] = useState(100);
+  const [voiceBoost, setVoiceBoost] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingMessageText, setEditingMessageText] = useState('');
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
@@ -53,6 +55,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const voiceAudioContextRef = useRef<AudioContext | null>(null);
+  const voiceGainRef = useRef<GainNode | null>(null);
   const typingTimeoutRef = useRef<any>(null);
 
   const isPartnerOnline = onlineUserIds.includes(partner.id);
@@ -198,8 +202,14 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
       if (audioPlayerRef.current) audioPlayerRef.current.pause();
       const audio = new Audio(url);
       audioPlayerRef.current = audio;
+      try {
+        const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+        const context: AudioContext = new Ctx(); const source = context.createMediaElementSource(audio); const gain = context.createGain();
+        gain.gain.value = Math.min(2, voiceVolume / 100 * (voiceBoost ? 1.8 : 1)); source.connect(gain).connect(context.destination);
+        voiceAudioContextRef.current = context; voiceGainRef.current = gain; void context.resume();
+      } catch { audio.volume = 1; }
       setPlayingAudioId(msgId);
-      audio.play();
+      audio.play().catch(() => {});
       audio.onended = () => setPlayingAudioId(null);
     }
   };
@@ -353,6 +363,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                     <span className="text-[11px] font-mono font-medium opacity-90">
                       {msg.audioDuration ? `${msg.audioDuration}s` : 'Voice note'}
                     </span>
+                    <label className="ml-2 flex items-center gap-1 text-[10px] opacity-90">Vol<input aria-label="Voice note volume" type="range" min="0" max="200" value={voiceVolume} onChange={event => { const volume = Number(event.target.value); setVoiceVolume(volume); if (voiceGainRef.current) voiceGainRef.current.gain.value = Math.min(2, volume / 100 * (voiceBoost ? 1.8 : 1)); }} className="w-14" /></label>
+                    <button type="button" onClick={() => { setVoiceBoost(value => !value); if (voiceGainRef.current) voiceGainRef.current.gain.value = Math.min(2, voiceVolume / 100 * (voiceBoost ? 1 : 1.8)); }} className="rounded bg-black/20 px-1.5 py-1 text-[10px] font-bold">Boost {voiceBoost ? 'On' : 'Off'}</button>
                   </div>
                 )}
 

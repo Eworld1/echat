@@ -23,6 +23,7 @@ const CallModalView: React.FC = () => {
     localStreamRef,
     remoteStream,
     peerConnectionRef
+    , switchCallType
   } = useSocket();
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -34,6 +35,20 @@ const CallModalView: React.FC = () => {
   const [isMinimized, setIsMinimized] = useState(false);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [cameraToast, setCameraToast] = useState('');
+  const [micLevel, setMicLevel] = useState(0);
+
+  useEffect(() => {
+    const track = localStreamRef?.current?.getAudioTracks()[0];
+    if (!track || activeCall?.status !== 'connected') { setMicLevel(0); return; }
+    let context: AudioContext | null = null; let frame = 0;
+    try {
+      context = new AudioContext(); const source = context.createMediaStreamSource(new MediaStream([track])); const analyser = context.createAnalyser(); analyser.fftSize = 256; source.connect(analyser);
+      const samples = new Uint8Array(analyser.frequencyBinCount);
+      const read = () => { analyser.getByteTimeDomainData(samples); const rms = Math.sqrt(samples.reduce((sum, value) => sum + (value - 128) ** 2, 0) / samples.length); setMicLevel(Math.min(100, Math.round(rms * 3))); frame = requestAnimationFrame(read); };
+      void context.resume(); read();
+    } catch { }
+    return () => { cancelAnimationFrame(frame); void context?.close(); };
+  }, [localStreamRef, activeCall?.status]);
 
   // Call duration counter
   useEffect(() => {
@@ -161,6 +176,26 @@ const CallModalView: React.FC = () => {
     } catch (err) {
       console.warn('Switch camera error:', err);
     }
+  };
+
+  const changeCallMode = async () => {
+    const pc = peerConnectionRef.current; const stream = localStreamRef.current;
+    if (!activeCall || !pc) return;
+    if (activeCall.callType === 'video') {
+      const sender = pc.getSenders().find(item => item.track?.kind === 'video');
+      if (sender) await sender.replaceTrack(null);
+      stream?.getVideoTracks().forEach(track => { track.enabled = false; });
+      setIsVideoDisabled(true); switchCallType('audio');
+      return;
+    }
+    const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facingMode } }, audio: false });
+    const track = camera.getVideoTracks()[0];
+    if (!track) return;
+    const videoSender = pc.getSenders().find(item => item.track?.kind === 'video') || pc.getSenders().find(item => !item.track);
+    if (videoSender) await videoSender.replaceTrack(track); else pc.addTrack(track, stream || camera);
+    if (stream) { stream.getVideoTracks().forEach(old => { stream.removeTrack(old); old.stop(); }); stream.addTrack(track); }
+    else localStreamRef.current = camera;
+    setIsVideoDisabled(false); switchCallType('video');
   };
 
   const formatTime = (secs: number) => {
@@ -370,6 +405,7 @@ const CallModalView: React.FC = () => {
 
           {/* Controls Bar: Mute, Video Off, Switch Camera, End Call */}
           <div className="p-5 bg-slate-950/95 border-t border-slate-800 flex items-center justify-center gap-4 z-30">
+            <div className="absolute left-4 right-4 -mt-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-[10px] text-white"><Mic size={12} /><span>Test Mic</span><span className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-700"><span className="block h-full bg-emerald-400 transition-all" style={{ width: `${micLevel}%` }} /></span></div>
             <button
               onClick={toggleMic}
               className={`p-4 rounded-full transition shadow-md active:scale-95 ${
@@ -401,6 +437,9 @@ const CallModalView: React.FC = () => {
                 </button>}
               </>
             )}
+            <button onClick={() => { void changeCallMode(); }} className="rounded-full bg-slate-800 px-3 py-3 text-xs font-bold text-white hover:bg-slate-700" title={activeCall.callType === 'video' ? 'Switch to audio' : 'Switch to video'}>
+              {activeCall.callType === 'video' ? 'Switch to Audio' : 'Switch to Video'}
+            </button>
             {cameraToast && <span className="text-xs text-white">{cameraToast}</span>}
 
             <button

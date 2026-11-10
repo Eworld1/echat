@@ -189,6 +189,15 @@ export class SocketManager {
         break;
       }
 
+      case 'call-switch-type': {
+        const fromUserId = this.userIdOf(ws);
+        const targetUserId = payload.targetUserId;
+        const callType = payload.callType === 'video' ? 'video' : 'audio';
+        if (!fromUserId || typeof targetUserId !== 'string' || targetUserId === fromUserId) break;
+        this.sendToUser(targetUserId, { type: 'call-switch-type', fromUserId, callType });
+        break;
+      }
+
       // WebRTC Call Signaling (Supports call:initiate, call:offer, call:answer, call:ice-candidate, call:end, call:rejected)
       case 'call:initiate':
       case 'call_initiate': {
