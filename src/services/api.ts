@@ -121,7 +121,7 @@ export const api = {
       }
     }
 
-    if (!uploadId) {
+    const startUpload = async () => {
       const response = await fetch(apiUrl('/api/reels/upload/init'), {
         method: 'POST', headers,
         body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'video/mp4', size: file.size })
@@ -130,12 +130,13 @@ export const api = {
       uploadId = init.uploadId;
       if (typeof window !== 'undefined') window.localStorage.setItem(resumeKey, uploadId);
       uploadState = { uploadId, fileName: file.name, mimeType: file.type, size: file.size, chunkSize: init.chunkSize, totalChunks: init.totalChunks, receivedChunks: [] };
-    }
+    };
+    if (!uploadId) await startUpload();
 
     if (!uploadState) throw new Error('Upload session unavailable. Tap Retry to resume.');
-    const received = new Set(uploadState.receivedChunks || []);
+    let received = new Set(uploadState.receivedChunks || []);
     console.info('[Echat] Resuming Reel upload', { uploadId, lastSuccessfulChunk: received.size ? Math.max(...received) : -1 });
-    const completedBytes = Array.from(received).reduce((sum, index) => sum + Math.min(uploadState!.chunkSize, file.size - index * uploadState!.chunkSize), 0);
+    let completedBytes = Array.from(received).reduce((sum, index) => sum + Math.min(uploadState!.chunkSize, file.size - index * uploadState!.chunkSize), 0);
     const progressStatus = (bytes: number) => `Uploading ${(bytes / (1024 * 1024)).toFixed(1)} MB / ${(file.size / (1024 * 1024)).toFixed(1)} MB`;
     onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), progressStatus(completedBytes));
     const uploadChunk = (index: number): Promise<void> => new Promise((resolve, reject) => {
@@ -174,10 +175,13 @@ export const api = {
       xhr.send(chunk);
     });
 
-    for (let index = 0; index < uploadState.totalChunks; index++) {
-      if (received.has(index)) continue;
+    let index = 0;
+    let sessionRestarts = 0;
+    while (index < uploadState.totalChunks) {
+      if (received.has(index)) { index++; continue; }
       let lastError: unknown;
-      for (let attempt = 0; attempt < 4; attempt++) {
+      let restartSession = false;
+      for (let attempt = 0; attempt < 9; attempt++) {
         try { await uploadChunk(index); lastError = null; break; }
         catch (error) {
           lastError = error;
@@ -196,20 +200,36 @@ export const api = {
               }
             } else if (statusResponse.status === 401) {
               throw new Error('Your session expired. Sign in again, then tap Retry to resume.');
+            } else if (statusResponse.status === 404) {
+              if (sessionRestarts >= 2) throw new Error('The upload session keeps disappearing. Confirm the backend uses one shared persistent upload disk, then retry.');
+              await startUpload();
+              sessionRestarts++;
+              received = new Set<number>();
+              completedBytes = 0;
+              index = 0;
+              onProgress(0, 'Reconnecting upload session…');
+              restartSession = true;
+              lastError = null;
+              break;
             }
           } catch (statusError) {
             if (statusError instanceof Error && statusError.message.startsWith('Your session expired')) throw statusError;
+            if (statusError instanceof Error && statusError.message.startsWith('Could not start Reel upload')) throw statusError;
+            if (statusError instanceof Error && statusError.message.startsWith('The upload session keeps disappearing')) throw statusError;
           }
-          if (attempt < 3) {
-            onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), `Connection slow, retrying chunk ${index + 1}/${uploadState.totalChunks}…`);
-            await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** attempt)));
+          if (attempt < 8) {
+            const delay = Math.min(20_000, 1000 * (2 ** Math.min(attempt, 4))) + Math.floor(Math.random() * 500);
+            onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), `Reconnecting and resuming chunk ${index + 1}/${uploadState!.totalChunks}…`);
+            await new Promise(resolve => setTimeout(resolve, delay));
           }
         }
       }
+      if (restartSession) continue;
       if (lastError) throw lastError instanceof Error ? lastError : new Error('Reel upload failed. Progress is saved; tap Retry to resume.');
       received.add(index);
       const sentBytes = Array.from(received).reduce((sum, part) => sum + Math.min(uploadState!.chunkSize, file.size - part * uploadState!.chunkSize), 0);
       onProgress(Math.min(99, Math.round((sentBytes / file.size) * 100)), progressStatus(sentBytes));
+      index++;
     }
 
     let completeResponse: Response;
