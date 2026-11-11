@@ -26,7 +26,7 @@ export interface Comment {
 export interface Post {
   id: string; authorId: string; author?: User; // FIX: optional
   type?: 'post' | 'reel';
-  content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video';
+  content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
   viewsCount?: number; views?: string[]; isReported: boolean;

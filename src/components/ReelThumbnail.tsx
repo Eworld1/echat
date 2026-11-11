@@ -3,9 +3,9 @@ import { Eye } from 'lucide-react';
 import type { Post } from '../types';
 
 export const ReelThumbnail: React.FC<{ post: Post; onClick: () => void }> = ({ post, onClick }) => {
-  const [duration, setDuration] = useState('');
+  const [duration, setDuration] = useState(post.mediaDuration ? `${Math.floor(post.mediaDuration / 60)}:${String(Math.floor(post.mediaDuration % 60)).padStart(2, '0')}` : '');
   return <button type="button" onClick={onClick} aria-label={`Open Reel: ${post.content || 'video'}`} className="group relative aspect-[9/16] overflow-hidden rounded-xl bg-black text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400">
-    {post.mediaUrl && <video src={post.mediaUrl} muted playsInline preload="metadata" onLoadedMetadata={event => {
+    {post.thumbnailUrl ? <img src={post.thumbnailUrl} alt="" className="h-full w-full object-cover" /> : post.mediaUrl && <video src={post.mediaUrl} muted playsInline preload="metadata" onLoadedMetadata={event => {
       const seconds = Math.floor(event.currentTarget.duration || 0);
       setDuration(`${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
     }} className="h-full w-full object-cover transition group-hover:scale-[1.02]" />}

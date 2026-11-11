@@ -504,7 +504,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       {postMediaUrls.length > 0 && (
         <div className={`relative mx-auto flex items-center justify-center overflow-hidden bg-slate-900 ${reelMode ? 'aspect-[9/16] max-h-[68dvh] w-full max-w-[min(100%,390px)]' : `w-full ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`}`}>
           {post.mediaType === 'video' ? (
-            <video ref={videoRef} src={assetUrl(postMediaUrls[0])} controls playsInline preload={reelMode ? 'metadata' : 'none'} muted={reelMode ? isReelMuted : false} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
+            <video ref={videoRef} src={assetUrl(postMediaUrls[0])} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls playsInline preload={reelMode ? 'metadata' : 'none'} muted={reelMode ? isReelMuted : false} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
           ) : (
             <div className={`grid w-full gap-0.5 ${postMediaUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
               {postMediaUrls.slice(0, 10).map((mediaUrl, index) => <img key={`${post.id}-${index}`} src={assetUrl(mediaUrl)} alt={`Post attachment ${index + 1}`} loading="lazy" className={`w-full object-cover cursor-pointer hover:opacity-95 transition ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'} ${postMediaUrls.length > 4 && index > 3 ? 'hidden' : ''}`} />)}

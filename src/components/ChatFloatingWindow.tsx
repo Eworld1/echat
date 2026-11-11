@@ -113,7 +113,9 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
       ) {
         setMessages(prev => {
           if (prev.some(m => m.id === msg.id)) return prev;
-          return [...prev, msg];
+          const pendingIndex = msg.senderId === user?.id ? prev.findIndex(m => m.id.startsWith('pending-') && m.senderId === msg.senderId && m.receiverId === msg.receiverId && m.text === msg.text && Math.abs(m.createdAt - msg.createdAt) < 15_000) : -1;
+          if (pendingIndex < 0) return [...prev, msg];
+          return [...prev.slice(0, pendingIndex), ...prev.slice(pendingIndex + 1), msg];
         });
 
         if (msg.senderId === partner.id) {
@@ -156,8 +158,10 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isPartnerTyping]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputText(e.target.value);
+    e.target.style.height = '48px';
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
 
     // Trigger typing indicator
     sendTyping(partner.id, true);
@@ -181,15 +185,21 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
       ...(attachments?.length ? { attachments } : {})
     };
 
+    const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const pendingMessage: Message = { id: pendingId, ...payload, senderId: user.id, status: 'sent', createdAt: Date.now() };
+    setMessages(prev => [...prev, pendingMessage]);
     setInputText('');
     sendTyping(partner.id, false);
 
     try {
       const sent = await api.sendMessage(payload);
-      setMessages(prev => [...prev.filter(m => m.id !== sent.id), sent]);
+      setMessages(prev => [...prev.filter(m => m.id !== pendingId && m.id !== sent.id), sent]);
       playSound('message_out');
     } catch (err) {
       console.error('Failed to send message:', err);
+      setMessages(prev => prev.filter(message => message.id !== pendingId));
+      if (payload.text) setInputText(current => current || payload.text || '');
+      alert(err instanceof Error ? err.message : 'Message could not be sent. Please try again.');
     }
   };
 
@@ -318,7 +328,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
   }
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 h-[min(88dvh,calc(100dvh-env(safe-area-inset-bottom)))] w-full rounded-t-2xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-2 sm:inset-auto sm:bottom-0 sm:right-16 sm:h-[min(460px,calc(100dvh-env(safe-area-inset-bottom)))] sm:w-[350px] sm:rounded-2xl">
+    <div className="fixed inset-x-0 bottom-0 z-40 h-[100dvh] w-full min-w-0 rounded-t-2xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-2 pb-[env(safe-area-inset-bottom)] sm:inset-auto sm:bottom-0 sm:right-16 sm:h-[min(460px,calc(100dvh-env(safe-area-inset-bottom)))] sm:w-[350px] sm:rounded-2xl sm:pb-0">
       {/* Header */}
       <div className="px-3.5 py-2.5 bg-white border-b border-slate-100 flex items-center justify-between shadow-xs">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -372,7 +382,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
       </div>
 
       {/* Messages Feed */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#FAFBFD]">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-2 bg-[#FAFBFD]">
         {messages.map((msg, idx) => {
           const isMe = msg.senderId === user?.id;
           return (
@@ -523,7 +533,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
       )}
 
       {/* Footer / Input Area */}
-      <div className="p-2.5 bg-white border-t border-slate-100">
+      <div className="sticky bottom-0 z-50 w-full shrink-0 box-border p-2.5 bg-white border-t border-slate-100 touch-pan-y">
         {isUploadingFiles && <div className="mb-2"><div className="mb-1 flex justify-between text-[10px] text-slate-500"><span>Uploading attachments…</span><span>{uploadProgress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-blue-600 transition-all" style={{ width: `${uploadProgress}%` }} /></div></div>}
         {isRecordingVoice ? (
           <VoiceRecorder
@@ -531,8 +541,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
             onCancel={() => setIsRecordingVoice(false)}
           />
         ) : (
-          <div className="flex items-center gap-1.5">
-            <label className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-full cursor-pointer transition">
+          <div className="flex w-full min-w-0 items-end gap-1.5">
+            <label className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center text-blue-600 hover:bg-blue-50 rounded-full cursor-pointer transition">
               <Image size={18} />
               <input
                 type="file"
@@ -545,7 +555,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
 
             <button
               onClick={() => setIsRecordingVoice(true)}
-              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-full transition"
+              className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center text-blue-600 hover:bg-blue-50 rounded-full transition"
               title="Record Voice Note"
             >
               <Mic size={18} />
@@ -553,7 +563,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
 
             <button
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-full transition"
+              className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center text-slate-500 hover:bg-slate-100 rounded-full transition"
               title="Emoji"
             >
               <Smile size={18} />
@@ -564,23 +574,30 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
                 e.preventDefault();
                 handleSend();
               }}
-              className="flex-1 flex items-center gap-1"
+              className="flex min-w-0 flex-1 items-end gap-1"
             >
-              <input
-                type="text"
+              <textarea
+                rows={1}
                 value={inputText}
                 onChange={handleInputChange}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleSend();
+                  }
+                }}
                 placeholder="Aa"
-                className="flex-1 min-h-[52px] bg-slate-100 hover:bg-slate-200/80 focus:bg-white text-slate-800 text-base px-3 py-2 rounded-full border border-transparent focus:border-blue-400 focus:outline-hidden transition"
+                className="min-h-12 max-h-[120px] min-w-0 flex-1 resize-none overflow-y-auto bg-slate-100 hover:bg-slate-200/80 focus:bg-white text-slate-800 text-base leading-6 px-4 py-3 rounded-3xl border border-transparent focus:border-blue-400 focus:outline-hidden transition"
               />
 
-              <button
+              {inputText.trim() || isUploadingFiles ? <button
                 type="submit"
-                disabled={!inputText.trim()}
-                className="p-1.5 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:opacity-40 disabled:hover:bg-blue-600 transition"
+                disabled={!inputText.trim() || isUploadingFiles}
+                aria-label="Send message"
+                className="flex h-12 w-12 min-w-12 shrink-0 touch-manipulation items-center justify-center bg-blue-600 text-white rounded-full shadow-md hover:bg-blue-700 disabled:opacity-50 transition"
               >
-                <Send size={15} />
-              </button>
+                <Send size={19} />
+              </button> : <button type="button" onClick={() => setIsRecordingVoice(true)} aria-label="Record voice message" className="flex h-12 w-12 min-w-12 shrink-0 touch-manipulation items-center justify-center bg-blue-600 text-white rounded-full shadow-md"><Mic size={19} /></button>}
             </form>
           </div>
         )}

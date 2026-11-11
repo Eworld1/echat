@@ -16,6 +16,8 @@ const PORT = Number(process.env.PORT) || 3000;
 const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
+server.requestTimeout = 10 * 60 * 1000;
+server.headersTimeout = 10 * 60 * 1000 + 10_000;
 const socketManager = new SocketManager(server);
 
 // ----------------- CORS -----------------
@@ -63,11 +65,13 @@ app.use('/api/admin/claim', authRateLimit);
 // Stored under data/ so a single persistent disk keeps both the database and uploads.
 const UPLOADS_DIR = path.resolve(process.env.UPLOADS_DIR || path.join(process.cwd(), 'data', 'uploads'));
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const REEL_UPLOADS_DIR = path.resolve(process.env.REEL_TEMP_DIR || path.join(process.cwd(), 'data', 'reel-uploads'));
+fs.mkdirSync(REEL_UPLOADS_DIR, { recursive: true });
 // If a file is missing on disk (host wiped it), restore it from durable storage, then serve it.
 app.get('/uploads/:name', async (req: Request, res: Response, next) => {
   try {
     const name = req.params.name;
-    if (!/^[a-f0-9-]{36}\.(jpg|png|webp|gif|mp4|webm|ogg|mp3|m4a|pdf|doc|docx)$/.test(name)) return next();
+    if (!/^[a-f0-9-]{36}\.(jpg|png|webp|gif|mp4|mov|webm|ogg|mp3|m4a|pdf|doc|docx)$/.test(name)) return next();
     const target = path.join(UPLOADS_DIR, name);
     if (fs.existsSync(target)) return next(); // normal case: express.static below serves it
     const stored = await db.getStoredFile(name);
@@ -92,6 +96,10 @@ const UPLOAD_MIME_EXT: Record<string, string> = {
   'image/webp': 'webp',
   'image/gif': 'gif',
   'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/x-quicktime': 'mov',
+  'video/mov': 'mov',
+  'video/x-m4v': 'mp4',
   'video/webm': 'webm',
   'audio/webm': 'webm',
   'audio/ogg': 'ogg',
@@ -102,6 +110,55 @@ const UPLOAD_MIME_EXT: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx'
 };
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // base64 adds ~33%, must stay under the 25mb JSON limit
+const MAX_REEL_SIZE_BYTES = Math.min(250, Math.max(1, Number(process.env.MAX_REEL_SIZE_MB) || 250)) * 1024 * 1024;
+const REEL_CHUNK_SIZE = 5 * 1024 * 1024;
+
+interface ReelUploadSession {
+  id: string;
+  userId: string;
+  fileName: string;
+  mimeType: string;
+  extension: string;
+  size: number;
+  chunkSize: number;
+  totalChunks: number;
+  receivedChunks: number[];
+  createdAt: number;
+  completedUrl?: string;
+}
+
+function reelUploadPath(id: string, suffix: string) {
+  if (!/^[a-f0-9-]{36}$/i.test(id)) throw new Error('Invalid upload ID');
+  return path.join(REEL_UPLOADS_DIR, `${id}.${suffix}`);
+}
+
+async function readReelUpload(id: string): Promise<ReelUploadSession | null> {
+  if (!/^[a-f0-9-]{36}$/i.test(id)) return null;
+  try { return JSON.parse(await fs.promises.readFile(reelUploadPath(id, 'json'), 'utf8')) as ReelUploadSession; }
+  catch { return null; }
+}
+
+async function saveReelUpload(session: ReelUploadSession) {
+  const temp = reelUploadPath(session.id, 'json.tmp');
+  await fs.promises.writeFile(temp, JSON.stringify(session));
+  await fs.promises.rename(temp, reelUploadPath(session.id, 'json'));
+}
+
+async function pruneReelUploads() {
+  try {
+    const names = await fs.promises.readdir(REEL_UPLOADS_DIR);
+    for (const name of names.filter(item => item.endsWith('.json'))) {
+      const id = name.slice(0, -5);
+      const session = await readReelUpload(id);
+      if (!session || Date.now() - session.createdAt > 24 * 60 * 60 * 1000) {
+        await fs.promises.rm(reelUploadPath(id, 'json'), { force: true });
+        await fs.promises.rm(reelUploadPath(id, 'part'), { force: true });
+      }
+    }
+  } catch (error) { console.warn('[Echat] Could not prune incomplete Reel uploads:', error); }
+}
+void pruneReelUploads();
+setInterval(() => void pruneReelUploads(), 60 * 60 * 1000).unref();
 
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ ok: true, uptime: process.uptime(), storage: db.persistenceStats ?? 'local-file' });
@@ -241,6 +298,89 @@ app.post('/api/upload', async (req: Request, res: Response) => {
     res.status(201).json({ url: `/uploads/${fileName}` });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'Upload failed' });
+  }
+});
+
+// Reels use resumable 5MB raw chunks so mobile browsers never have to base64 encode a 250MB file.
+app.post('/api/reels/upload/init', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const fileName = typeof req.body?.fileName === 'string' ? path.basename(req.body.fileName).slice(0, 180) : 'reel-video';
+  const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.toLowerCase().split(';')[0] : '';
+  const size = Number(req.body?.size);
+  const extension = UPLOAD_MIME_EXT[mimeType];
+  if (!extension || !mimeType.startsWith('video/')) return res.status(415).json({ error: 'Video format not supported - use MP4 / MOV / WebM.' });
+  if (!Number.isSafeInteger(size) || size <= 0) return res.status(400).json({ error: 'Please select a video.' });
+  if (size > MAX_REEL_SIZE_BYTES) return res.status(413).json({ error: 'Video too large - Max 250MB. Please compress or trim your video.' });
+  const id = crypto.randomUUID();
+  const session: ReelUploadSession = {
+    id, userId: authUser.id, fileName, mimeType, extension, size, chunkSize: REEL_CHUNK_SIZE,
+    totalChunks: Math.ceil(size / REEL_CHUNK_SIZE), receivedChunks: [], createdAt: Date.now()
+  };
+  try {
+    const handle = await fs.promises.open(reelUploadPath(id, 'part'), 'w');
+    await handle.truncate(size);
+    await handle.close();
+    await saveReelUpload(session);
+    res.status(201).json({ uploadId: id, chunkSize: REEL_CHUNK_SIZE, totalChunks: session.totalChunks });
+  } catch (error) {
+    await fs.promises.rm(reelUploadPath(id, 'part'), { force: true });
+    console.error('[Echat] Could not initialize Reel upload:', error);
+    res.status(500).json({ error: 'Could not prepare the Reel upload. Please retry.' });
+  }
+});
+
+app.get('/api/reels/upload/:uploadId', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const session = await readReelUpload(req.params.uploadId);
+  if (!session || session.userId !== authUser.id) return res.status(404).json({ error: 'Upload session expired. Retry the Reel upload.' });
+  res.json({ uploadId: session.id, fileName: session.fileName, mimeType: session.mimeType, size: session.size, chunkSize: session.chunkSize, totalChunks: session.totalChunks, receivedChunks: session.receivedChunks, completedUrl: session.completedUrl });
+});
+
+app.put('/api/reels/upload/:uploadId/chunk/:index', express.raw({ type: 'application/octet-stream', limit: '5mb' }), async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const session = await readReelUpload(req.params.uploadId);
+  if (!session || session.userId !== authUser.id) return res.status(404).json({ error: 'Upload session expired. Retry the Reel upload.' });
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0 || index >= session.totalChunks || !Buffer.isBuffer(req.body)) return res.status(400).json({ error: 'Invalid video chunk.' });
+  const offset = index * session.chunkSize;
+  const expectedLength = Math.min(session.chunkSize, session.size - offset);
+  if (req.body.length !== expectedLength) return res.status(400).json({ error: 'Video chunk was incomplete. Retry this upload chunk.' });
+  try {
+    const handle = await fs.promises.open(reelUploadPath(session.id, 'part'), 'r+');
+    await handle.write(req.body, 0, req.body.length, offset);
+    await handle.close();
+    if (!session.receivedChunks.includes(index)) session.receivedChunks.push(index);
+    await saveReelUpload(session);
+    res.json({ received: index, complete: session.receivedChunks.length === session.totalChunks });
+  } catch (error) {
+    console.error('[Echat] Could not store Reel upload chunk:', error);
+    res.status(500).json({ error: 'Could not store this video chunk. Tap Retry to resume.' });
+  }
+});
+
+app.post('/api/reels/upload/:uploadId/complete', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const session = await readReelUpload(req.params.uploadId);
+  if (!session || session.userId !== authUser.id) return res.status(404).json({ error: 'Upload session expired. Retry the Reel upload.' });
+  if (session.completedUrl) return res.json({ url: session.completedUrl, size: session.size, mimeType: session.mimeType, fileName: path.basename(session.completedUrl) });
+  if (session.receivedChunks.length !== session.totalChunks) return res.status(409).json({ error: 'Some video chunks are missing. Tap Retry to resume.' });
+  const fileName = `${crypto.randomUUID()}.${session.extension}`;
+  const destination = path.join(UPLOADS_DIR, fileName);
+  try {
+    await fs.promises.rename(reelUploadPath(session.id, 'part'), destination);
+    if (session.size <= 12 * 1024 * 1024) {
+      await db.putFile(fileName, session.mimeType, await fs.promises.readFile(destination)).catch(error => console.warn('[Echat] Could not store small Reel in database; kept on persistent disk:', error));
+    }
+    session.completedUrl = `/uploads/${fileName}`;
+    await saveReelUpload(session);
+    res.status(201).json({ url: session.completedUrl, size: session.size, mimeType: session.mimeType, fileName });
+  } catch (error) {
+    console.error('[Echat] Could not finalize Reel upload:', error);
+    res.status(500).json({ error: 'Reel upload could not be finalized. Tap Retry to resume.' });
   }
 });
 
@@ -856,7 +996,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
-  const { content, mediaUrl, mediaType, feeling, privacy, taggedUserIds, type } = req.body;
+  const { content, mediaUrl, mediaType, feeling, privacy, taggedUserIds, type, thumbnailUrl, mediaDuration, mediaSize } = req.body;
   const requestedMediaUrls = Array.isArray(req.body.mediaUrls) ? req.body.mediaUrls : [];
   if (requestedMediaUrls.length > 10) return res.status(400).json({ error: 'A post can include at most 10 images' });
   const mediaUrls = requestedMediaUrls.filter((url: unknown): url is string => typeof url === 'string' && (/^https:\/\//i.test(url) || url.startsWith('/uploads/'))).slice(0, 10);
@@ -865,6 +1005,9 @@ app.post('/api/posts', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Post must contain text or media' });
   }
   const safePrivacy = privacy === 'friends' || privacy === 'only_me' ? privacy : 'public';
+  const safeThumbnail = typeof thumbnailUrl === 'string' && (/^https:\/\//i.test(thumbnailUrl) || thumbnailUrl.startsWith('/uploads/')) ? thumbnailUrl : undefined;
+  const safeDuration = Number.isFinite(Number(mediaDuration)) && Number(mediaDuration) >= 0 ? Math.min(60 * 60 * 24, Number(mediaDuration)) : undefined;
+  const safeMediaSize = Number.isSafeInteger(Number(mediaSize)) && Number(mediaSize) > 0 && Number(mediaSize) <= 250 * 1024 * 1024 ? Number(mediaSize) : undefined;
   const requestedPageId = String(req.get('x-page-id') || '');
   const actingPage = requestedPageId ? db.getPageById(requestedPageId) : null;
   if (requestedPageId && actingPage?.ownerId !== authUser.id) return res.status(403).json({ error: 'You do not manage this Page' });
@@ -883,7 +1026,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
     mediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds, mediaUrls, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post' }
+    { taggedUserIds: cleanTaggedIds, mediaUrls, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
   );
   if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 

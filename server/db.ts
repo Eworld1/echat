@@ -572,7 +572,7 @@ class Database {
     mediaType?: 'image' | 'video',
     feeling?: string,
     privacy: 'public' | 'friends' | 'only_me' = 'public',
-    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; type?: 'post' | 'reel' } = {}
+    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; type?: 'post' | 'reel'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number } = {}
   ): Post {
     const newPost: Post = {
       id: 'post_' + crypto.randomBytes(6).toString('hex'),
@@ -582,6 +582,9 @@ class Database {
       mediaUrl,
       ...(extras.mediaUrls?.length ? { mediaUrls: extras.mediaUrls.slice(0, 10) } : {}),
       mediaType,
+      ...(extras.thumbnailUrl ? { thumbnailUrl: extras.thumbnailUrl } : {}),
+      ...(Number.isFinite(extras.mediaDuration) ? { mediaDuration: extras.mediaDuration } : {}),
+      ...(Number.isFinite(extras.mediaSize) ? { mediaSize: extras.mediaSize } : {}),
       feeling,
       privacy,
       reactions: [],

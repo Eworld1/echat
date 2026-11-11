@@ -88,6 +88,85 @@ export const api = {
     return assetUrl(data.url);
   },
 
+  async uploadReelFile(file: File, onProgress: (percent: number) => void): Promise<{ url: string; uploadId: string }> {
+    const maxBytes = 250 * 1024 * 1024;
+    if (file.size > maxBytes) throw new Error('Video too large - Max 250MB. Please compress or trim your video.');
+    const resumeKey = `echat_reel_upload:${file.name}:${file.size}:${file.lastModified}`;
+    const savedId = typeof window !== 'undefined' ? window.localStorage.getItem(resumeKey) : null;
+    const headers = getHeaders();
+    let uploadId = savedId || '';
+    let uploadState: { uploadId: string; fileName: string; mimeType: string; size: number; chunkSize: number; totalChunks: number; receivedChunks: number[]; completedUrl?: string } | null = null;
+
+    if (uploadId) {
+      try {
+        const response = await fetch(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}`), { headers });
+        if (response.ok) uploadState = await response.json();
+        else uploadId = '';
+      } catch { uploadId = ''; }
+      if (uploadState && (uploadState.size !== file.size || uploadState.fileName !== file.name)) uploadId = '';
+      if (!uploadId && typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
+      if (uploadState?.completedUrl) {
+        if (typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
+        onProgress(100);
+        return { url: assetUrl(uploadState.completedUrl), uploadId };
+      }
+    }
+
+    if (!uploadId) {
+      const response = await fetch(apiUrl('/api/reels/upload/init'), {
+        method: 'POST', headers,
+        body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'video/mp4', size: file.size })
+      });
+      const init = await readResponse<{ uploadId: string; chunkSize: number; totalChunks: number }>(response, 'Could not start Reel upload');
+      uploadId = init.uploadId;
+      if (typeof window !== 'undefined') window.localStorage.setItem(resumeKey, uploadId);
+      uploadState = { uploadId, fileName: file.name, mimeType: file.type, size: file.size, chunkSize: init.chunkSize, totalChunks: init.totalChunks, receivedChunks: [] };
+    }
+
+    if (!uploadState) throw new Error('Upload session unavailable. Tap Retry to resume.');
+    const received = new Set(uploadState.receivedChunks || []);
+    const completedBytes = Array.from(received).reduce((sum, index) => sum + Math.min(uploadState!.chunkSize, file.size - index * uploadState!.chunkSize), 0);
+    onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)));
+    const uploadChunk = (index: number): Promise<void> => new Promise((resolve, reject) => {
+      const start = index * uploadState!.chunkSize;
+      const chunk = file.slice(start, Math.min(file.size, start + uploadState!.chunkSize));
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}/chunk/${index}`));
+      xhr.timeout = 10 * 60 * 1000;
+      Object.entries(getHeaders({ 'Content-Type': 'application/octet-stream' })).forEach(([name, value]) => xhr.setRequestHeader(name, value));
+      xhr.upload.onprogress = event => {
+        if (event.lengthComputable) onProgress(Math.min(99, Math.round(((completedBytes + event.loaded) / file.size) * 100)));
+      };
+      xhr.onerror = () => reject(new Error('Network interrupted while uploading a chunk. Tap Retry to resume.'));
+      xhr.ontimeout = () => reject(new Error('Upload timed out while sending a chunk. Tap Retry to resume.'));
+      xhr.onload = () => {
+        let payload: { error?: string } = {};
+        try { payload = JSON.parse(xhr.responseText); } catch { /* use fallback below */ }
+        if (xhr.status < 200 || xhr.status >= 300) reject(new Error(payload.error || `Upload chunk failed (${xhr.status}). Tap Retry to resume.`));
+        else resolve();
+      };
+      xhr.send(chunk);
+    });
+
+    for (let index = 0; index < uploadState.totalChunks; index++) {
+      if (received.has(index)) continue;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { await uploadChunk(index); lastError = null; break; }
+        catch (error) { lastError = error; if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 600 * (attempt + 1))); }
+      }
+      if (lastError) throw lastError instanceof Error ? lastError : new Error('Reel upload failed. Tap Retry to resume.');
+      received.add(index);
+      onProgress(Math.min(99, Math.round((Array.from(received).reduce((sum, part) => sum + Math.min(uploadState!.chunkSize, file.size - part * uploadState!.chunkSize), 0) / file.size) * 100)));
+    }
+
+    const completeResponse = await fetch(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}/complete`), { method: 'POST', headers, body: '{}' });
+    const result = await readResponse<{ url: string }>(completeResponse, 'Could not finalize Reel upload');
+    if (typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
+    onProgress(100);
+    return { url: assetUrl(result.url), uploadId };
+  },
+
   // Global Search
   async search(query: string): Promise<GlobalSearchResults> {
     const res = await fetch(apiUrl(`/api/search?q=${encodeURIComponent(query)}`), {
@@ -269,6 +348,9 @@ export const api = {
     mediaUrls?: string[];
     mediaType?: 'image' | 'video';
     type?: 'post' | 'reel';
+    thumbnailUrl?: string;
+    mediaDuration?: number;
+    mediaSize?: number;
     feeling?: string;
     privacy?: 'public' | 'friends' | 'only_me';
     taggedUserIds?: string[];
