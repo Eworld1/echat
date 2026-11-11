@@ -1,4 +1,4 @@
-import { apiUrl, assetUrl } from './apiBase';
+import { API_URL, apiUrl, assetUrl } from './apiBase';
 import type { AdminAnalytics, AdminSystemInfo, AuditEntry } from '../types/admin';
 import type {
   User,
@@ -91,6 +91,9 @@ export const api = {
   async uploadReelFile(file: File, onProgress: (percent: number, status?: string) => void): Promise<{ url: string; uploadId: string }> {
     const maxBytes = 250 * 1024 * 1024;
     if (file.size > maxBytes) throw new Error('Video too large - Max 250MB. Please compress or trim your video.');
+    if (!API_URL && typeof window !== 'undefined' && window.location.hostname.endsWith('.vercel.app')) {
+      throw new Error('Reel uploads need the backend URL. Set VITE_API_URL to your deployed backend in Vercel, then redeploy the frontend.');
+    }
     const resumeKey = `echat_reel_upload:${file.name}:${file.size}:${file.lastModified}`;
     const savedId = typeof window !== 'undefined' ? window.localStorage.getItem(resumeKey) : null;
     const headers = getHeaders();
@@ -180,6 +183,23 @@ export const api = {
           lastError = error;
           const message = error instanceof Error ? error.message : String(error);
           console.error('[Echat] Reel chunk upload failed', { uploadId, chunkIndex: index, attempt: attempt + 1, error: message });
+          // The server may have stored the chunk even when its response was
+          // lost (common on mobile networks). Check durable progress before
+          // retrying, so we don't report a false failure or resend it forever.
+          try {
+            const statusResponse = await fetch(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}`), { headers });
+            if (statusResponse.ok) {
+              const status = await statusResponse.json() as { receivedChunks?: number[] };
+              if (status.receivedChunks?.includes(index)) {
+                lastError = null;
+                break;
+              }
+            } else if (statusResponse.status === 401) {
+              throw new Error('Your session expired. Sign in again, then tap Retry to resume.');
+            }
+          } catch (statusError) {
+            if (statusError instanceof Error && statusError.message.startsWith('Your session expired')) throw statusError;
+          }
           if (attempt < 3) {
             onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), `Connection slow, retrying chunk ${index + 1}/${uploadState.totalChunks}…`);
             await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** attempt)));

@@ -31,7 +31,9 @@ app.use((req: Request, res: Response, next) => {
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-user-id, x-developer-key');
+  // x-page-id is sent by the client when acting as a Page. It must be allowed
+  // for cross-origin requests (including the Reel chunk upload preflight).
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-user-id, x-developer-key, x-page-id');
   res.setHeader('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -353,8 +355,17 @@ app.put('/api/reels/upload/:uploadId/chunk/:index', express.raw({ type: 'applica
   if (req.body.length !== expectedLength) return res.status(400).json({ error: 'Video chunk was incomplete. Retry this upload chunk.' });
   try {
     const handle = await fs.promises.open(reelUploadPath(session.id, 'part'), 'r+');
-    await handle.write(req.body, 0, req.body.length, offset);
-    await handle.close();
+    try {
+      let written = 0;
+      while (written < req.body.length) {
+        const result = await handle.write(req.body, written, req.body.length - written, offset + written);
+        if (result.bytesWritten <= 0) throw new Error('No progress while writing Reel chunk');
+        written += result.bytesWritten;
+      }
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     if (!session.receivedChunks.includes(index)) session.receivedChunks.push(index);
     await saveReelUpload(session);
     res.json({ received: index, complete: session.receivedChunks.length === session.totalChunks });
