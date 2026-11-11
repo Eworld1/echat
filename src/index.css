@@ -15,9 +15,15 @@
   }
 }
 html, body, #root {
+  box-sizing: border-box;
   max-width: 100%;
   min-height: 100%;
+  overflow-x: hidden;
 }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+header.sticky { padding-top: env(safe-area-inset-top); }
 
 @media (max-width: 768px) {
   html, body, #root { overflow-x: clip; }

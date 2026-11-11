@@ -159,6 +159,7 @@ export function MainApp() {
         currentView={currentView}
         onNavigate={handleNavigate}
         onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
+        onOpenCreate={() => setIsCreatePostOpen(true)}
       />
 
       {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
@@ -172,7 +173,7 @@ export function MainApp() {
         />
 
         {/* Central Stage */}
-        <main className={`flex-1 min-w-0 ${currentView === 'dashboard' ? 'max-w-5xl' : 'max-w-3xl'}`}>
+        <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
           {currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}

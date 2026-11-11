@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Search,
   Home,
+  PlusSquare,
   Users,
   Shield,
   Bell,
@@ -50,6 +51,7 @@ interface NavbarProps {
   currentView: AppView;
   onNavigate: (view: AppView, targetProfileId?: string, targetPostId?: string) => void;
   onOpenMessenger: () => void;
+  onOpenCreate: () => void;
 }
 
 interface PageItem {
@@ -65,7 +67,8 @@ interface PageItem {
 export const Navbar: React.FC<NavbarProps> = ({
   currentView,
   onNavigate,
-  onOpenMessenger
+  onOpenMessenger,
+  onOpenCreate
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
   const { t } = usePreferences();
@@ -83,7 +86,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [searchResults, setSearchResults] = useState<{ users: User[]; posts: Post[] }>({ users: [], posts: [] });
   const [isSearching, setIsSearching] = useState(false);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
-  const [activeTab, setActiveTab] = useState<'all' | 'people' | 'posts' | 'pages'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'people' | 'posts' | 'reels' | 'pages'>('all');
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('echat_recent_searches');
@@ -412,26 +415,28 @@ export const Navbar: React.FC<NavbarProps> = ({
     (searchQuery.trim() ? searchResults.users.length : 0) +
     (searchQuery.trim() ? searchResults.posts.length : 0) +
     matchingPages.length;
+  const matchingPosts = searchResults.posts.filter(post => post.type !== 'reel');
+  const matchingReels = searchResults.posts.filter(post => post.type === 'reel');
 
   const unreadNotificationsCount = notifications.filter(n => !n.read && n.type !== 'message').length;
   const unreadMessageCount = notifications.filter(n => !n.read && n.type === 'message').length;
 
   return (
     <header className="sticky top-0 z-30 bg-white border-b border-slate-200/90 shadow-2xs">
-      <div className="max-w-7xl mx-auto px-3 sm:px-4 h-14 flex items-center justify-between gap-2">
+      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px_48px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
-        <div className="flex items-center gap-2.5 flex-1 max-w-md sm:max-w-lg lg:max-w-xl">
+        <div className="contents">
           <div
             onClick={() => onNavigate('feed')}
-            className="flex items-center gap-2 cursor-pointer group flex-shrink-0"
+            className="col-start-1 row-start-1 flex min-w-0 shrink-0 cursor-pointer items-center gap-2 group min-[1025px]:w-[280px]"
           >
-            <img src="/logo.png" alt="EchatSl" className="h-10 w-10 rounded-full object-cover shadow-md group-hover:scale-105 transition" />
-            <span className="text-2xl font-black text-amber-600 tracking-tight hidden sm:inline">EchatSl</span>
+            <img src="/logo.png" alt="EchatSl" className="h-10 w-10 shrink-0 rounded-full object-cover shadow-md transition group-hover:scale-105" />
+            <span className="hidden truncate text-xl font-black tracking-tight text-amber-600 min-[1025px]:inline">EchatSl</span>
           </div>
 
           {/* Global Search Bar */}
-          <div ref={searchContainerRef} className="relative flex-1">
+          <div ref={searchContainerRef} className="relative col-start-2 row-start-1 min-w-0 w-full min-[1025px]:mx-auto min-[1025px]:max-w-[500px]">
             <div className="relative flex items-center">
               <div className="absolute left-3 text-slate-400 flex items-center pointer-events-none">
                 {isSearching ? (
@@ -447,8 +452,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 value={searchQuery}
                 onChange={handleSearchChange}
                 onFocus={() => setShowSearchDropdown(true)}
-                placeholder={t('search_placeholder')}
-                className="w-full pl-9 pr-16 py-1.5 bg-slate-100 hover:bg-slate-100/80 focus:bg-white text-xs sm:text-sm rounded-full border border-transparent focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition shadow-inner placeholder-slate-400"
+                placeholder={window.innerWidth <= 768 ? 'Search' : 'Search EChat'}
+                className="h-10 w-full min-w-0 rounded-full border border-transparent bg-slate-100 py-1.5 pl-9 pr-10 text-xs shadow-inner transition placeholder-slate-400 hover:bg-slate-100/80 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 sm:text-sm"
               />
 
               <div className="absolute right-2.5 flex items-center gap-1">
@@ -471,7 +476,14 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Global Search Results Dropdown */}
             {showSearchDropdown && (
-              <div className="absolute top-11 left-0 right-0 sm:-right-16 md:-right-24 bg-white rounded-2xl shadow-2xl border border-slate-200/90 py-2.5 z-50 max-h-[82vh] overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-150">
+              <div className="fixed inset-0 z-[70] flex h-[100dvh] max-h-[100dvh] flex-col overflow-y-auto border border-slate-200/90 bg-white py-2.5 shadow-2xl animate-in fade-in min-[769px]:absolute min-[769px]:inset-auto min-[769px]:left-0 min-[769px]:right-0 min-[769px]:top-11 min-[769px]:z-50 min-[769px]:max-h-[82vh] min-[769px]:rounded-2xl min-[769px]:py-2.5">
+                <div className="sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b border-slate-100 bg-white px-3 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] min-[769px]:hidden">
+                  <button type="button" onClick={() => setShowSearchDropdown(false)} aria-label="Back from search" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-700 hover:bg-slate-100"><X size={20} /></button>
+                  <div className="relative min-w-0 flex-1">
+                    <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input autoFocus value={searchQuery} onChange={handleSearchChange} placeholder="Search EChat" className="h-11 w-full rounded-full bg-slate-100 pl-10 pr-4 text-base text-slate-900 outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </div>
                 
                 {/* Search Tabs when query entered */}
                 {searchQuery.trim() && (
@@ -506,7 +518,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                       }`}
                     >
                       <FileText size={12} />
-                      Posts ({searchResults.posts.length})
+                      Posts ({matchingPosts.length})
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('reels')}
+                      className={`px-3 py-1 rounded-full transition cursor-pointer flex items-center gap-1 ${activeTab === 'reels' ? 'bg-blue-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                    >
+                      <Film size={12} /> Reels ({matchingReels.length})
                     </button>
                     <button
                       onClick={() => setActiveTab('pages')}
@@ -725,16 +743,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                     )}
 
                     {/* Section: Posts */}
-                    {(activeTab === 'all' || activeTab === 'posts') && searchResults.posts.length > 0 && (
+                    {(activeTab === 'all' || activeTab === 'posts') && matchingPosts.length > 0 && (
                       <div>
                         <div className="px-2.5 py-1">
                           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                             <FileText size={12} className="text-amber-600" />
-                            Posts ({searchResults.posts.length})
+                            Posts ({matchingPosts.length})
                           </span>
                         </div>
                         <div className="mt-1 space-y-1.5">
-                          {searchResults.posts.map(post => (
+                          {matchingPosts.map(post => (
                             <div
                               key={post.id}
                               onClick={() => handleSelectPost(post)}
@@ -784,6 +802,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </div>
                       </div>
                     )}
+
+                    {(activeTab === 'all' || activeTab === 'reels') && matchingReels.length > 0 && (
+                      <div>
+                        <div className="px-2.5 py-1"><span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Reels ({matchingReels.length})</span></div>
+                        <div className="mt-1 space-y-1.5">
+                          {matchingReels.map(reel => <div key={reel.id} onClick={() => handleSelectPost(reel)} className="flex cursor-pointer items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition hover:border-fuchsia-100 hover:bg-fuchsia-50/60">
+                            <Film size={18} className="shrink-0 text-fuchsia-600" />
+                            <div className="min-w-0 flex-1"><p className="truncate text-xs font-bold text-slate-800">{reel.author?.name || 'EChat Reel'}</p><p className="truncate text-[11px] text-slate-500">{reel.content || 'Video Reel'}</p></div>
+                            <ArrowRight size={14} className="text-slate-300" />
+                          </div>)}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -802,10 +833,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Center: Main Navigation Icons (Facebook style) */}
 
-        <div className="flex items-center gap-1 sm:gap-2 h-full">
+        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-2 min-[1025px]:col-span-1">
           <button
             onClick={() => onNavigate('feed')}
-            className={`h-full px-4 sm:px-8 border-b-3 flex items-center justify-center transition cursor-pointer ${
+            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex items-center justify-center transition cursor-pointer ${
               currentView === 'feed'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'
@@ -817,7 +848,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onNavigate('reels')}
-            className={`h-full px-4 sm:px-6 border-b-3 flex items-center justify-center transition cursor-pointer ${currentView === 'reels' ? 'border-fuchsia-600 text-fuchsia-600' : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
+            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex items-center justify-center transition cursor-pointer ${currentView === 'reels' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
             title="Reels"
           >
             <Film size={22} strokeWidth={currentView === 'reels' ? 2.5 : 2} />
@@ -825,7 +856,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onNavigate('friends')}
-            className={`h-full px-4 sm:px-8 border-b-3 flex items-center justify-center transition cursor-pointer relative ${
+            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex items-center justify-center transition cursor-pointer relative ${
               currentView === 'friends'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'
@@ -834,16 +865,20 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Users size={22} strokeWidth={currentView === 'friends' ? 2.5 : 2} />
             {user && user.friendRequestsReceived.length > 0 && (
-              <span className="absolute top-2 right-4 sm:right-6 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white">
+              <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white">
                 {user.friendRequestsReceived.length}
               </span>
             )}
           </button>
 
+          <button onClick={() => onNavigate('pages')} className={`hidden h-12 min-w-14 max-w-28 flex-1 items-center justify-center border-b-[3px] transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:flex ${currentView === 'pages' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`} title="Pages"><Flag size={22} /></button>
+          <button onClick={onOpenMessenger} className="flex h-12 min-w-14 max-w-28 flex-1 items-center justify-center border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Messages"><MessageSquare size={22} /></button>
+          <button onClick={() => { setShowNotifications(value => !value); if (!showNotifications) handleMarkNotificationsRead(); }} className="relative flex h-12 min-w-14 max-w-28 flex-1 items-center justify-center border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Notifications"><Bell size={22} />{unreadNotificationsCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unreadNotificationsCount}</span>}</button>
+
           {isDeveloper && (
             <button
               onClick={() => onNavigate('admin')}
-              className={`h-full px-4 sm:px-8 border-b-3 flex items-center justify-center transition cursor-pointer ${
+              className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] items-center justify-center transition cursor-pointer hidden min-[1025px]:flex ${
                 currentView === 'admin'
                   ? 'border-purple-600 text-purple-600'
                   : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'
@@ -861,12 +896,14 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Right: Actions, Messenger, Notifications, Profile */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="col-start-3 row-start-1 flex shrink-0 items-center justify-end gap-1 min-[1025px]:gap-2">
+
+          <button onClick={onOpenCreate} className="hidden h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-700 min-[1025px]:flex" title="Create post"><PlusSquare size={19} /></button>
 
           {/* Messenger Icon */}
           <button
             onClick={onOpenMessenger}
-            className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition relative cursor-pointer"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10 relative cursor-pointer"
             title="Open Messenger"
           >
             <MessageSquare size={19} />
@@ -891,7 +928,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   }
                 }
               }}
-              className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition relative cursor-pointer"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10 relative cursor-pointer"
               title="Notifications"
             >
               <Bell size={19} />
@@ -1027,26 +1064,28 @@ export const Navbar: React.FC<NavbarProps> = ({
               <img
                 src={user?.avatar || initialsAvatar(user?.name || '')}
                 alt={user?.name || 'User'}
-                className="w-10 h-10 rounded-full object-cover ring-2 ring-slate-200 hover:ring-blue-500 transition"
+                className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-slate-200 transition hover:ring-blue-500 min-[1025px]:h-10 min-[1025px]:w-10"
               />
             </button>
 
-            {showProfileMenu && (
-              <div className="absolute right-0 top-12 w-64 bg-white rounded-3xl shadow-2xl border border-slate-100 p-2 z-40 animate-in fade-in">
+          {showProfileMenu && (
+              <div className="fixed inset-x-0 bottom-0 z-[80] max-h-[82dvh] w-full overflow-y-auto rounded-t-3xl border border-slate-100 bg-white p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl animate-in slide-in-from-bottom-3 min-[769px]:absolute min-[769px]:inset-auto min-[769px]:right-0 min-[769px]:top-12 min-[769px]:max-h-[80vh] min-[769px]:w-64 min-[769px]:rounded-3xl min-[769px]:p-2 min-[769px]:animate-in min-[769px]:fade-in">
+                <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-slate-300 min-[769px]:hidden" />
+                <button onClick={() => setShowProfileMenu(false)} aria-label="Close profile menu" className="absolute right-4 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-600 min-[769px]:hidden"><X size={18} /></button>
                 {/* User card shortcut */}
-                <div
+                <button type="button"
                   onClick={() => {
                     if (user) onNavigate('profile', user.id);
                     setShowProfileMenu(false);
                   }}
-                  className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl flex items-center gap-3 cursor-pointer transition mb-2"
+                  className="mb-2 flex w-full items-center gap-3 rounded-2xl bg-slate-50 p-3 text-left transition hover:bg-slate-100"
                 >
                   <img src={user?.avatar} alt={user?.name} className="w-11 h-11 rounded-full object-cover" />
                   <div className="min-w-0">
                     <p className="font-bold text-slate-900 text-sm truncate">{user?.name}</p>
                     <p className="text-xs text-slate-500">{t('see_profile')}</p>
                   </div>
-                </div>
+                </button>
 
                 <div className="mb-2 rounded-xl border border-slate-100 p-2">
                   <p className="px-2 pb-1 text-[10px] font-bold uppercase text-slate-400">Switch identity</p>
