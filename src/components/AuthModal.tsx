@@ -109,12 +109,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-cover bg-center bg-no-repeat"
-      style={{
-        backgroundImage: `url('${welcomeConfig.welcomeBgImage || '/assets/aistudio/bd3de880-e4c3-43a6-a9a3-f5f3393ff3a6_470c76c2.jpg'}')`
-      }}
-    >
+    <div className="fixed inset-0 z-50 isolate flex min-h-[100dvh] w-full items-center justify-center overflow-y-auto bg-black p-4 sm:p-6">
+      {/* Blur-fill keeps the whole source photo visible on portrait screens without black bars or cropped faces. */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 scale-110 bg-cover bg-center bg-no-repeat blur-2xl" style={{ backgroundImage: "url('/images/welcome-bg.webp')" }} />
+      <img aria-hidden="true" src="/images/welcome-bg.webp" alt="" className="pointer-events-none absolute inset-0 h-full w-full object-contain" />
       {/* Dark tint overlay for readability */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/60 to-black/75 backdrop-blur-[2px]" />
 
