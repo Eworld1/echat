@@ -3,7 +3,7 @@ export interface Reaction { userId: string; type: ReactionType; createdAt: numbe
 export interface User {
   id: string; name: string; email: string; passwordHash?: string;
   avatar: string; coverPhoto: string; bio: string; location: string;
-  dob?: string; work?: string; education?: string;
+  dob?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; work?: string; education?: string;
   role: 'user' | 'admin' | 'developer';
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
@@ -12,11 +12,11 @@ export interface User {
   blockedUsers?: string[]; privacySettings?: any; savedPosts?: string[];
 }
 export interface Comment { id: string; postId: string; authorId: string; author?: { id: string; name: string; avatar: string; }; content: string; createdAt: number; likes: string[]; }
-export interface Post { id: string; authorId: string; pageId?: string; author?: any; content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video'; feeling?: string; privacy: 'public' | 'friends' | 'only_me'; reactions: Reaction[]; comments: Comment[]; sharesCount: number; viewsCount?: number; views?: string[]; viewRecords?: { userId: string; viewedAt: number }[]; isReported: boolean; reportReason?: string; createdAt: number; editedAt?: number; taggedUserIds?: string[]; sharedPostId?: string; }
+export interface Post { id: string; authorId: string; pageId?: string; author?: any; type?: 'post' | 'reel'; content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video'; feeling?: string; privacy: 'public' | 'friends' | 'only_me'; reactions: Reaction[]; comments: Comment[]; sharesCount: number; viewsCount?: number; views?: string[]; viewRecords?: { userId: string; viewedAt: number }[]; isReported: boolean; reportReason?: string; createdAt: number; editedAt?: number; taggedUserIds?: string[]; sharedPostId?: string; }
 export interface Story { id: string; authorId: string; author?: any; type: 'text' | 'image' | 'video'; mediaUrl?: string; text?: string; backgroundGradient?: string; viewers: { userId: string; viewedAt: number }[]; createdAt: number; expiresAt: number; }
 export interface MessageAttachment { url: string; name: string; mimeType: string; size: number; }
-export interface Message { id: string; conversationId?: string; senderId: string; receiverId: string; text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio'; audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number; }
-export interface Notification { id: string; userId: string; actorId: string; actor?: any; type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement'; targetId?: string; message: string; read: boolean; createdAt: number; callType?: 'audio' | 'video'; }
+export interface Message { id: string; conversationId?: string; senderId: string; receiverId: string; text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio'; audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number; editHistory?: { text: string; editedAt: number }[]; deletedFor?: string[]; }
+export interface Notification { id: string; userId: string; actorId: string; actor?: any; type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement' | 'birthday'; targetId?: string; message: string; read: boolean; createdAt: number; callType?: 'audio' | 'video'; }
 export interface AuditLog { id: string; actorId: string; actorName: string; action: string; targetType?: string; targetId?: string; targetName?: string; details?: string; createdAt: number; }
 export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUsers: number; totalPosts: number; totalMessages: number; totalStories: number; pendingReports: number; activeSockets: number; uptimeSeconds: number; }
 export interface GlobalSearchResults { users: User[]; posts: Post[]; }

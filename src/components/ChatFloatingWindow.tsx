@@ -6,6 +6,7 @@ import { api } from '../services/api';
 import { assetUrl } from '../services/apiBase';
 import { VoiceRecorder } from './VoiceRecorder';
 import { VideoLinkCard } from './VideoLinkCard';
+import { LinkPreviewCard } from './LinkPreviewCard';
 import {
   Phone,
   Video,
@@ -21,15 +22,18 @@ import {
   Pause,
   Pencil,
   Download
+  , Volume2, VolumeX, MoreVertical, Copy, CornerUpLeft, Trash2
 } from 'lucide-react';
+import { playSound, setChatSoundVolume } from '../utils/sounds';
 
 interface ChatFloatingWindowProps {
   partner: User;
   onClose: () => void;
 }
 
-export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner, onClose }) => {
+export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner: initialPartner, onClose }) => {
   const { user } = useAuth();
+  const [partner, setPartner] = useState(initialPartner);
   const {
     onlineUserIds,
     typingUsers,
@@ -37,7 +41,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
     markSeen,
     startCall,
     onNewMessage,
-    onMessageUpdated
+    onMessageUpdated,
+    onMessageDeleted
   } = useSocket();
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -52,15 +57,34 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
   const [editingMessageText, setEditingMessageText] = useState('');
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('echat_chat_sound') !== 'false');
+  const [messageMenuId, setMessageMenuId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const voiceAudioContextRef = useRef<AudioContext | null>(null);
   const voiceGainRef = useRef<GainNode | null>(null);
   const typingTimeoutRef = useRef<any>(null);
+  const longPressTimerRef = useRef<number | null>(null);
 
   const isPartnerOnline = onlineUserIds.includes(partner.id);
   const isPartnerTyping = Boolean(typingUsers[partner.id]);
+
+  useEffect(() => setPartner(initialPartner), [initialPartner]);
+  useEffect(() => {
+    const key = 'echat_active_chat';
+    if (!isMinimized) localStorage.setItem(key, partner.id);
+    else if (localStorage.getItem(key) === partner.id) localStorage.removeItem(key);
+    return () => { if (localStorage.getItem(key) === partner.id) localStorage.removeItem(key); };
+  }, [partner.id, isMinimized]);
+  useEffect(() => {
+    const updatePartner = (event: Event) => {
+      const updated = (event as CustomEvent<Partial<User>>).detail;
+      if (updated?.id === partner.id) setPartner(current => ({ ...current, ...updated }));
+    };
+    window.addEventListener('echat:profile-updated', updatePartner);
+    return () => window.removeEventListener('echat:profile-updated', updatePartner);
+  }, [partner.id]);
 
   // Load chat history
   const loadMessages = async () => {
@@ -109,6 +133,24 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
     setEditingMessageId(null);
   }), [onMessageUpdated]);
 
+  useEffect(() => onMessageDeleted(messageId => setMessages(current => current.filter(item => item.id !== messageId))), [onMessageDeleted]);
+
+  const wasPartnerTyping = useRef(false);
+  const lastTypingSound = useRef(0);
+  useEffect(() => {
+    if (isPartnerTyping && !wasPartnerTyping.current && Date.now() - lastTypingSound.current >= 3000) {
+      playSound('typing');
+      lastTypingSound.current = Date.now();
+    }
+    wasPartnerTyping.current = isPartnerTyping;
+  }, [isPartnerTyping]);
+
+  useEffect(() => {
+    const syncSound = () => setSoundEnabled(localStorage.getItem('echat_chat_sound') !== 'false');
+    window.addEventListener('echat:chat-sound-settings', syncSound);
+    return () => window.removeEventListener('echat:chat-sound-settings', syncSound);
+  }, []);
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -145,6 +187,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
     try {
       const sent = await api.sendMessage(payload);
       setMessages(prev => [...prev.filter(m => m.id !== sent.id), sent]);
+      playSound('message_out');
     } catch (err) {
       console.error('Failed to send message:', err);
     }
@@ -166,6 +209,35 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
       setEditingMessageId(null);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Could not edit this message.');
+    }
+  };
+
+  const startEditing = (message: Message) => {
+    setMessageMenuId(null);
+    if (!message.text || message.mediaUrl || message.mediaType || message.attachments?.length) {
+      alert('Only text messages can be edited.');
+      return;
+    }
+    if (Date.now() - message.createdAt > 15 * 60 * 1000) {
+      alert('You can no longer edit this message.');
+      return;
+    }
+    setEditingMessageId(message.id);
+    setEditingMessageText(message.text);
+  };
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
+  };
+
+  const deleteMessageForMe = async (messageId: string) => {
+    try {
+      await api.deleteMessage(messageId);
+      setMessages(current => current.filter(item => item.id !== messageId));
+      setMessageMenuId(null);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not delete this message.');
     }
   };
 
@@ -246,7 +318,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
   }
 
   return (
-    <div className="fixed bottom-0 right-2 sm:right-16 z-40 w-[94vw] sm:w-[350px] h-[460px] bg-white rounded-t-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in slide-in-from-bottom-2">
+    <div className="fixed inset-x-0 bottom-0 z-40 h-[min(88dvh,calc(100dvh-env(safe-area-inset-bottom)))] w-full rounded-t-2xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-2 sm:inset-auto sm:bottom-0 sm:right-16 sm:h-[min(460px,calc(100dvh-env(safe-area-inset-bottom)))] sm:w-[350px] sm:rounded-2xl">
       {/* Header */}
       <div className="px-3.5 py-2.5 bg-white border-b border-slate-100 flex items-center justify-between shadow-xs">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -265,6 +337,9 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
         </div>
 
         <div className="flex items-center gap-1 text-blue-600">
+          <button type="button" onClick={() => { const enabled = !soundEnabled; setSoundEnabled(enabled); localStorage.setItem('echat_chat_sound', String(enabled)); }} aria-label={soundEnabled ? 'Turn chat sounds off' : 'Turn chat sounds on'} title={soundEnabled ? 'Chat sounds on' : 'Chat sounds off'} className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100">
+            {soundEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
+          </button>
           <button
             onClick={() => startCall(partner.id, partner.name, partner.avatar, 'audio')}
             className="p-1.5 hover:bg-blue-50 rounded-full transition cursor-pointer"
@@ -304,6 +379,9 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
             <div
               key={msg.id || idx}
               className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
+              onTouchStart={() => { clearLongPress(); longPressTimerRef.current = window.setTimeout(() => setMessageMenuId(msg.id), 550); }}
+              onTouchEnd={clearLongPress}
+              onTouchMove={clearLongPress}
             >
               <div
                 className={`max-w-[78%] rounded-2xl px-3.5 py-2 text-sm shadow-xs ${
@@ -371,10 +449,10 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                 {/* Text Content */}
                 {msg.text && editingMessageId === msg.id ? (
                   <div className="min-w-52 space-y-2">
-                    <textarea value={editingMessageText} onChange={event => setEditingMessageText(event.target.value)} maxLength={4000} rows={3} className="w-full rounded-lg border border-white/30 bg-white/10 p-2 text-sm text-current outline-none" />
+                    <textarea autoFocus value={editingMessageText} onChange={event => setEditingMessageText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleEditMessage(msg.id); } if (event.key === 'Escape') setEditingMessageId(null); }} maxLength={4000} rows={3} className="w-full rounded-lg border border-white/30 bg-white/10 p-2 text-sm text-current outline-none" />
                     <div className="flex justify-end gap-2"><button onClick={() => setEditingMessageId(null)} className="rounded-lg px-2 py-1 text-xs">Cancel</button><button onClick={() => void handleEditMessage(msg.id)} disabled={!editingMessageText.trim()} className="rounded-lg bg-white/20 px-2 py-1 text-xs font-bold disabled:opacity-50">Save</button></div>
                   </div>
-                ) : msg.text && <><p className="leading-relaxed break-words">{msg.text}{msg.editedAt && <span className="ml-1 text-[10px] opacity-70">Edited</span>}</p><VideoLinkCard text={msg.text} /></>}
+                ) : msg.text && <><p className="leading-relaxed break-words">{msg.text}</p>{msg.editedAt && <span className="mt-1 block text-[10px] opacity-70">Edited · {new Date(msg.editedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}<VideoLinkCard text={msg.text} /><LinkPreviewCard text={msg.text} compact /></>}
               </div>
 
               {/* Status and Timestamp */}
@@ -397,9 +475,15 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                     )}
                   </span>
                 )}
-                {isMe && msg.text && !msg.editedAt && Date.now() - msg.createdAt <= 15 * 60 * 1000 && editingMessageId !== msg.id && (
-                  <button onClick={() => { setEditingMessageId(msg.id); setEditingMessageText(msg.text || ''); }} className="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-slate-200" title="Edit within 15 minutes"><Pencil size={10} />Edit</button>
-                )}
+                <div className="relative ml-1">
+                  <button type="button" onClick={() => setMessageMenuId(current => current === msg.id ? null : msg.id)} className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-full hover:bg-slate-200" aria-label="Message options"><MoreVertical size={15} /></button>
+                  {messageMenuId === msg.id && <div className={`absolute bottom-full z-20 mb-1 min-w-36 rounded-xl border border-slate-200 bg-white p-1 text-slate-800 shadow-xl ${isMe ? 'right-0' : 'left-0'}`}>
+                    {isMe && msg.text && <button type="button" onClick={() => startEditing(msg)} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold hover:bg-slate-100"><Pencil size={14} />Edit message</button>}
+                    <button type="button" onClick={() => { if (msg.text) void navigator.clipboard?.writeText(msg.text); setMessageMenuId(null); }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold hover:bg-slate-100"><Copy size={14} />Copy text</button>
+                    <button type="button" onClick={() => { setInputText(value => `${value}${value ? '\n' : ''}> ${msg.text || 'Message'}\n`); setMessageMenuId(null); }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold hover:bg-slate-100"><CornerUpLeft size={14} />Reply</button>
+                    <button type="button" onClick={() => void deleteMessageForMe(msg.id)} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50"><Trash2 size={14} />Delete for me</button>
+                  </div>}
+                </div>
               </div>
             </div>
           );
@@ -487,7 +571,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                 value={inputText}
                 onChange={handleInputChange}
                 placeholder="Aa"
-                className="flex-1 bg-slate-100 hover:bg-slate-200/80 focus:bg-white text-slate-800 text-sm px-3 py-1.5 rounded-full border border-transparent focus:border-blue-400 focus:outline-hidden transition"
+                className="flex-1 min-h-[52px] bg-slate-100 hover:bg-slate-200/80 focus:bg-white text-slate-800 text-base px-3 py-2 rounded-full border border-transparent focus:border-blue-400 focus:outline-hidden transition"
               />
 
               <button

@@ -3,6 +3,7 @@ import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
+import { setChatSoundVolume } from '../utils/sounds';
 import {
   Settings as SettingsIcon,
   Shield,
@@ -49,6 +50,8 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     return saved !== null ? saved === 'true' : true;
   });
   const [ringtone, setRingtone] = useState(() => localStorage.getItem('echat_ringtone') || 'classic');
+  const [chatSoundEnabled, setChatSoundEnabled] = useState(() => localStorage.getItem('echat_chat_sound') !== 'false');
+  const [chatSoundVolume, setChatSoundVolume] = useState(() => Number(localStorage.getItem('echat_chat_sound_volume') || '0.55'));
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
@@ -118,6 +121,10 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     localStorage.setItem('echat_notifications', String(notificationsEnabled));
     localStorage.setItem('echat_sound', String(soundEnabled));
     localStorage.setItem('echat_ringtone', ringtone);
+    localStorage.setItem('echat_chat_sound', String(chatSoundEnabled));
+    localStorage.setItem('echat_chat_sound_volume', String(chatSoundVolume));
+    setChatSoundVolume(chatSoundVolume);
+    window.dispatchEvent(new Event('echat:chat-sound-settings'));
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 3000);
   };
@@ -478,6 +485,14 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                     }`}
                   />
                 </button>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div><div className="text-sm font-bold text-slate-900">Message and typing sounds</div><div className="text-xs text-slate-500">Play quiet sounds for sent, received, and typing activity.</div></div>
+                  <button type="button" aria-label="Toggle chat sounds" onClick={() => setChatSoundEnabled(value => !value)} className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${chatSoundEnabled ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${chatSoundEnabled ? 'translate-x-5' : 'translate-x-0'}`} /></button>
+                </div>
+                <label className="mt-3 flex items-center gap-3 text-xs font-semibold text-slate-600">Volume <input aria-label="Message sound volume" type="range" min="0" max="100" value={Math.round(chatSoundVolume * 100)} onChange={event => setChatSoundVolume(Number(event.target.value) / 100)} className="flex-1" /><span>{Math.round(chatSoundVolume * 100)}%</span></label>
               </div>
 
               <div className="flex items-center justify-between gap-4 py-1">

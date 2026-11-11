@@ -3,6 +3,8 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import crypto from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { db, hashPassword } from './server/db.js';
@@ -135,6 +137,62 @@ app.get('/api/site-config', (_req: Request, res: Response) => {
   res.json({ welcomeTitle, welcomeSubtitle, welcomeBgImage, welcomeLogo, primaryButtonText, secondaryText, appName });
 });
 
+const linkPreviewCache = new Map<string, { expiresAt: number; value: Record<string, string> }>();
+function isPrivateIp(address: string): boolean {
+  const ip = address.toLowerCase().replace(/^::ffff:/, '');
+  if (ip.includes('.')) {
+    const octets = ip.split('.').map(Number);
+    if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+    const [a, b] = octets;
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  return ip === '::' || ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80:') || ip.startsWith('ff');
+}
+
+async function isPublicHostname(hostname: string): Promise<boolean> {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  if (isIP(host)) return !isPrivateIp(host);
+  try {
+    const resolved = await lookup(host, { all: true, verbatim: true });
+    return resolved.length > 0 && resolved.every(item => !isPrivateIp(item.address));
+  } catch { return false; }
+}
+
+app.post('/api/link-preview', async (req: Request, res: Response) => {
+  const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+  let target: URL;
+  try { target = new URL(rawUrl); } catch { return res.status(400).json({ error: 'Invalid link URL' }); }
+  const host = target.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || !await isPublicHostname(host) || target.port && !['80', '443'].includes(target.port)) {
+    return res.status(400).json({ error: 'Link previews only support public HTTP or HTTPS pages' });
+  }
+  const cached = linkPreviewCache.get(target.href);
+  if (cached && cached.expiresAt > Date.now()) return res.json(cached.value);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    try {
+      const response = await fetch(`https://api.microlink.io/?url=${encodeURIComponent(target.href)}&meta=true`, { signal: controller.signal });
+      if (!response.ok) throw new Error('Metadata provider unavailable');
+      const body = await response.json() as { data?: { title?: string; description?: string; image?: { url?: string }; logo?: { url?: string } } };
+      const data = body.data || {};
+      const result: Record<string, string> = {
+        url: target.href,
+        domain: target.hostname.replace(/^www\./, ''),
+        ...(typeof data.title === 'string' && { title: data.title.slice(0, 180) }),
+        ...(typeof data.description === 'string' && { description: data.description.slice(0, 300) }),
+        ...(typeof data.image?.url === 'string' && /^https:\/\//.test(data.image.url) && { image: data.image.url }),
+        ...(typeof data.logo?.url === 'string' && /^https:\/\//.test(data.logo.url) && { favicon: data.logo.url })
+      };
+      linkPreviewCache.set(target.href, { value: result, expiresAt: Date.now() + 60 * 60 * 1000 });
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return res.json(result);
+    } finally { clearTimeout(timer); }
+  } catch {
+    return res.status(502).json({ error: 'Could not fetch link preview' });
+  }
+});
+
 app.put('/api/admin/site-config', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser || !isDeveloperUser(authUser)) return res.status(403).json({ error: 'Administrator access required' });
@@ -232,7 +290,7 @@ app.post('/api/auth/sync-profile', (req: Request, res: Response) => {
   try {
     const authUser = getAuthUser(req);
     if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
-    if (!authUser.email.endsWith('@echat.local')) return res.json({ user: db.sanitizeUser(authUser), synced: false });
+    if (!authUser.email.endsWith('@echat.local')) return res.json({ user: db.sanitizeUser(authUser, authUser.id), synced: false });
 
     const { name, avatar, coverPhoto, bio, location } = req.body as Record<string, unknown>;
     const cleanName = typeof name === 'string' ? name.trim() : '';
@@ -362,7 +420,7 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
     });
 
     res.json({
-      user: db.sanitizeUser(user),
+      user: db.sanitizeUser(user, user.id),
       token: user.id
     });
   } catch (e: any) {
@@ -392,7 +450,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     }
 
     res.json({
-      user: db.sanitizeUser(user),
+      user: db.sanitizeUser(user, user.id),
       token: user.id
     });
   } catch (e: any) {
@@ -441,7 +499,7 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
   const user = getAuthUser(req);
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
   if (user.isBlocked) return res.status(403).json({ error: 'Account suspended' });
-  res.json({ user: db.sanitizeUser(user) });
+  res.json({ user: db.sanitizeUser(user, user.id) });
 });
 
 // Quick switcher to effortlessly test multiple personas
@@ -452,12 +510,14 @@ app.post('/api/auth/quick-switch', (req: Request, res: Response) => {
   const { userId } = req.body;
   const user = db.getUserById(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ user: db.sanitizeUser(user), token: user.id });
+  // Account switching does not make the requester the data subject for privacy filtering.
+  res.json({ user: db.sanitizeUser(user, getAuthUser(req)?.id), token: user.id });
 });
 
 // ----------------- USERS ROUTES -----------------
 app.get('/api/users', (req: Request, res: Response) => {
-  const users = db.getUsers().map(u => db.sanitizeUser(u));
+  const viewer = getAuthUser(req);
+  const users = db.getUsers().map(u => db.sanitizeUser(u, viewer?.id));
   res.json(users);
 });
 
@@ -475,10 +535,10 @@ app.get('/api/users/:id', (req: Request, res: Response) => {
   const friends = user.friends
     .map(fId => db.getUserById(fId))
     .filter(Boolean)
-    .map(f => db.sanitizeUser(f!));
+    .map(f => db.sanitizeUser(f!, viewer?.id));
 
   res.json({
-    user: db.sanitizeUser(user),
+    user: db.sanitizeUser(user, viewer?.id),
     posts,
     friends
   });
@@ -490,13 +550,23 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     return res.status(403).json({ error: 'Unauthorized to update this profile' });
   }
 
-  const { name, bio, location, work, education, avatar, coverPhoto, dob, privacySettings, blockedUsers } = req.body;
+  const { name, bio, location, work, education, avatar, coverPhoto, dob, dobVisibility, privacySettings, blockedUsers } = req.body;
+
+  if (dob !== undefined && dob !== '') {
+    if (typeof dob !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) return res.status(400).json({ error: 'Please enter a valid date of birth' });
+    const birthDate = new Date(`${dob}T00:00:00`);
+    let age = new Date().getFullYear() - birthDate.getFullYear();
+    const monthDelta = new Date().getMonth() - birthDate.getMonth();
+    if (monthDelta < 0 || (monthDelta === 0 && new Date().getDate() < birthDate.getDate())) age--;
+    if (Number.isNaN(birthDate.getTime()) || age < 18) return res.status(400).json({ error: 'Date of birth must be valid and at least 18 years ago' });
+  }
 
   // Privacy settings: accept only known keys with known values.
   const cleanPrivacy: Record<string, unknown> | undefined =
     privacySettings && typeof privacySettings === 'object'
       ? {
           ...(['public', 'friends', 'only_me'].includes(privacySettings.postVisibility) && { postVisibility: privacySettings.postVisibility }),
+          ...(['public', 'friends', 'only_me', 'month_day_only'].includes(privacySettings.dobVisibility) && { dobVisibility: privacySettings.dobVisibility }),
           ...(['everyone', 'friends', 'nobody'].includes(privacySettings.whoCanCallMe) && { whoCanCallMe: privacySettings.whoCanCallMe }),
           ...(typeof privacySettings.twoFactorAuth === 'boolean' && { twoFactorAuth: privacySettings.twoFactorAuth })
         }
@@ -516,7 +586,8 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
 
   const updated = db.updateUser(req.params.id, {
     ...(name && { name: String(name).trim() }),
-    ...(dob && { dob }),
+    ...(dob !== undefined && { dob }),
+    ...(['public', 'friends', 'only_me', 'month_day_only'].includes(dobVisibility) && { dobVisibility }),
     ...(bio !== undefined && { bio }),
     ...(location !== undefined && { location }),
     ...(work !== undefined && { work }),
@@ -543,7 +614,7 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     });
   }
 
-  res.json(sanitized);
+  res.json(db.sanitizeUser(updated, authUser.id));
 });
 
 
@@ -734,27 +805,30 @@ app.get('/api/dashboard', (req: Request, res: Response) => {
   const identityPageId = String(req.get('x-page-id') || '');
   const identityPage = identityPageId ? db.getPageById(identityPageId) : null;
   if (identityPageId && identityPage?.ownerId !== authUser.id) return res.status(403).json({ error: 'You do not manage this Page' });
-  const posts = db.getPosts(authUser.id).filter(post => post.authorId === authUser.id && (identityPage ? post.pageId === identityPage.id : !post.pageId));
+  const allUserPosts = db.getPosts(authUser.id).filter(post => post.authorId === authUser.id && (identityPage ? post.pageId === identityPage.id : !post.pageId));
+  const posts = allUserPosts.filter(post => post.type !== 'reel');
+  const reels = allUserPosts.filter(post => post.type === 'reel');
   const viewsByDay = Array.from({ length: 30 }, (_, index) => {
     const day = new Date();
     day.setHours(0, 0, 0, 0);
     day.setDate(day.getDate() - (29 - index));
     const start = day.getTime();
     const end = start + 24 * 60 * 60 * 1000;
-    return { date: day.toISOString().slice(0, 10), views: posts.reduce((sum, post) => sum + (post.viewRecords || []).filter(record => record.viewedAt >= start && record.viewedAt < end).length, 0) };
+    return { date: day.toISOString().slice(0, 10), views: allUserPosts.reduce((sum, post) => sum + (post.viewRecords || []).filter(record => record.viewedAt >= start && record.viewedAt < end).length, 0) };
   });
   const user = db.getUserById(authUser.id);
   const ranked = [...posts].sort((a, b) => (b.viewsCount || 0) - (a.viewsCount || 0));
   res.json({
     stats: {
-      views: posts.reduce((sum, post) => sum + (post.viewsCount || 0), 0),
-      likes: posts.reduce((sum, post) => sum + post.reactions.length, 0),
-      comments: posts.reduce((sum, post) => sum + post.comments.length, 0),
+      views: allUserPosts.reduce((sum, post) => sum + (post.viewsCount || 0), 0),
+      likes: allUserPosts.reduce((sum, post) => sum + post.reactions.length, 0),
+      comments: allUserPosts.reduce((sum, post) => sum + post.comments.length, 0),
     followers: identityPage ? identityPage.followers.length : user?.friends?.length || 0,
-      posts: posts.length
+      posts: allUserPosts.length
     },
     viewsByDay,
-    posts: ranked.map(populatePost)
+    posts: ranked.map(populatePost),
+    reels: reels.sort((a, b) => (b.viewsCount || 0) - (a.viewsCount || 0)).map(populatePost)
   });
 });
 
@@ -782,7 +856,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
-  const { content, mediaUrl, mediaType, feeling, privacy, taggedUserIds } = req.body;
+  const { content, mediaUrl, mediaType, feeling, privacy, taggedUserIds, type } = req.body;
   const requestedMediaUrls = Array.isArray(req.body.mediaUrls) ? req.body.mediaUrls : [];
   if (requestedMediaUrls.length > 10) return res.status(400).json({ error: 'A post can include at most 10 images' });
   const mediaUrls = requestedMediaUrls.filter((url: unknown): url is string => typeof url === 'string' && (/^https:\/\//i.test(url) || url.startsWith('/uploads/'))).slice(0, 10);
@@ -809,7 +883,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
     mediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds, mediaUrls }
+    { taggedUserIds: cleanTaggedIds, mediaUrls, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post' }
   );
   if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 
@@ -1151,6 +1225,14 @@ app.post('/api/messages', (req: Request, res: Response) => {
   res.json(message);
 });
 
+app.delete('/api/messages/:id', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  if (!db.deleteMessageForUser(req.params.id, authUser.id)) return res.status(404).json({ error: 'Message not found' });
+  socketManager.sendToUser(authUser.id, { type: 'message_deleted', messageId: req.params.id, userId: authUser.id });
+  res.json({ success: true, messageId: req.params.id });
+});
+
 app.put('/api/messages/:id', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
@@ -1158,12 +1240,15 @@ app.put('/api/messages/:id', (req: Request, res: Response) => {
   if (!text || text.length > 4000) return res.status(400).json({ error: 'Message text must be 1 to 4000 characters' });
   const current = db.getConversationPartners(authUser.id).flatMap(partnerId => db.getConversation(authUser.id, partnerId)).find(message => message.id === req.params.id);
   if (!current || current.senderId !== authUser.id) return res.status(404).json({ error: 'Message not found' });
-  if (!current.text || Date.now() - current.createdAt > 15 * 60 * 1000) return res.status(403).json({ error: 'Messages can only be edited within 15 minutes' });
+  if (!current.text || current.mediaUrl || current.mediaType || current.attachments?.length) return res.status(400).json({ error: 'Only text messages can be edited' });
+  if (Date.now() - current.createdAt > 15 * 60 * 1000) return res.status(403).json({ error: 'Messages can only be edited within 15 minutes' });
   const updated = db.editMessage(current.id, authUser.id, text);
   if (!updated) return res.status(403).json({ error: 'This message can no longer be edited' });
-  socketManager.sendToUser(updated.senderId, { type: 'message_updated', message: updated });
-  socketManager.sendToUser(updated.receiverId, { type: 'message_updated', message: updated });
-  res.json(updated);
+  const visibleMessage = { ...updated };
+  delete visibleMessage.editHistory;
+  socketManager.sendToUser(updated.senderId, { type: 'message_updated', event: 'message-edited', message: visibleMessage });
+  socketManager.sendToUser(updated.receiverId, { type: 'message_updated', event: 'message-edited', message: visibleMessage });
+  res.json(visibleMessage);
 });
 
 app.post('/api/messages/seen', (req: Request, res: Response) => {
@@ -1194,7 +1279,14 @@ app.get('/api/notifications', (req: Request, res: Response) => {
       actor: actor ? db.sanitizeUser(actor) : null
     };
   });
-  res.json(notifs);
+  const today = new Date().toISOString().slice(5, 10);
+  const birthdayDate = new Date().toISOString().slice(0, 10);
+  const birthdays = authUser.friends.flatMap(friendId => {
+    const friend = db.getUserById(friendId);
+    if (!friend || !friend.friends.includes(authUser.id) || !friend.dob || friend.dob.slice(5) !== today || friend.dobVisibility === 'only_me') return [];
+    return [{ id: `birthday_${friend.id}_${birthdayDate}`, userId: authUser.id, actorId: friend.id, actor: db.sanitizeUser(friend, authUser.id), type: 'birthday' as const, targetId: friend.id, message: `Today is ${friend.name}'s birthday`, read: false, createdAt: Date.now() }];
+  });
+  res.json([...birthdays, ...notifs]);
 });
 
 app.post('/api/notifications/read', (req: Request, res: Response) => {

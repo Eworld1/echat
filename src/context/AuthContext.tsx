@@ -99,6 +99,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [activePage, setActivePage] = useState<Page | null>(null);
 
   useEffect(() => {
+    const onProfileUpdated = (event: Event) => {
+      const updated = (event as CustomEvent<Partial<User> & { id?: string }>).detail;
+      if (!updated || !updated.id) return;
+      setUser(current => {
+        if (!current || current.id !== updated.id) return current;
+        return { ...current, ...updated, id: current.id } as User;
+      });
+    };
+    window.addEventListener('echat:profile-updated', onProfileUpdated);
+    return () => window.removeEventListener('echat:profile-updated', onProfileUpdated);
+  }, []);
+
+  useEffect(() => {
     if (!user) { setMyPages([]); setActivePage(null); localStorage.removeItem('echat_active_page'); return; }
     let cancelled = false;
     api.getMyPages().then(pages => {
@@ -440,15 +453,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateCurrentUser = async (updates: Partial<User>) => {
     if (!user) return;
+    const previous = user;
+    const optimistic = { ...user, ...updates };
+    const publishProfile = (profile: User) => {
+      const snapshot = { id: profile.id, name: profile.name, avatar: profile.avatar, coverPhoto: profile.coverPhoto, bio: profile.bio };
+      localStorage.setItem('echat_profile_snapshot', JSON.stringify(snapshot));
+      window.dispatchEvent(new CustomEvent('echat:profile-updated', { detail: snapshot }));
+    };
+    setUser(optimistic);
+    publishProfile(optimistic);
     try {
-      await updateDoc(doc(db, 'users', user.id), updates as any);
-      const updated = { ...user, ...updates };
+      const [firebaseResult, serverResult] = await Promise.allSettled([
+        updateDoc(doc(db, 'users', user.id), updates as any),
+        api.updateProfile(user.id, updates)
+      ]);
+      if (firebaseResult.status === 'rejected' && serverResult.status === 'rejected') throw serverResult.reason;
+      const updated = serverResult.status === 'fulfilled' ? { ...optimistic, ...serverResult.value } : optimistic;
       setUser(updated);
-      api.updateProfile(user.id, updates).catch(() => {});
+      publishProfile(updated);
     } catch (err) {
       console.error('updateCurrentUser error:', err);
-      const updated = await api.updateProfile(user.id, updates);
-      setUser(updated);
+      setUser(previous);
+      publishProfile(previous);
+      throw err;
     }
   };
 

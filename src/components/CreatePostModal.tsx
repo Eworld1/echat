@@ -6,6 +6,7 @@ import { api } from '../services/api';
 import { X, Image, Smile, Globe, Users, Lock, Sparkles, UserPlus } from 'lucide-react';
 import { TagFriendsPicker } from './TagFriendsPicker';
 import { parseVideoLink } from '../utils/embedVideo';
+import { LinkPreviewCard } from './LinkPreviewCard';
 import type { User } from '../types';
 import confetti from 'canvas-confetti';
 
@@ -136,6 +137,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         mediaUrl: uploadedUrls[0],
         mediaUrls: uploadedUrls,
         mediaType: uploadedUrls.length ? mediaType : undefined,
+        type: videoOnly ? 'reel' : 'post',
         feeling: feeling || undefined,
         privacy: forcePublic ? 'public' : privacy,
         taggedUserIds: taggedFriends.map(f => f.id)
@@ -167,8 +169,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 animate-in fade-in">
+      <div className="bg-white rounded-none sm:rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 overflow-hidden flex flex-col h-[100dvh] sm:h-auto max-h-[100dvh] sm:max-h-[90vh]">
         {/* Header */}
         <div className="relative px-6 py-4 border-b border-slate-100 flex items-center justify-center">
           <h3 className="text-base font-bold text-slate-900">{title || t('create_post')}</h3>
@@ -243,11 +245,12 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         <div className="p-4 flex-1 overflow-y-auto">
           <textarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => { setContent(e.target.value); e.currentTarget.style.height = 'auto'; e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 360)}px`; }}
             placeholder={t('composer_mind', { name: user?.name?.split(' ')[0] || '' })}
             rows={4}
-            className="w-full text-base sm:text-lg text-slate-800 placeholder-slate-400 focus:outline-hidden resize-none bg-transparent"
+            className="min-h-[80px] w-full text-[17px] leading-relaxed sm:text-lg text-slate-800 placeholder-slate-400 focus:outline-hidden resize-none bg-transparent"
           />
+          {content && <LinkPreviewCard text={content} />}
           {parseVideoLink(content) && <p className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">Video link detected. Your post will include an in-app player with an external fallback.</p>}
 
           {/* Media preview */}

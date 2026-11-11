@@ -48,8 +48,18 @@ class Database {
   constructor() {
     const loaded = this.load();
     this.data = loaded.data;
+    let assignedPostTypes = false;
+    for (const post of this.data.posts) {
+      if (!post.type) {
+        // Existing videos were regular posts until the explicit Reel composer was added.
+        // Keep historical content in Posts; only newly tagged content belongs in Reels.
+        post.type = 'post';
+        assignedPostTypes = true;
+      }
+    }
     this.currentDbPath = loaded.path;
     this.removeLegacyTestAccounts();
+    if (assignedPostTypes) this.save();
   }
 
   private findExistingDbFile(): { path: string; raw: string } | null {
@@ -389,9 +399,18 @@ class Database {
     }
   }
 
-  sanitizeUser(user: User): Omit<User, 'passwordHash'> {
-    const { passwordHash, ...safe } = user;
-    return safe;
+  sanitizeUser(user: User, viewerId?: string): Omit<User, 'passwordHash'> & { dobMonthDay?: string } {
+    const { passwordHash, dob, dobVisibility = 'public', ...safe } = user;
+    const isOwner = viewerId === user.id;
+    const viewer = viewerId ? this.getUserById(viewerId) : undefined;
+    const isFriend = Boolean(viewer && user.friends.includes(viewer.id) && viewer.friends.includes(user.id));
+    if (!dob || isOwner || dobVisibility === 'public' || (dobVisibility === 'friends' && isFriend)) {
+      return { ...safe, ...(dob ? { dob } : {}), dobVisibility };
+    }
+    if (dobVisibility === 'month_day_only') {
+      return { ...safe, dobVisibility, ...(dob ? { dobMonthDay: dob.slice(5) } : {}) };
+    }
+    return { ...safe, dobVisibility };
   }
 
   sendFriendRequest(fromUserId: string, toUserId: string): boolean {
@@ -553,11 +572,12 @@ class Database {
     mediaType?: 'image' | 'video',
     feeling?: string,
     privacy: 'public' | 'friends' | 'only_me' = 'public',
-    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[] } = {}
+    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; type?: 'post' | 'reel' } = {}
   ): Post {
     const newPost: Post = {
       id: 'post_' + crypto.randomBytes(6).toString('hex'),
       authorId,
+      ...(extras.type ? { type: extras.type } : {}),
       content,
       mediaUrl,
       ...(extras.mediaUrls?.length ? { mediaUrls: extras.mediaUrls.slice(0, 10) } : {}),
@@ -744,7 +764,17 @@ class Database {
         (m.senderId === userA && m.receiverId === userB) ||
         (m.senderId === userB && m.receiverId === userA)
       )
-      .sort((a, b) => a.createdAt - b.createdAt);
+      .filter(message => !message.deletedFor?.includes(userA))
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map(message => { const visible = { ...message }; delete visible.editHistory; delete visible.deletedFor; return visible; });
+  }
+
+  deleteMessageForUser(messageId: string, userId: string): boolean {
+    const message = this.data.messages.find(item => item.id === messageId && (item.senderId === userId || item.receiverId === userId));
+    if (!message) return false;
+    message.deletedFor = Array.from(new Set([...(message.deletedFor || []), userId]));
+    this.save();
+    return true;
   }
 
   getConversationPartners(userId: string): string[] {
@@ -778,7 +808,8 @@ class Database {
 
   editMessage(messageId: string, senderId: string, text: string): Message | null {
     const message = this.data.messages.find(item => item.id === messageId && item.senderId === senderId);
-    if (!message || !message.text || Date.now() - message.createdAt > 15 * 60 * 1000) return null;
+    if (!message || !message.text || message.mediaUrl || message.mediaType || message.attachments?.length || Date.now() - message.createdAt > 15 * 60 * 1000) return null;
+    message.editHistory = [...(message.editHistory || []), { text: message.text, editedAt: Date.now() }];
     message.text = text;
     message.editedAt = Date.now();
     this.save();

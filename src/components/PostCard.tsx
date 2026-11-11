@@ -8,6 +8,7 @@ import { api } from '../services/api';
 import { assetUrl } from '../services/apiBase';
 import { VerifiedBadge } from './VerifiedBadge';
 import { VideoLinkCard } from './VideoLinkCard';
+import { LinkPreviewCard } from './LinkPreviewCard';
 import confetti from 'canvas-confetti';
 import {
   ThumbsUp,
@@ -77,6 +78,17 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [postViewers, setPostViewers] = useState<{ id: string; name: string; avatar: string; viewedAt: number }[]>([]);
   const [loadingViewers, setLoadingViewers] = useState(false);
   const [isReelMuted, setIsReelMuted] = useState(true);
+  const [profileOverrides, setProfileOverrides] = useState<Record<string, Partial<User>>>({});
+
+  useEffect(() => {
+    const updateProfile = (event: Event) => {
+      const profile = (event as CustomEvent<Partial<User>>).detail;
+      const id = profile?.id;
+      if (id) setProfileOverrides(current => ({ ...current, [id]: { ...current[id], ...profile } }));
+    };
+    window.addEventListener('echat:profile-updated', updateProfile);
+    return () => window.removeEventListener('echat:profile-updated', updateProfile);
+  }, []);
 
   const openPostDetail = () => {
     if (detailMode || showDetailModal) return;
@@ -138,12 +150,12 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   // Safe author access
-  const author: Partial<User> & { id: string; name: string; avatar: string } = post.author || {
+  const author: Partial<User> & { id: string; name: string; avatar: string } = { ...(post.author || {
     id: post.authorId,
     name: 'EChat User',
     avatar: initialsAvatar('Echat User'),
     isVerified: false
-  };
+  }), ...(profileOverrides[post.authorId] || {}) } as Partial<User> & { id: string; name: string; avatar: string };
 
   const myReaction = user ? post.reactions.find(r => r.userId === user.id) : null;
   const currentReactionMeta = myReaction ? REACTIONS.find(r => r.type === myReaction.type) : null;
@@ -452,6 +464,7 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       )}
       {!isEditing && post.content && <VideoLinkCard text={post.content} />}
+      {!isEditing && post.content && <LinkPreviewCard text={post.content} />}
 
       {/* Re-shared post: the original is embedded */}
       {post.sharedPostId && (
@@ -489,9 +502,9 @@ export const PostCard: React.FC<PostCardProps> = ({
 
       {/* Post Media (Image / Video) */}
       {postMediaUrls.length > 0 && (
-        <div className={`relative bg-slate-900 overflow-hidden flex items-center justify-center ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`}>
+        <div className={`relative mx-auto flex items-center justify-center overflow-hidden bg-slate-900 ${reelMode ? 'aspect-[9/16] max-h-[68dvh] w-full max-w-[min(100%,390px)]' : `w-full ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`}`}>
           {post.mediaType === 'video' ? (
-            <video ref={videoRef} src={assetUrl(postMediaUrls[0])} controls playsInline preload={reelMode ? 'metadata' : 'none'} muted={reelMode ? isReelMuted : false} className={`w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
+            <video ref={videoRef} src={assetUrl(postMediaUrls[0])} controls playsInline preload={reelMode ? 'metadata' : 'none'} muted={reelMode ? isReelMuted : false} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
           ) : (
             <div className={`grid w-full gap-0.5 ${postMediaUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
               {postMediaUrls.slice(0, 10).map((mediaUrl, index) => <img key={`${post.id}-${index}`} src={assetUrl(mediaUrl)} alt={`Post attachment ${index + 1}`} loading="lazy" className={`w-full object-cover cursor-pointer hover:opacity-95 transition ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'} ${postMediaUrls.length > 4 && index > 3 ? 'hidden' : ''}`} />)}
@@ -609,7 +622,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 value={commentInput}
                 onChange={(e) => setCommentInput(e.target.value)}
                 placeholder={t('write_comment')}
-                className="w-full bg-white text-slate-800 text-xs sm:text-sm pl-4 pr-10 py-2 rounded-full border border-slate-200 focus:border-blue-400 focus:outline-hidden transition shadow-2xs"
+                className="min-h-[48px] w-full bg-white text-slate-800 text-base pl-4 pr-10 py-2 rounded-full border border-slate-200 focus:border-blue-400 focus:outline-hidden transition shadow-2xs"
               />
               <button
                 type="submit"
@@ -624,11 +637,11 @@ export const PostCard: React.FC<PostCardProps> = ({
           {/* Comments list */}
           <div className="space-y-2.5 pt-1">
             {(post.comments || []).map((comment) => {
-              const commentAuthor = comment.author || {
+              const commentAuthor = { ...(comment.author || {
                 id: comment.authorId,
                 name: 'User',
                 avatar: initialsAvatar('Echat User')
-              };
+              }), ...(profileOverrides[comment.authorId] || {}) };
               return (
                 <div key={comment.id} className="flex items-start gap-2.5 group">
                   <img
@@ -648,6 +661,8 @@ export const PostCard: React.FC<PostCardProps> = ({
                       <p className="text-xs text-slate-700 mt-0.5 leading-relaxed break-words">
                         {comment.content}
                       </p>
+                      <VideoLinkCard text={comment.content} />
+                      <LinkPreviewCard text={comment.content} compact />
                     </div>
                     <div className="flex items-center gap-3 px-2 mt-0.5 text-[10px] text-slate-400 font-semibold">
                       <span>{new Date(comment.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>

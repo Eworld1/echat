@@ -152,9 +152,15 @@ const CallModalView: React.FC = () => {
   // Control: Switch Camera (Front / Back on mobile/tablets or between webcams)
   const switchCamera = async () => {
     if (!navigator.mediaDevices?.getUserMedia) return;
+    let newlyOpenedStream: MediaStream | null = null;
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices.filter(device => device.kind === 'videoinput');
+      if (cameras.length < 2) {
+        setCameraToast('Only one camera found');
+        window.setTimeout(() => setCameraToast(''), 1800);
+        return;
+      }
       const currentTrack = localStreamRef.current?.getVideoTracks()[0];
       const settings = currentTrack?.getSettings();
       const currentId = settings?.deviceId;
@@ -162,15 +168,16 @@ const CallModalView: React.FC = () => {
       const currentMode = settings?.facingMode === 'environment' ? 'environment' : settings?.facingMode === 'user' ? 'user' : facingMode;
       const nextMode = currentMode === 'user' ? 'environment' : 'user';
       const preferred = cameras.find(device => nextMode === 'environment' ? /back|rear|environment/i.test(device.label) : /front|user|facetime/i.test(device.label));
-      const nextCamera = cameras.length > 1 ? (currentIndex >= 0 ? cameras[(currentIndex + 1) % cameras.length] : preferred || cameras[0]) : undefined;
-      const newStream = await navigator.mediaDevices.getUserMedia({ video: nextCamera ? { deviceId: { exact: nextCamera.deviceId } } : { facingMode: { ideal: nextMode } }, audio: false });
+      const nextCamera = currentIndex >= 0 ? cameras[(currentIndex + 1) % cameras.length] : preferred || cameras[0];
+      newlyOpenedStream = await navigator.mediaDevices.getUserMedia({ video: nextCamera?.deviceId ? { deviceId: { exact: nextCamera.deviceId } } : { facingMode: { ideal: nextMode } }, audio: false });
 
-      const newVideoTrack = newStream.getVideoTracks()[0];
+      const newVideoTrack = newlyOpenedStream.getVideoTracks()[0];
       if (newVideoTrack && localStreamRef?.current) {
         const oldTrack = localStreamRef.current.getVideoTracks()[0];
         const pc = peerConnectionRef.current;
         const sender = pc?.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender || pc?.getSenders().find((s: RTCRtpSender) => s.track?.kind === 'video') || pc?.getSenders().find(item => !item.track);
-        if (sender) await sender.replaceTrack(newVideoTrack);
+        if (!sender) throw new Error('Video sender is unavailable');
+        await sender.replaceTrack(newVideoTrack);
         if (oldTrack) {
           localStreamRef.current.removeTrack(oldTrack);
           oldTrack.stop();
@@ -190,6 +197,7 @@ const CallModalView: React.FC = () => {
       }
     } catch (err) {
       console.warn('Switch camera error:', err);
+      newlyOpenedStream?.getTracks().forEach(track => track.stop());
       setCallControlError('Could not switch camera. Check camera permission and try again.');
     }
   };

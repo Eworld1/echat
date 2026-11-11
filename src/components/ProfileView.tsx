@@ -4,6 +4,8 @@ import { User, Post } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { PostCard } from './PostCard';
+import { ReelsViewer } from './ReelsViewer';
+import { ReelThumbnail } from './ReelThumbnail';
 import { VerifiedBadge } from './VerifiedBadge';
 import {
   Camera,
@@ -23,6 +25,7 @@ import {
   Users,
   Rocket,
   Sparkles
+  , Film
 } from 'lucide-react';
 
 interface ProfileViewProps {
@@ -52,7 +55,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const { user: currentUser, updateCurrentUser } = useAuth();
   const { startCall } = useSocket();
   const [profileData, setProfileData] = useState<{ user: User; posts: Post[]; friends: User[] } | null>(null);
-  const [activeTab, setActiveTab] = useState<'posts' | 'about' | 'friends' | 'photos'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'reels' | 'about' | 'friends' | 'photos'>('posts');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isBoosting, setIsBoosting] = useState(false);
@@ -60,6 +63,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   // Edit form state
   const [editName, setEditName] = useState('');
   const [editDob, setEditDob] = useState('');
+  const [editDobVisibility, setEditDobVisibility] = useState<User['dobVisibility']>('public');
   const [editBio, setEditBio] = useState('');
   const [editLocation, setEditLocation] = useState('');
   const [editWork, setEditWork] = useState('');
@@ -68,6 +72,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [editCover, setEditCover] = useState('');
   const [uploading, setUploading] = useState<'avatar' | 'cover' | null>(null);
   const [uploadError, setUploadError] = useState('');
+  const [profileNotice, setProfileNotice] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [selectedReel, setSelectedReel] = useState<Post | null>(null);
 
   const loadProfile = async () => {
     setIsLoading(true);
@@ -79,6 +86,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       setProfileData(data);
       setEditName(data.user.name);
       setEditDob(data.user.dob || '');
+      setEditDobVisibility(data.user.dobVisibility || 'public');
       setEditBio(data.user.bio || '');
       setEditLocation(data.user.location || '');
       setEditWork(data.user.work || '');
@@ -96,11 +104,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     loadProfile();
   }, [userId]);
 
+  useEffect(() => {
+    const updateViewedProfile = (event: Event) => {
+      const updated = (event as CustomEvent<Partial<User>>).detail;
+      if (!updated?.id || updated.id !== userId) return;
+      setProfileData(current => current ? { ...current, user: { ...current.user, ...updated } } : current);
+    };
+    window.addEventListener('echat:profile-updated', updateViewedProfile);
+    return () => window.removeEventListener('echat:profile-updated', updateViewedProfile);
+  }, [userId]);
+
   const isOwnProfile = currentUser?.id === userId;
   const isFriend = currentUser?.friends.includes(userId);
   const hasSentRequest = currentUser?.friendRequestsSent.includes(userId);
   const hasReceivedRequest = currentUser?.friendRequestsReceived.includes(userId);
-
   const handleBoost = async () => {
     if (!profileData?.user || isBoosting) return;
     try {
@@ -146,10 +163,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSavingProfile(true);
+    setProfileNotice('');
     try {
       await updateCurrentUser({
         name: editName,
         dob: editDob,
+        dobVisibility: editDobVisibility,
         bio: editBio,
         location: editLocation,
         work: editWork,
@@ -158,9 +178,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         coverPhoto: editCover
       });
       setIsEditModalOpen(false);
+      setProfileNotice('Profile updated');
       loadProfile();
     } catch (err) {
       console.error('Failed to update profile:', err);
+      setProfileNotice(err instanceof Error ? err.message : 'Could not update profile');
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -178,13 +202,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
     setUploadError('');
     setUploading(kind);
+    const previewUrl = URL.createObjectURL(file);
+    const previousImage = kind === 'avatar' ? editAvatar : editCover;
+    if (kind === 'avatar') setEditAvatar(previewUrl);
+    else setEditCover(previewUrl);
     try {
       const url = await api.uploadFile(file);
       if (kind === 'avatar') setEditAvatar(url);
       else setEditCover(url);
     } catch (err) {
+      if (kind === 'avatar') setEditAvatar(previousImage);
+      else setEditCover(previousImage);
       setUploadError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
+      URL.revokeObjectURL(previewUrl);
       setUploading(null);
     }
   };
@@ -199,6 +230,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   }
 
   const { user, posts, friends } = profileData;
+  const profilePosts = posts;
+  const normalPosts = profilePosts.filter(post => post.type !== 'reel');
+  const reels = profilePosts.filter(post => post.type === 'reel' && post.mediaType === 'video');
+  const dobLabel = user.dob
+    ? `${new Date(user.dob).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}${getAge(user.dob) !== null ? ` (${getAge(user.dob)} years old)` : ''}`
+    : user.dobMonthDay
+      ? `Born on ${new Date(`2000-${user.dobMonthDay}`).toLocaleDateString([], { month: 'long', day: 'numeric' })}`
+      : '';
 
   // Extract all photos from user's posts
   const photos = posts.filter(p => p.mediaUrl && p.mediaType !== 'video').map(p => p.mediaUrl!);
@@ -434,15 +473,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 Studied at <strong className="text-slate-700 font-semibold">{user.education}</strong>
               </span>
             )}
-            {user.dob && (
+            {dobLabel && (
               <span className="flex items-center gap-1.5">
                 <Calendar size={15} className="text-pink-500" />
-                <span>
-                  Born <strong className="text-slate-700 font-semibold">{new Date(user.dob).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}</strong>
-                  {getAge(user.dob) !== null && (
-                    <span className="text-slate-500 font-normal ml-1">({getAge(user.dob)} years old)</span>
-                  )}
-                </span>
+                <span>{dobLabel.startsWith('Born on ') ? dobLabel : <>Born <strong className="text-slate-700 font-semibold">{dobLabel}</strong></>}</span>
               </span>
             )}
             <span className="flex items-center gap-1.5">
@@ -452,14 +486,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
 
           {/* Tabs */}
-          <div className="flex items-center gap-2 mt-6 border-t border-slate-100 pt-1">
+          <div className="flex items-center gap-2 mt-6 border-t border-slate-100 pt-1 overflow-x-auto">
             <button
               onClick={() => setActiveTab('posts')}
               className={`px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 transition ${
                 activeTab === 'posts' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-600 hover:text-slate-900'
               }`}
             >
-              Posts ({posts.length})
+              Posts ({normalPosts.length})
+            </button>
+            <button onClick={() => setActiveTab('reels')} className={`px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 transition ${activeTab === 'reels' ? 'border-fuchsia-600 text-fuchsia-600' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>
+              Reels ({reels.length})
             </button>
             <button
               onClick={() => setActiveTab('about')}
@@ -493,13 +530,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       <div className="mt-6">
         {activeTab === 'posts' && (
           <div className="space-y-4">
-            {posts.length === 0 ? (
+            {normalPosts.length === 0 ? (
               <div className="bg-white rounded-2xl p-8 text-center text-slate-400 border border-slate-200">
                 <FileText size={32} className="mx-auto mb-2 opacity-50" />
                 <p className="text-sm font-semibold">No posts yet</p>
               </div>
             ) : (
-              posts.map(p => (
+              normalPosts.map(p => (
                 <PostCard
                   key={p.id}
                   post={p}
@@ -512,16 +549,21 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         )}
 
+        {activeTab === 'reels' && (
+          reels.length ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {reels.map(reel => <ReelThumbnail key={reel.id} post={reel} onClick={() => setSelectedReel(reel)} />)}
+          </div> : <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500"><Film size={32} className="mx-auto mb-2 text-fuchsia-500" /><p className="font-bold">No Reels yet</p>{isOwnProfile && <p className="mt-1 text-sm">Create a short video Reel to share it here.</p>}</div>
+        )}
+
         {activeTab === 'about' && (
           <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-4">
             <h3 className="text-base font-bold text-slate-900">About {user.name}</h3>
             <div className="space-y-3 text-sm text-slate-700">
               <p><strong>Bio:</strong> {user.bio || 'No bio provided'}</p>
               <p><strong>Email:</strong> {user.email}</p>
-              {user.dob && (
+              {dobLabel && (
                 <p>
-                  <strong>Date of Birth:</strong> {new Date(user.dob).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}
-                  {getAge(user.dob) !== null && ` (${getAge(user.dob)} years old)`}
+                  <strong>Date of Birth:</strong> {dobLabel.startsWith('Born on ') ? dobLabel.slice(8) : dobLabel}
                 </p>
               )}
               <p><strong>Location:</strong> {user.location || 'Not specified'}</p>
@@ -576,6 +618,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         )}
       </div>
+
+      {profileNotice && <div role="status" className="fixed bottom-20 left-1/2 z-[70] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">{profileNotice}</div>}
+
+      {selectedReel && <ReelsViewer posts={reels} initialPostId={selectedReel.id} onClose={() => setSelectedReel(null)} onPostUpdated={() => { void loadProfile(); }} onPostDeleted={() => { setSelectedReel(null); void loadProfile(); }} onViewProfile={onViewProfile} />}
 
       {/* Edit Profile Modal */}
       {isEditModalOpen && (
@@ -699,6 +745,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 />
               </div>
 
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Birthday visibility</label>
+                <select value={editDobVisibility || 'public'} onChange={event => setEditDobVisibility(event.target.value as User['dobVisibility'])} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                  <option value="public">Public — show full date</option>
+                  <option value="friends">Friends only — show full date</option>
+                  <option value="only_me">Only me</option>
+                  <option value="month_day_only">Show month and day only</option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">Your full birth date is hidden from people who are not allowed to see it.</p>
+              </div>
+
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
                 <button
                   type="button"
@@ -709,9 +766,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 </button>
                 <button
                   type="submit"
+                  disabled={isSavingProfile || Boolean(uploading)}
                   className="px-6 py-2 font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-xs"
                 >
-                  Save Changes
+                  {isSavingProfile ? 'Saving…' : 'Save Changes'}
                 </button>
               </div>
             </form>

@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, useCallb
 import { useAuth } from './AuthContext';
 import { Message, Post, Story, LiveStream, LiveComment, Notification as AppNotification } from '../types';
 import { firestore } from '../services/firebase';
+import { playSound } from '../utils/sounds';
 import {
   collection,
   addDoc,
@@ -53,6 +54,7 @@ interface SocketContextType {
   socket: any;
   onNewMessage: (cb: (msg: Message) => void) => () => void;
   onMessageUpdated: (cb: (msg: Message) => void) => () => void;
+  onMessageDeleted: (cb: (messageId: string) => void) => () => void;
   onPostUpdated: (cb: (post: Post) => void) => () => void;
   onPostDeleted: (cb: (postId: string) => void) => () => void;
   onNotification: (cb: (notification: AppNotification) => void) => () => void;
@@ -258,6 +260,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Subscriptions
   const messageListeners = useRef<Set<(msg: Message) => void>>(new Set());
   const messageUpdatedListeners = useRef<Set<(msg: Message) => void>>(new Set());
+  const messageDeletedListeners = useRef<Set<(messageId: string) => void>>(new Set());
   const postUpdateListeners = useRef<Set<(post: Post) => void>>(new Set());
   const postDeleteListeners = useRef<Set<(postId: string) => void>>(new Set());
   const notificationListeners = useRef<Set<(n: AppNotification) => void>>(new Set());
@@ -456,11 +459,21 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
           case 'new_message':
           case 'message_sent':
+            if (data.type === 'new_message' && data.message?.senderId !== user?.id && localStorage.getItem('echat_active_chat') !== data.message?.senderId) playSound('message_in');
             messageListeners.current.forEach(cb => cb(data.message));
             break;
 
           case 'message_updated':
             messageUpdatedListeners.current.forEach(cb => cb(data.message));
+            break;
+
+          case 'message_deleted':
+            if (data.userId === user?.id && typeof data.messageId === 'string') messageDeletedListeners.current.forEach(cb => cb(data.messageId));
+            break;
+
+          case 'user_updated':
+          case 'developer_profile_updated':
+            if (data.user?.id) window.dispatchEvent(new CustomEvent('echat:profile-updated', { detail: data.user }));
             break;
 
           case 'new_notification':
@@ -1093,6 +1106,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => { messageUpdatedListeners.current.delete(cb); };
   };
 
+  const onMessageDeleted = (cb: (messageId: string) => void) => {
+    messageDeletedListeners.current.add(cb);
+    return () => { messageDeletedListeners.current.delete(cb); };
+  };
+
   const onNotification = (cb: (n: AppNotification) => void) => {
     notificationListeners.current.add(cb);
     return () => { notificationListeners.current.delete(cb); };
@@ -1189,6 +1207,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         socket: mockSocket,
         onNewMessage,
         onMessageUpdated,
+        onMessageDeleted,
         onPostUpdated,
         onPostDeleted,
         onNotification,

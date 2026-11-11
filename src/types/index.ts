@@ -5,7 +5,7 @@ export interface Reaction { userId: string; type: ReactionType; createdAt: numbe
 export interface User {
   id: string; name: string; email: string; passwordHash?: string; // FIX: Added
   avatar: string; coverPhoto: string; bio: string; location: string;
-  dob?: string; work?: string; education?: string;
+  dob?: string; dobMonthDay?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; work?: string; education?: string;
   role: 'user' | 'admin' | 'developer';
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
@@ -25,6 +25,7 @@ export interface Comment {
 
 export interface Post {
   id: string; authorId: string; author?: User; // FIX: optional
+  type?: 'post' | 'reel';
   content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video';
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
@@ -51,12 +52,12 @@ export interface Message {
   id: string; conversationId?: string; // Optional
   senderId: string; receiverId: string;
   text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio';
-  audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number;
+  audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number; editHistory?: { text: string; editedAt: number }[]; deletedFor?: string[];
 }
 
 export interface Notification {
   id: string; userId: string; actorId: string; actor?: User | null;
-  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement'; // FIX: Added
+  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement' | 'birthday'; // FIX: Added
   targetId?: string; message: string; read: boolean; createdAt: number;
   callType?: 'audio' | 'video';
 }

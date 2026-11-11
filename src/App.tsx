@@ -25,6 +25,9 @@ import { Events } from './pages/Events';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import { SplashScreen } from './components/SplashScreen';
+import { UpgradePrompt } from './components/UpgradePrompt';
+import { CreatePostModal } from './components/CreatePostModal';
+import { Home, Film, PlusSquare, MessageSquare, UserCircle } from 'lucide-react';
 import type { AppView } from './components/Navbar';
 
 export function MainApp() {
@@ -39,6 +42,7 @@ export function MainApp() {
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
+  const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
 
   // Live streaming states
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream | null>(null);
@@ -149,6 +153,7 @@ export function MainApp() {
     <div className="min-h-screen bg-[#F0F2F5] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
       <InstallAppBanner />
+      {splashHidden && <UpgradePrompt />}
 
       <Navbar
         currentView={currentView}
@@ -159,7 +164,7 @@ export function MainApp() {
       {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
 
       {/* Main Layout Container */}
-      <div className="flex-1 max-w-7xl w-full mx-auto px-2 sm:px-4 py-4 flex gap-4 sm:gap-6 justify-center">
+      <div className="flex-1 max-w-7xl w-full mx-auto px-2 sm:px-4 py-4 pb-20 lg:pb-4 flex gap-4 sm:gap-6 justify-center">
         {/* Left Sidebar (Desktop) */}
         <LeftSidebar
           currentView={currentView}
@@ -167,7 +172,7 @@ export function MainApp() {
         />
 
         {/* Central Stage */}
-        <main className="flex-1 min-w-0 max-w-3xl">
+        <main className={`flex-1 min-w-0 ${currentView === 'dashboard' ? 'max-w-5xl' : 'max-w-3xl'}`}>
           {currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
@@ -221,8 +226,18 @@ export function MainApp() {
         </main>
 
         {/* Right Contacts Sidebar (Desktop XL) */}
-        <RightSidebar onOpenChat={handleOpenChat} />
+        {currentView !== 'dashboard' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} /></div>}
       </div>
+
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-slate-200 bg-white/95 px-1 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_18px_rgba(15,23,42,.08)] backdrop-blur lg:hidden">
+        {[
+          { label: 'Home', Icon: Home, action: () => handleNavigate('feed') },
+          { label: 'Reels', Icon: Film, action: () => handleNavigate('reels') },
+          { label: 'Create', Icon: PlusSquare, action: () => setIsCreatePostOpen(true) },
+          { label: 'Chat', Icon: MessageSquare, action: () => setIsMessengerDrawerOpen(true) },
+          { label: 'Profile', Icon: UserCircle, action: () => user && handleNavigate('profile', user.id) }
+        ].map(({ label, Icon, action }) => <button key={label} onClick={action} className="flex min-h-14 flex-col items-center justify-center gap-0.5 text-slate-600 active:text-blue-700" style={{ touchAction: 'manipulation' }}><Icon size={21} /><span className="text-[10px] font-semibold">{label}</span></button>)}
+      </nav>
 
       {/* Floating Messenger Window */}
       {activeChatPartner && (
@@ -238,6 +253,7 @@ export function MainApp() {
         onClose={() => setIsMessengerDrawerOpen(false)}
         onSelectUser={handleOpenChat}
       />
+      <CreatePostModal isOpen={isCreatePostOpen} onClose={() => setIsCreatePostOpen(false)} onPostCreated={() => { setIsCreatePostOpen(false); handleNavigate('feed'); }} />
 
       {/* WebRTC Video / Audio Call Modal */}
       <CallModal />

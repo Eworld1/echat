@@ -46,6 +46,16 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose, onSelec
     }
   }, [isOpen, user?.id]);
 
+  useEffect(() => {
+    const updateUser = (event: Event) => {
+      const updated = (event as CustomEvent<Partial<User>>).detail;
+      if (!updated?.id) return;
+      setUsers(current => current.map(item => item.id === updated.id ? { ...item, ...updated } : item));
+    };
+    window.addEventListener('echat:profile-updated', updateUser);
+    return () => window.removeEventListener('echat:profile-updated', updateUser);
+  }, []);
+
   if (!isOpen) return null;
 
   const userList = Array.isArray(users) ? users : [];

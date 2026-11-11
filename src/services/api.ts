@@ -258,7 +258,7 @@ export const api = {
       return [];
     }
   },
-  async getDashboard(): Promise<{ stats: { views: number; likes: number; comments: number; followers: number; posts: number }; viewsByDay: { date: string; views: number }[]; posts: Post[] }> {
+  async getDashboard(): Promise<{ stats: { views: number; likes: number; comments: number; followers: number; posts: number }; viewsByDay: { date: string; views: number }[]; posts: Post[]; reels?: Post[] }> {
     const res = await fetch(apiUrl('/api/dashboard'), { headers: getHeaders() });
     return readResponse(res, 'Could not load dashboard');
   },
@@ -268,6 +268,7 @@ export const api = {
     mediaUrl?: string;
     mediaUrls?: string[];
     mediaType?: 'image' | 'video';
+    type?: 'post' | 'reel';
     feeling?: string;
     privacy?: 'public' | 'friends' | 'only_me';
     taggedUserIds?: string[];
@@ -422,6 +423,11 @@ export const api = {
   async editMessage(messageId: string, text: string): Promise<Message> {
     const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'PUT', headers: getHeaders(), body: JSON.stringify({ text }) });
     return readResponse<Message>(res, 'Could not edit this message');
+  },
+
+  async deleteMessage(messageId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'DELETE', headers: getHeaders() });
+    await readResponse<{ success: boolean }>(res, 'Could not delete this message');
   },
 
   async markMessagesSeen(partnerId: string) {
