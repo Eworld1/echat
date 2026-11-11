@@ -5,7 +5,7 @@ export interface Reaction { userId: string; type: ReactionType; createdAt: numbe
 export interface User {
   id: string; name: string; email: string; passwordHash?: string; // FIX: Added
   avatar: string; coverPhoto: string; bio: string; location: string;
-  dob?: string; dobMonthDay?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; work?: string; education?: string;
+  dob?: string; dobMonthDay?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
   role: 'user' | 'admin' | 'developer';
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
@@ -57,7 +57,7 @@ export interface Message {
 
 export interface Notification {
   id: string; userId: string; actorId: string; actor?: User | null;
-  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement' | 'birthday'; // FIX: Added
+  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement' | 'birthday' | 'birthday_reminder' | 'birthday_today'; // FIX: Added
   targetId?: string; message: string; read: boolean; createdAt: number;
   callType?: 'audio' | 'video';
 }

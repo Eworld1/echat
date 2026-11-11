@@ -587,6 +587,11 @@ export const api = {
   },
 
   // Notifications
+  async getBirthdays(): Promise<{ user: User; daysUntil: number; turns?: number }[]> {
+    const res = await fetch(apiUrl('/api/birthdays'), { headers: getHeaders() });
+    return readResponse<{ user: User; daysUntil: number; turns?: number }[]>(res, 'Failed to load birthdays');
+  },
+
   async getNotifications(): Promise<Notification[]> {
     try {
       const res = await fetch(apiUrl('/api/notifications'), { headers: getHeaders() });

@@ -704,7 +704,7 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     return res.status(403).json({ error: 'Unauthorized to update this profile' });
   }
 
-  const { name, bio, location, work, education, avatar, coverPhoto, dob, dobVisibility, privacySettings, blockedUsers } = req.body;
+  const { name, bio, location, work, education, avatar, coverPhoto, dob, dobVisibility, birthdayReminderEnabled, privacySettings, blockedUsers } = req.body;
 
   if (dob !== undefined && dob !== '') {
     if (typeof dob !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) return res.status(400).json({ error: 'Please enter a valid date of birth' });
@@ -742,6 +742,7 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     ...(name && { name: String(name).trim() }),
     ...(dob !== undefined && { dob }),
     ...(['public', 'friends', 'only_me', 'month_day_only'].includes(dobVisibility) && { dobVisibility }),
+    ...(typeof birthdayReminderEnabled === 'boolean' && { birthdayReminderEnabled }),
     ...(bio !== undefined && { bio }),
     ...(location !== undefined && { location }),
     ...(work !== undefined && { work }),
@@ -1425,6 +1426,72 @@ app.post('/api/messages/seen', (req: Request, res: Response) => {
 });
 
 // ----------------- NOTIFICATIONS ROUTES -----------------
+function birthdayParts(dob: string, year: number) {
+  const [month, day] = dob.slice(5).split('-').map(Number);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  return month === 2 && day === 29 && !leapYear ? { month: 2, day: 28 } : { month, day };
+}
+
+function birthdayDayDistance(dob: string, today: Date) {
+  const year = today.getUTCFullYear();
+  const todayUtc = Date.UTC(year, today.getUTCMonth(), today.getUTCDate());
+  let { month, day } = birthdayParts(dob, year);
+  let target = Date.UTC(year, month - 1, day);
+  if (target < todayUtc) {
+    ({ month, day } = birthdayParts(dob, year + 1));
+    target = Date.UTC(year + 1, month - 1, day);
+  }
+  return Math.round((target - todayUtc) / 86_400_000);
+}
+
+function runBirthdayReminders() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Freetown', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now);
+  const value = (key: string) => parts.find(part => part.type === key)?.value || '';
+  if (value('hour') !== '00' || value('minute') !== '01') return;
+  const dayKey = `${value('year')}-${value('month')}-${value('day')}`;
+  if (lastBirthdayReminderRun === dayKey) return;
+  lastBirthdayReminderRun = dayKey;
+  const today = new Date(`${dayKey}T00:00:00Z`);
+  const year = today.getUTCFullYear();
+  for (const birthdayUser of db.getUsers()) {
+    if (!birthdayUser.dob || birthdayUser.dobVisibility === 'only_me') continue;
+    const days = birthdayDayDistance(birthdayUser.dob, today);
+    if (days !== 0 && days !== 1) continue;
+    for (const friendId of birthdayUser.friends) {
+      const friend = db.getUserById(friendId);
+      if (!friend || !friend.friends.includes(birthdayUser.id) || friend.birthdayReminderEnabled === false) continue;
+      const type = days === 0 ? 'birthday_today' : 'birthday_reminder';
+      const targetId = `birthday:${birthdayUser.id}:${year}:${type}`;
+      if (db.getNotifications(friend.id).some(item => item.actorId === birthdayUser.id && item.targetId === targetId)) continue;
+      const message = days === 0 ? `Today is ${birthdayUser.name}'s birthday! Wish them a Happy Birthday 🎂` : `Tomorrow is ${birthdayUser.name}'s birthday! Send them a birthday wish.`;
+      const notification = db.addNotification({ userId: friend.id, actorId: birthdayUser.id, type, targetId, message, read: false });
+      socketManager.sendToUser(friend.id, { type: 'new_notification', notification: { ...notification, actor: db.sanitizeUser(birthdayUser, friend.id) } });
+    }
+  }
+}
+
+let lastBirthdayReminderRun = '';
+setInterval(runBirthdayReminders, 60_000).unref();
+
+app.get('/api/birthdays', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const today = new Date();
+  const friends = authUser.friends.flatMap(friendId => {
+    const friend = db.getUserById(friendId);
+    if (!friend || !friend.friends.includes(authUser.id) || !friend.dob || friend.dobVisibility === 'only_me') return [];
+    const days = birthdayDayDistance(friend.dob, today);
+    if (days < 0 || days > 7) return [];
+    const canShowAge = friend.dobVisibility !== 'month_day_only';
+    const birthYear = Number(friend.dob.slice(0, 4));
+    const birthday = birthdayParts(friend.dob, today.getUTCFullYear());
+    const turns = canShowAge ? today.getUTCFullYear() - birthYear + (days > 300 ? 1 : 0) : undefined;
+    return [{ user: db.sanitizeUser(friend, authUser.id), daysUntil: days, ...(turns !== undefined && { turns }), monthDay: `${String(birthday.month).padStart(2, '0')}-${String(birthday.day).padStart(2, '0')}` }];
+  }).sort((a, b) => a.daysUntil - b.daysUntil);
+  res.json(friends);
+});
+
 app.get('/api/notifications', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.json([]);
@@ -1436,14 +1503,7 @@ app.get('/api/notifications', (req: Request, res: Response) => {
       actor: actor ? db.sanitizeUser(actor) : null
     };
   });
-  const today = new Date().toISOString().slice(5, 10);
-  const birthdayDate = new Date().toISOString().slice(0, 10);
-  const birthdays = authUser.friends.flatMap(friendId => {
-    const friend = db.getUserById(friendId);
-    if (!friend || !friend.friends.includes(authUser.id) || !friend.dob || friend.dob.slice(5) !== today || friend.dobVisibility === 'only_me') return [];
-    return [{ id: `birthday_${friend.id}_${birthdayDate}`, userId: authUser.id, actorId: friend.id, actor: db.sanitizeUser(friend, authUser.id), type: 'birthday' as const, targetId: friend.id, message: `Today is ${friend.name}'s birthday`, read: false, createdAt: Date.now() }];
-  });
-  res.json([...birthdays, ...notifs]);
+  res.json(notifs);
 });
 
 app.post('/api/notifications/read', (req: Request, res: Response) => {

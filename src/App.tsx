@@ -27,7 +27,6 @@ import { Settings } from './pages/Settings';
 import { SplashScreen } from './components/SplashScreen';
 import { UpgradePrompt } from './components/UpgradePrompt';
 import { CreatePostModal } from './components/CreatePostModal';
-import { Home, Film, PlusSquare, MessageSquare, UserCircle } from 'lucide-react';
 import type { AppView } from './components/Navbar';
 
 export function MainApp() {
@@ -43,12 +42,7 @@ export function MainApp() {
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const [profileNavActive, setProfileNavActive] = useState(false);
-  const handleProfileMenuChange = useCallback((open: boolean) => {
-    setIsProfileMenuOpen(open);
-    if (open) setProfileNavActive(true);
-  }, []);
+  const handleProfileMenuChange = useCallback(() => {}, []);
 
   // Live streaming states
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream | null>(null);
@@ -234,18 +228,8 @@ export function MainApp() {
         </main>
 
         {/* Right Contacts Sidebar (Desktop XL) */}
-        {currentView !== 'dashboard' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} /></div>}
+        {currentView !== 'dashboard' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
       </div>
-
-      {!isProfileMenuOpen && <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid h-16 grid-cols-5 border-t border-slate-200 bg-white/95 px-1 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_18px_rgba(15,23,42,.08)] backdrop-blur lg:hidden dark:border-slate-700 dark:bg-[#0f1e2e]/95">
-        {[
-          { label: 'Home', Icon: Home, action: () => handleNavigate('feed') },
-          { label: 'Reels', Icon: Film, action: () => handleNavigate('reels') },
-          { label: 'Create', Icon: PlusSquare, action: () => setIsCreatePostOpen(true) },
-          { label: 'Chat', Icon: MessageSquare, action: () => setIsMessengerDrawerOpen(true) },
-          { label: 'Profile', Icon: UserCircle, action: () => user && handleNavigate('profile', user.id) }
-        ].map(({ label, Icon, action }) => <button key={label} onClick={() => { setProfileNavActive(false); action(); }} className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 ${((label === 'Home' && currentView === 'feed') || (label === 'Reels' && currentView === 'reels') || (label === 'Profile' && (currentView === 'profile' || profileNavActive))) ? 'text-blue-700 dark:text-white' : 'text-slate-500 dark:text-slate-300'}`} style={{ touchAction: 'manipulation' }}><Icon size={24} /><span className="text-[11px] font-semibold">{label}</span></button>)}
-      </nav>}
 
       {/* Floating Messenger Window */}
       {activeChatPartner && (

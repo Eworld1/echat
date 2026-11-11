@@ -107,6 +107,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   const profileTouchStartRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (!showSearchDropdown || window.innerWidth < 1025) return;
+    const timer = window.setTimeout(() => searchInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [showSearchDropdown]);
+
+  useEffect(() => {
     setShowProfileMenu(false);
     onProfileMenuChange(false);
     setSettingsExpanded(false);
@@ -445,7 +451,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className={`sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} bg-white border-b border-slate-200/90 shadow-2xs`}>
-      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px_48px]">
+      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
         <div className="contents">
@@ -458,7 +464,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Global Search Bar */}
-          <div ref={searchContainerRef} className="relative col-start-2 row-start-1 min-w-0 w-full min-[1025px]:mx-auto min-[1025px]:max-w-[500px]">
+          <div ref={searchContainerRef} className={`relative col-start-2 row-start-1 min-w-0 w-full ${showSearchDropdown ? 'min-[1025px]:fixed min-[1025px]:left-1/2 min-[1025px]:top-16 min-[1025px]:z-50 min-[1025px]:w-[min(500px,calc(100vw-24px))] min-[1025px]:-translate-x-1/2 min-[1025px]:rounded-full min-[1025px]:bg-white min-[1025px]:shadow-xl min-[1025px]:block' : 'min-[1025px]:hidden'}`}>
             <div className="relative flex items-center">
               <div className="absolute left-3 text-slate-400 flex items-center pointer-events-none">
                 {isSearching ? (
@@ -855,10 +861,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Center: Main Navigation Icons (Facebook style) */}
 
-        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-2 min-[1025px]:col-span-1">
+        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-2 min-[1025px]:col-span-1 min-[1025px]:row-start-1 min-[1025px]:overflow-visible">
           <button
             onClick={() => onNavigate('feed')}
-            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex items-center justify-center transition cursor-pointer ${
+            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex flex-col items-center justify-center gap-0 transition cursor-pointer ${
               currentView === 'feed'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'
@@ -866,19 +872,21 @@ export const Navbar: React.FC<NavbarProps> = ({
             title="Home News Feed"
           >
             <Home size={22} strokeWidth={currentView === 'feed' ? 2.5 : 2} />
+            <span className="text-[9px] leading-3 min-[1025px]:hidden">Home</span>
           </button>
 
           <button
             onClick={() => onNavigate('reels')}
-            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex items-center justify-center transition cursor-pointer ${currentView === 'reels' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
+            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex flex-col items-center justify-center gap-0 transition cursor-pointer ${currentView === 'reels' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
             title="Reels"
           >
             <Film size={22} strokeWidth={currentView === 'reels' ? 2.5 : 2} />
+            <span className="text-[9px] leading-3 min-[1025px]:hidden">Reels</span>
           </button>
 
           <button
             onClick={() => onNavigate('friends')}
-            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex items-center justify-center transition cursor-pointer relative ${
+            className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex flex-col items-center justify-center gap-0 transition cursor-pointer relative ${
               currentView === 'friends'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'
@@ -886,6 +894,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             title="Friends & Requests"
           >
             <Users size={22} strokeWidth={currentView === 'friends' ? 2.5 : 2} />
+            <span className="text-[9px] leading-3 min-[1025px]:hidden">Friends</span>
             {user && user.friendRequestsReceived.length > 0 && (
               <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white">
                 {user.friendRequestsReceived.length}
@@ -894,8 +903,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button onClick={() => onNavigate('pages')} className={`hidden h-12 min-w-14 max-w-28 flex-1 items-center justify-center border-b-[3px] transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:flex ${currentView === 'pages' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`} title="Pages"><Flag size={22} /></button>
-          <button onClick={onOpenMessenger} className="flex h-12 min-w-14 max-w-28 flex-1 items-center justify-center border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Messages"><MessageSquare size={22} /></button>
-          <button onClick={() => { setShowNotifications(value => !value); if (!showNotifications) handleMarkNotificationsRead(); }} className="relative flex h-12 min-w-14 max-w-28 flex-1 items-center justify-center border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Notifications"><Bell size={22} />{unreadNotificationsCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unreadNotificationsCount}</span>}</button>
+          <button onClick={onOpenMessenger} className="relative flex h-12 min-w-14 max-w-28 flex-1 flex-col items-center justify-center gap-0 border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Messages"><MessageSquare size={20} /><span className="text-[9px] leading-3">Messages</span>{unreadMessageCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white">{unreadMessageCount}</span>}</button>
+          <button onClick={() => { setShowNotifications(value => !value); if (!showNotifications) handleMarkNotificationsRead(); }} className="relative flex h-12 min-w-14 max-w-28 flex-1 flex-col items-center justify-center gap-0 border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Notifications"><Bell size={20} /><span className="text-[9px] leading-3">Notifications</span>{unreadNotificationsCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unreadNotificationsCount}</span>}</button>
 
           {isDeveloper && (
             <button
@@ -920,12 +929,14 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Right: Actions, Messenger, Notifications, Profile */}
         <div className="col-start-3 row-start-1 flex shrink-0 items-center justify-end gap-1 min-[1025px]:gap-2">
 
+          <button onClick={() => { setShowSearchDropdown(true); searchInputRef.current?.focus(); }} className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200 min-[1025px]:flex" title="Search EChat" aria-label="Search EChat"><Search size={19} /></button>
+
           <button onClick={onOpenCreate} className="hidden h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-700 min-[1025px]:flex" title="Create post"><PlusSquare size={19} /></button>
 
           {/* Messenger Icon */}
           <button
             onClick={onOpenMessenger}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10 relative cursor-pointer"
+            className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:relative min-[1025px]:flex min-[1025px]:h-10 min-[1025px]:w-10 cursor-pointer"
             title="Open Messenger"
           >
             <MessageSquare size={19} />
@@ -950,7 +961,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   }
                 }
               }}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10 relative cursor-pointer"
+              className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:relative min-[1025px]:flex min-[1025px]:h-10 min-[1025px]:w-10 cursor-pointer"
               title="Notifications"
             >
               <Bell size={19} />
@@ -986,6 +997,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         onClick={() => {
                           setShowNotifications(false);
                           if (n.type === 'message') onOpenMessenger();
+                          else if (n.type === 'birthday' || n.type === 'birthday_reminder' || n.type === 'birthday_today') onNavigate('profile', n.actorId);
                           else if ((n.type === 'post_tag' || n.type === 'post_share' || n.type === 'post_reaction' || n.type === 'post_comment' || n.type === 'post_new') && n.targetId) {
                             onNavigate('feed', undefined, n.targetId);
                           } else if (n.type === 'live_stream') onNavigate('feed');
@@ -1003,13 +1015,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                             alt="actor"
                             className="w-10 h-10 rounded-full object-cover"
                           />
-                          {(n.type === 'message' || n.type === 'missed_call') && (
+                          {(n.type === 'message' || n.type === 'missed_call' || n.type === 'birthday' || n.type === 'birthday_reminder' || n.type === 'birthday_today') && (
                             <span
                               className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-white ring-2 ring-white ${
-                                n.type === 'missed_call' ? 'bg-red-600' : 'bg-blue-600'
+                                n.type === 'missed_call' ? 'bg-red-600' : n.type.startsWith('birthday') ? 'bg-amber-500' : 'bg-blue-600'
                               }`}
                             >
-                              {n.type === 'missed_call' ? <PhoneMissed size={11} /> : <MessageCircle size={11} />}
+                              {n.type === 'missed_call' ? <PhoneMissed size={11} /> : n.type.startsWith('birthday') ? <span aria-hidden="true">🎂</span> : <MessageCircle size={11} />}
                             </span>
                           )}
                         </div>

@@ -238,6 +238,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     : user.dobMonthDay
       ? `Born on ${new Date(`2000-${user.dobMonthDay}`).toLocaleDateString([], { month: 'long', day: 'numeric' })}`
       : '';
+  const birthdayMonthDay = user.dob?.slice(5) || user.dobMonthDay;
+  const isBirthdayToday = Boolean(birthdayMonthDay && birthdayMonthDay === `${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` && (isOwnProfile || user.dobVisibility !== 'only_me'));
 
   // Extract all photos from user's posts
   const photos = posts.filter(p => p.mediaUrl && p.mediaType !== 'video').map(p => p.mediaUrl!);
@@ -263,6 +265,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </button>
           )}
         </div>
+
+        {isBirthdayToday && <div className="flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-amber-50 to-orange-50 px-5 py-3 text-amber-950 dark:from-amber-950/50 dark:to-orange-950/40 dark:text-amber-100"><div className="font-semibold">🎂 {isOwnProfile ? `Happy Birthday, ${user.name}! Your friends can see it’s your birthday.` : `Today is ${user.name}’s Birthday!`}</div>{!isOwnProfile && <button type="button" onClick={() => onOpenChat(user)} className="min-h-10 rounded-full bg-amber-500 px-4 text-sm font-bold text-white hover:bg-amber-600">Wish them Happy Birthday</button>}</div>}
 
         {/* Profile Info Header */}
         <div className="px-6 pb-6 pt-0 relative">
@@ -739,7 +743,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 <input
                   type="date"
                   value={editDob}
-                  max={new Date(new Date().setFullYear(new Date().getFullYear() - 13)).toISOString().split('T')[0]}
+                  max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0]}
                   onChange={e => setEditDob(e.target.value)}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                 />
@@ -754,6 +758,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <option value="month_day_only">Show month and day only</option>
                 </select>
                 <p className="mt-1 text-[11px] text-slate-500">Your full birth date is hidden from people who are not allowed to see it.</p>
+                {editDobVisibility === 'only_me' && <p className="mt-1 text-[11px] font-medium text-amber-700">Your friends will not be notified about your birthday.</p>}
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">

@@ -45,6 +45,10 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     const saved = localStorage.getItem('echat_notifications');
     return saved !== null ? saved === 'true' : true;
   });
+  const [birthdayRemindersEnabled, setBirthdayRemindersEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('echat_birthday_reminders');
+    return saved !== null ? saved === 'true' : user?.birthdayReminderEnabled !== false;
+  });
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('echat_sound');
     return saved !== null ? saved === 'true' : true;
@@ -78,6 +82,8 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
 
   useEffect(() => {
     if (user) {
+      const savedBirthdayPreference = localStorage.getItem('echat_birthday_reminders');
+      setBirthdayRemindersEnabled(savedBirthdayPreference !== null ? savedBirthdayPreference === 'true' : user.birthdayReminderEnabled !== false);
       setName(user.name || '');
       setEmail(user.email || '');
       setBio(user.bio || '');
@@ -127,6 +133,21 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     window.dispatchEvent(new Event('echat:chat-sound-settings'));
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 3000);
+  };
+
+  const handleBirthdayReminders = async () => {
+    if (!user) return;
+    const next = !birthdayRemindersEnabled;
+    setBirthdayRemindersEnabled(next);
+    localStorage.setItem('echat_birthday_reminders', String(next));
+    try {
+      const updated = await api.updateProfile(user.id, { birthdayReminderEnabled: next });
+      updateUser(updated);
+    } catch (error) {
+      setBirthdayRemindersEnabled(!next);
+      localStorage.setItem('echat_birthday_reminders', String(!next));
+      alert(error instanceof Error ? error.message : 'Could not save birthday reminder preference');
+    }
   };
 
   // Unblock user
@@ -485,6 +506,11 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                     }`}
                   />
                 </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 p-3">
+                <div><div className="text-sm font-bold text-slate-900">Birthday Reminders</div><div className="text-xs text-slate-500">Notify me about friends’ birthdays.</div></div>
+                <button type="button" role="switch" aria-checked={birthdayRemindersEnabled} aria-label="Notify me about friends’ birthdays" onClick={handleBirthdayReminders} className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${birthdayRemindersEnabled ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${birthdayRemindersEnabled ? 'translate-x-5' : 'translate-x-0'}`} /></button>
               </div>
 
               <div className="rounded-xl border border-slate-200 p-4">

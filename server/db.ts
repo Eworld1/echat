@@ -340,6 +340,7 @@ class Database {
       name: user.name,
       email: user.email.toLowerCase().trim(),
       dob: user.dob,
+      birthdayReminderEnabled: user.birthdayReminderEnabled ?? true,
       passwordHash: hashPassword(user.password || ''),
       avatar: user.avatar || initialsAvatar(user.name),
       coverPhoto: user.coverPhoto || gradientCover(user.name),

@@ -7,12 +7,14 @@ import { useSocket } from '../context/SocketContext';
 import { Search, Phone, Video, ExternalLink, ShieldCheck } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { TermsModal } from './TermsModal';
+import { BirthdayCard } from './BirthdayCard';
 
 interface RightSidebarProps {
   onOpenChat: (user: User) => void;
+  onViewProfile?: (userId: string) => void;
 }
 
-export const RightSidebar: React.FC<RightSidebarProps> = ({ onOpenChat }) => {
+export const RightSidebar: React.FC<RightSidebarProps> = ({ onOpenChat, onViewProfile = () => {} }) => {
   const { user } = useAuth();
   const { t } = usePreferences();
   const { onlineUserIds, startCall } = useSocket();
@@ -48,6 +50,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ onOpenChat }) => {
 
   return (
     <aside className="w-64 xl:w-72 flex-shrink-0 hidden xl:block sticky top-18 h-[calc(100vh-5rem)] overflow-y-auto pl-2 select-none">
+
+      <BirthdayCard onViewProfile={onViewProfile} onSendMessage={onOpenChat} />
       
       {/* Sponsored / Featured Box */}
       <div className="mb-6 pb-4 border-b border-slate-200/80">
