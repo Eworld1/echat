@@ -40,7 +40,7 @@ export const Feed: React.FC<FeedProps> = ({
     setIsLoading(true);
     try {
       const data = await api.getPosts();
-      setPosts(data);
+      setPosts(data.filter(post => post.type === 'post' && post.isReel !== true && post.videoType !== 'reel'));
     } catch (err) {
       console.error('Failed to load posts:', err);
     } finally {
@@ -52,11 +52,15 @@ export const Feed: React.FC<FeedProps> = ({
     loadPosts();
 
     const unsubNew = onNewPost((newPost) => {
-      setPosts(prev => [newPost, ...prev.filter(p => p.id !== newPost.id)]);
+      if (newPost.type === 'post' && newPost.isReel !== true && newPost.videoType !== 'reel') {
+        setPosts(prev => [newPost, ...prev.filter(p => p.id !== newPost.id)]);
+      }
     });
 
     const unsubUpdate = onPostUpdated((updatedPost) => {
-      setPosts(prev => prev.map(p => p.id === updatedPost.id ? updatedPost : p));
+      setPosts(prev => updatedPost.type === 'post' && updatedPost.isReel !== true && updatedPost.videoType !== 'reel'
+        ? prev.map(p => p.id === updatedPost.id ? updatedPost : p)
+        : prev.filter(p => p.id !== updatedPost.id));
     });
 
     const unsubDelete = onPostDeleted((postId) => {

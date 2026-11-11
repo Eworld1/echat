@@ -681,9 +681,11 @@ app.get('/api/users/:id', (req: Request, res: Response) => {
 
   // Get user's posts (only those the person looking at this profile is allowed to see)
   const viewer = getAuthUser(req);
-  const posts = db.getPosts(viewer?.id)
+  const allUserPosts = db.getPosts(viewer?.id)
     .filter(p => p.authorId === user.id)
-    .map(p => populatePost(p));
+    ;
+  const posts = allUserPosts.filter(p => p.type === 'post').map(p => populatePost(p));
+  const reels = allUserPosts.filter(p => p.type === 'reel').map(p => populatePost(p));
 
   // Get friends details
   const friends = user.friends
@@ -694,8 +696,21 @@ app.get('/api/users/:id', (req: Request, res: Response) => {
   res.json({
     user: db.sanitizeUser(user, viewer?.id),
     posts,
+    reels,
     friends
   });
+});
+
+app.get('/api/users/:id/posts', (req: Request, res: Response) => {
+  const viewer = getAuthUser(req);
+  const visiblePosts = db.getPosts(viewer?.id).filter(post => post.authorId === req.params.id && post.type === 'post').map(populatePost);
+  res.json(visiblePosts);
+});
+
+app.get('/api/users/:id/reels', (req: Request, res: Response) => {
+  const viewer = getAuthUser(req);
+  const visibleReels = db.getPosts(viewer?.id).filter(post => post.authorId === req.params.id && post.type === 'reel').map(populatePost);
+  res.json(visibleReels);
 });
 
 app.put('/api/users/:id', (req: Request, res: Response) => {
@@ -704,7 +719,7 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     return res.status(403).json({ error: 'Unauthorized to update this profile' });
   }
 
-  const { name, bio, location, work, education, avatar, coverPhoto, dob, dobVisibility, birthdayReminderEnabled, privacySettings, blockedUsers } = req.body;
+  const { name, bio, location, work, education, avatar, coverPhoto, dob, dobVisibility, birthdayReminderEnabled, reelsAutoplay, reelsWifiOnly, privacySettings, blockedUsers } = req.body;
 
   if (dob !== undefined && dob !== '') {
     if (typeof dob !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) return res.status(400).json({ error: 'Please enter a valid date of birth' });
@@ -743,6 +758,8 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     ...(dob !== undefined && { dob }),
     ...(['public', 'friends', 'only_me', 'month_day_only'].includes(dobVisibility) && { dobVisibility }),
     ...(typeof birthdayReminderEnabled === 'boolean' && { birthdayReminderEnabled }),
+    ...(typeof reelsAutoplay === 'boolean' && { reelsAutoplay }),
+    ...(typeof reelsWifiOnly === 'boolean' && { reelsWifiOnly }),
     ...(bio !== undefined && { bio }),
     ...(location !== undefined && { location }),
     ...(work !== undefined && { work }),
@@ -950,7 +967,14 @@ app.get('/api/search', (req: Request, res: Response) => {
 app.get('/api/posts', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   const rawPosts = db.getPosts(authUser?.id);
-  const populated = rawPosts.map(p => populatePost(p));
+  const populated = rawPosts.filter(p => p.type === 'post').map(p => populatePost(p));
+  res.json(populated);
+});
+
+app.get('/api/reels', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  const rawReels = db.getPosts(authUser?.id).filter(p => p.type === 'reel' && p.mediaType === 'video');
+  const populated = rawReels.map(p => populatePost(p));
   res.json(populated);
 });
 
@@ -961,7 +985,7 @@ app.get('/api/dashboard', (req: Request, res: Response) => {
   const identityPage = identityPageId ? db.getPageById(identityPageId) : null;
   if (identityPageId && identityPage?.ownerId !== authUser.id) return res.status(403).json({ error: 'You do not manage this Page' });
   const allUserPosts = db.getPosts(authUser.id).filter(post => post.authorId === authUser.id && (identityPage ? post.pageId === identityPage.id : !post.pageId));
-  const posts = allUserPosts.filter(post => post.type !== 'reel');
+  const posts = allUserPosts.filter(post => post.type === 'post');
   const reels = allUserPosts.filter(post => post.type === 'reel');
   const viewsByDay = Array.from({ length: 30 }, (_, index) => {
     const day = new Date();
@@ -979,7 +1003,7 @@ app.get('/api/dashboard', (req: Request, res: Response) => {
       likes: allUserPosts.reduce((sum, post) => sum + post.reactions.length, 0),
       comments: allUserPosts.reduce((sum, post) => sum + post.comments.length, 0),
     followers: identityPage ? identityPage.followers.length : user?.friends?.length || 0,
-      posts: allUserPosts.length
+      posts: posts.length
     },
     viewsByDay,
     posts: ranked.map(populatePost),
@@ -1041,7 +1065,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
     mediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds, mediaUrls, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
+    { taggedUserIds: cleanTaggedIds, mediaUrls, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', isReel: type === 'reel' && mediaType === 'video', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
   );
   if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 

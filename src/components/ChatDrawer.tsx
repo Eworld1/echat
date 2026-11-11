@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { Search, X, MessageSquare, Phone, Video } from 'lucide-react';
+import { useBackButton } from '../hooks/useBackButton';
 
 interface ChatDrawerProps {
   isOpen: boolean;
@@ -12,6 +13,7 @@ interface ChatDrawerProps {
 }
 
 export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose, onSelectUser }) => {
+  useBackButton(isOpen, onClose, 'chat-drawer');
   const { user } = useAuth();
   const { onlineUserIds, startCall } = useSocket();
   const [users, setUsers] = useState<User[]>([]);

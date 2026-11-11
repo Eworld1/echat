@@ -10,6 +10,7 @@ import { LinkPreviewCard } from './LinkPreviewCard';
 import type { User } from '../types';
 import confetti from 'canvas-confetti';
 import { makeVideoThumbnail, compressVideoInBrowser } from '../utils/video';
+import { useBackButton } from '../hooks/useBackButton';
 
 interface CreatePostModalProps {
   isOpen: boolean;
@@ -41,6 +42,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   videoOnly = false
 }) => {
   const { user } = useAuth();
+  useBackButton(isOpen, onClose, `create-post-${videoOnly ? 'reel' : 'post'}`);
   const { t } = usePreferences();
   const [content, setContent] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');

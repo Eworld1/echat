@@ -337,7 +337,7 @@ export const api = {
     return readResponse<import('../types').SiteConfig>(res, 'Could not save welcome page settings');
   },
 
-  async getUserProfile(id: string): Promise<{ user: User; posts: Post[]; friends: User[] }> {
+  async getUserProfile(id: string): Promise<{ user: User; posts: Post[]; reels?: Post[]; friends: User[] }> {
     const res = await fetch(apiUrl(`/api/users/${id}`), { headers: getHeaders() });
     return readResponse<{ user: User; posts: Post[]; friends: User[] }>(res, 'User not found');
   },
@@ -392,6 +392,16 @@ export const api = {
   async getPosts(): Promise<Post[]> {
     try {
       const res = await fetch(apiUrl('/api/posts'), { headers: getHeaders() });
+      if (!res.ok) return [];
+      const data = await readResponse<Post[]>(res);
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  },
+  async getReels(): Promise<Post[]> {
+    try {
+      const res = await fetch(apiUrl('/api/reels'), { headers: getHeaders() });
       if (!res.ok) return [];
       const data = await readResponse<Post[]>(res);
       return Array.isArray(data) ? data : [];

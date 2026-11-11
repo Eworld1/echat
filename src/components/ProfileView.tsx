@@ -6,6 +6,8 @@ import { useAuth } from '../context/AuthContext';
 import { PostCard } from './PostCard';
 import { ReelsViewer } from './ReelsViewer';
 import { ReelThumbnail } from './ReelThumbnail';
+import { useBackButton } from '../hooks/useBackButton';
+import { CreatePostModal } from './CreatePostModal';
 import { VerifiedBadge } from './VerifiedBadge';
 import {
   Camera,
@@ -54,9 +56,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 }) => {
   const { user: currentUser, updateCurrentUser } = useAuth();
   const { startCall } = useSocket();
-  const [profileData, setProfileData] = useState<{ user: User; posts: Post[]; friends: User[] } | null>(null);
-  const [activeTab, setActiveTab] = useState<'posts' | 'reels' | 'about' | 'friends' | 'photos'>('posts');
+  const [profileData, setProfileData] = useState<{ user: User; posts: Post[]; reels?: Post[]; friends: User[] } | null>(null);
+  const [activeTab, setActiveTab] = useState<'posts' | 'reels' | 'about' | 'friends' | 'photos' | 'videos'>('posts');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
+  const [isCreateReelOpen, setIsCreateReelOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isBoosting, setIsBoosting] = useState(false);
 
@@ -75,6 +79,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [profileNotice, setProfileNotice] = useState('');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [selectedReel, setSelectedReel] = useState<Post | null>(null);
+  useBackButton(isEditModalOpen, () => setIsEditModalOpen(false), 'profile-edit');
+  useBackButton(Boolean(selectedReel), () => setSelectedReel(null), 'profile-reel');
 
   const loadProfile = async () => {
     setIsLoading(true);
@@ -82,8 +88,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       const raw = await api.getUserProfile(userId);
       const data = 'user' in raw && raw.user
         ? raw
-        : { user: raw as unknown as User, posts: [] as Post[], friends: [] as User[] };
-      setProfileData(data);
+        : { user: raw as unknown as User, posts: [] as Post[], reels: [] as Post[], friends: [] as User[] };
+      setProfileData({ ...data, posts: data.posts.filter(post => post.type === 'post' && post.isReel !== true && post.videoType !== 'reel'), reels: (data.reels || data.posts.filter(post => post.type === 'reel' || post.isReel === true)).filter(post => post.type === 'reel' || post.isReel === true) });
       setEditName(data.user.name);
       setEditDob(data.user.dob || '');
       setEditDobVisibility(data.user.dobVisibility || 'public');
@@ -231,8 +237,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   const { user, posts, friends } = profileData;
   const profilePosts = posts;
-  const normalPosts = profilePosts.filter(post => post.type !== 'reel');
-  const reels = profilePosts.filter(post => post.type === 'reel' && post.mediaType === 'video');
+  const normalPosts = profilePosts.filter(post => post.type === 'post' && post.isReel !== true && post.videoType !== 'reel');
+  const reels = (profileData.reels || []).filter(post => (post.type === 'reel' || post.isReel === true) && post.mediaType === 'video');
   const dobLabel = user.dob
     ? `${new Date(user.dob).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}${getAge(user.dob) !== null ? ` (${getAge(user.dob)} years old)` : ''}`
     : user.dobMonthDay
@@ -242,7 +248,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const isBirthdayToday = Boolean(birthdayMonthDay && birthdayMonthDay === `${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` && (isOwnProfile || user.dobVisibility !== 'only_me'));
 
   // Extract all photos from user's posts
-  const photos = posts.filter(p => p.mediaUrl && p.mediaType !== 'video').map(p => p.mediaUrl!);
+  const photos = normalPosts.filter(p => p.mediaUrl && p.mediaType === 'image').map(p => p.mediaUrl!);
+  const videos = normalPosts.filter(p => p.mediaType === 'video');
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
@@ -526,6 +533,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             >
               Photos ({photos.length})
             </button>
+            <button onClick={() => setActiveTab('videos')} className={`px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 transition ${activeTab === 'videos' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>
+              Videos ({videos.length})
+            </button>
           </div>
         </div>
       </div>
@@ -538,6 +548,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <div className="bg-white rounded-2xl p-8 text-center text-slate-400 border border-slate-200">
                 <FileText size={32} className="mx-auto mb-2 opacity-50" />
                 <p className="text-sm font-semibold">No posts yet</p>
+                {isOwnProfile && <button type="button" onClick={() => setIsCreatePostOpen(true)} className="mt-3 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Create Post</button>}
               </div>
             ) : (
               normalPosts.map(p => (
@@ -554,9 +565,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         )}
 
         {activeTab === 'reels' && (
-          reels.length ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          reels.length ? <div className="grid grid-cols-3 gap-2 sm:gap-3">
             {reels.map(reel => <ReelThumbnail key={reel.id} post={reel} onClick={() => setSelectedReel(reel)} />)}
-          </div> : <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500"><Film size={32} className="mx-auto mb-2 text-fuchsia-500" /><p className="font-bold">No Reels yet</p>{isOwnProfile && <p className="mt-1 text-sm">Create a short video Reel to share it here.</p>}</div>
+          </div> : <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500"><Film size={32} className="mx-auto mb-2 text-fuchsia-500" /><p className="font-bold">No Reels yet</p>{isOwnProfile && <><p className="mt-1 text-sm">Create a short video Reel to share it here.</p><button type="button" onClick={() => setIsCreateReelOpen(true)} className="mt-3 rounded-xl bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white">Create Reel</button></>}</div>
         )}
 
         {activeTab === 'about' && (
@@ -621,7 +632,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             )}
           </div>
         )}
+
+        {activeTab === 'videos' && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{videos.length ? videos.map(post => <article key={post.id} className="overflow-hidden rounded-xl bg-black"><video src={post.mediaUrl} poster={post.thumbnailUrl} controls playsInline preload="metadata" className="aspect-video w-full object-cover" /><p className="bg-white p-2 text-xs text-slate-700 line-clamp-2">{post.content || 'Video post'}</p></article>) : <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500">No videos yet</div>}</div>}
       </div>
+
+      <CreatePostModal isOpen={isCreatePostOpen} onClose={() => setIsCreatePostOpen(false)} onPostCreated={() => { setIsCreatePostOpen(false); void loadProfile(); }} />
+      <CreatePostModal isOpen={isCreateReelOpen} onClose={() => setIsCreateReelOpen(false)} onPostCreated={() => { setIsCreateReelOpen(false); void loadProfile(); }} forcePublic videoOnly title="Create a public Reel" />
 
       {profileNotice && <div role="status" className="fixed bottom-20 left-1/2 z-[70] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">{profileNotice}</div>}
 

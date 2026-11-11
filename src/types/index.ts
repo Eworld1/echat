@@ -6,6 +6,7 @@ export interface User {
   id: string; name: string; email: string; passwordHash?: string; // FIX: Added
   avatar: string; coverPhoto: string; bio: string; location: string;
   dob?: string; dobMonthDay?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
+  reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
   role: 'user' | 'admin' | 'developer';
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
@@ -25,7 +26,8 @@ export interface Comment {
 
 export interface Post {
   id: string; authorId: string; author?: User; // FIX: optional
-  type?: 'post' | 'reel';
+  type?: 'post' | 'reel' | 'story';
+  isReel?: boolean; videoType?: string; aspectRatio?: number | string;
   content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;

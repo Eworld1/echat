@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider, useSocket } from './context/SocketContext';
 import { User, LiveStream } from './types';
@@ -28,6 +28,7 @@ import { SplashScreen } from './components/SplashScreen';
 import { UpgradePrompt } from './components/UpgradePrompt';
 import { CreatePostModal } from './components/CreatePostModal';
 import type { AppView } from './components/Navbar';
+import { runTopBackAction, useBackButton } from './hooks/useBackButton';
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -42,7 +43,14 @@ export function MainApp() {
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
+  const [showBackToast, setShowBackToast] = useState(false);
+  const currentViewRef = useRef(currentView);
+  const previousViewRef = useRef<AppView>('feed');
+  const lastHomeBackRef = useRef(0);
+  const backToastTimer = useRef<number | null>(null);
   const handleProfileMenuChange = useCallback(() => {}, []);
+  currentViewRef.current = currentView;
+  useBackButton(Boolean(activeChatPartner), () => setActiveChatPartner(null), 'chat-conversation');
 
   // Live streaming states
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream | null>(null);
@@ -88,16 +96,13 @@ export function MainApp() {
     targetProfileId?: string,
     targetPostId?: string
   ) => {
+    if (view === 'admin' && !isDeveloper) return;
+    if (view !== currentView) previousViewRef.current = currentView;
+    window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${window.location.pathname}${window.location.search}`);
     setActiveChatPartner(null);
     setIsMessengerDrawerOpen(false);
     setIsGoLiveOpen(false);
     setActiveViewerStream(null);
-    // Prevent non-developers from opening admin
-    if (view === 'admin' && !isDeveloper) {
-      setCurrentView('feed');
-      return;
-    }
-
     setCurrentView(view);
     if (view === 'profile') {
       setProfileUserId(targetProfileId || user?.id || null);
@@ -118,12 +123,52 @@ export function MainApp() {
     }
   };
 
+  useEffect(() => {
+    if (!window.history.state?.echatApp) window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);
+    const handlePopState = () => {
+      if (runTopBackAction()) {
+        window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);
+        return;
+      }
+      const view = currentViewRef.current;
+      if (view === 'profile' && profileUserId && profileUserId !== user?.id && previousViewRef.current !== 'profile') {
+        const previous = previousViewRef.current;
+        setProfileUserId(null);
+        setCurrentView(previous);
+        currentViewRef.current = previous;
+        window.history.pushState({ echatApp: true, tab: previous }, '', `${window.location.pathname}${window.location.search}`);
+        return;
+      }
+      if (view !== 'feed') {
+        setProfileUserId(null);
+        setCurrentView('feed');
+        currentViewRef.current = 'feed';
+        previousViewRef.current = 'feed';
+        window.history.pushState({ echatApp: true, tab: 'feed' }, '', `${window.location.pathname}${window.location.search}`);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      const now = Date.now();
+      if (now - lastHomeBackRef.current < 2000) return;
+      lastHomeBackRef.current = now;
+      setShowBackToast(true);
+      if (backToastTimer.current) window.clearTimeout(backToastTimer.current);
+      backToastTimer.current = window.setTimeout(() => setShowBackToast(false), 2000);
+      window.history.pushState({ echatApp: true, tab: 'feed' }, '', `${window.location.pathname}${window.location.search}`);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      if (backToastTimer.current) window.clearTimeout(backToastTimer.current);
+    };
+  }, [profileUserId, user?.id]);
+
   // Someone opened a shared link like https://your-site/?post=post_abc123
   useEffect(() => {
     if (!user) return;
     const postId = new URLSearchParams(window.location.search).get('post');
     if (!postId) return;
-    window.history.replaceState({}, '', window.location.pathname);
+    window.history.replaceState({ echatApp: true, tab: 'feed' }, '', window.location.pathname);
     const timer = setTimeout(() => handleNavigate('feed', undefined, postId), 900);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -246,6 +291,8 @@ export function MainApp() {
         onSelectUser={handleOpenChat}
       />
       <CreatePostModal isOpen={isCreatePostOpen} onClose={() => setIsCreatePostOpen(false)} onPostCreated={() => { setIsCreatePostOpen(false); handleNavigate('feed'); }} />
+
+      {showBackToast && <div role="status" className="fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">Press back again to exit</div>}
 
       {/* WebRTC Video / Audio Call Modal */}
       <CallModal />

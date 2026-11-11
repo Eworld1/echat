@@ -1,6 +1,7 @@
 import { initialsAvatar } from '../utils/avatar';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from '../context/SocketContext';
+import { useBackButton } from '../hooks/useBackButton';
 import {
   Phone,
   PhoneOff,
@@ -37,6 +38,8 @@ const CallModalView: React.FC = () => {
   const [cameraToast, setCameraToast] = useState('');
   const [callControlError, setCallControlError] = useState('');
   const [micLevel, setMicLevel] = useState(0);
+  useBackButton(Boolean(activeCall), () => { if (window.confirm('End call?')) void endCall(); }, 'active-call');
+  useBackButton(Boolean(incomingCall) && !activeCall, () => { if (window.confirm('Decline incoming call?')) rejectCall(); }, 'incoming-call');
 
   useEffect(() => {
     if (!activeCall) return;

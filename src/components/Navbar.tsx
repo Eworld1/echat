@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
+import { useBackButton } from '../hooks/useBackButton';
 
 export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
@@ -124,6 +125,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     setShowProfileMenu(false);
     onProfileMenuChange(false);
   };
+  useBackButton(showProfileMenu, closeProfileMenu, 'profile-menu');
+  useBackButton(showSearchDropdown, () => setShowSearchDropdown(false), 'navbar-search');
+  useBackButton(showNotifications, () => setShowNotifications(false), 'navbar-notifications');
 
   const toggleProfileMenu = () => {
     setShowProfileMenu(open => {

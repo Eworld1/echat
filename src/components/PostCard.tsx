@@ -10,6 +10,7 @@ import { VerifiedBadge } from './VerifiedBadge';
 import { VideoLinkCard } from './VideoLinkCard';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import confetti from 'canvas-confetti';
+import { useBackButton } from '../hooks/useBackButton';
 import {
   ThumbsUp,
   MessageCircle,
@@ -26,6 +27,8 @@ import {
   Download,
   Volume2,
   VolumeX
+  , Play
+  , Loader2
 } from 'lucide-react';
 
 interface PostCardProps {
@@ -35,6 +38,7 @@ interface PostCardProps {
   onViewProfile: (userId: string) => void;
   reelMode?: boolean;
   detailMode?: boolean;
+  reelPreload?: 'metadata' | 'auto';
 }
 
 const REACTIONS: { type: ReactionType; label: string; emoji: string; color: string }[] = [
@@ -52,7 +56,8 @@ export const PostCard: React.FC<PostCardProps> = ({
   onPostDeleted,
   onViewProfile,
   reelMode = false,
-  detailMode = false
+  detailMode = false,
+  reelPreload = 'metadata'
 }) => {
   const { user, isDeveloper, updateUser } = useAuth();
   const { t } = usePreferences();
@@ -77,7 +82,14 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [showViewersModal, setShowViewersModal] = useState(false);
   const [postViewers, setPostViewers] = useState<{ id: string; name: string; avatar: string; viewedAt: number }[]>([]);
   const [loadingViewers, setLoadingViewers] = useState(false);
-  const [isReelMuted, setIsReelMuted] = useState(true);
+  const [isReelMuted, setIsReelMuted] = useState(() => typeof window === 'undefined' || window.localStorage.getItem('reels_muted') !== 'false');
+  const [isReelPlaying, setIsReelPlaying] = useState(false);
+  const [isReelBuffering, setIsReelBuffering] = useState(true);
+  const [reelPlaybackError, setReelPlaybackError] = useState(false);
+  const [reelsAutoplay, setReelsAutoplay] = useState(() => { if (typeof window === 'undefined') return true; const saved = window.localStorage.getItem('reels_autoplay'); return saved !== null ? saved === 'true' : user?.reelsAutoplay !== false; });
+  const [wifiOnlyAutoplay, setWifiOnlyAutoplay] = useState(() => { if (typeof window === 'undefined') return false; const saved = window.localStorage.getItem('reels_wifi_only'); return saved !== null ? saved === 'true' : Boolean(user?.reelsWifiOnly); });
+  const manualPauseRef = useRef(false);
+  const manualPlayRef = useRef(false);
   const [profileOverrides, setProfileOverrides] = useState<Record<string, Partial<User>>>({});
 
   useEffect(() => {
@@ -92,21 +104,13 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   const openPostDetail = () => {
     if (detailMode || showDetailModal) return;
-    window.history.pushState({ echatPostDetail: post.id }, '', `${window.location.pathname}${window.location.search}#post-${encodeURIComponent(post.id)}`);
     setShowDetailModal(true);
   };
 
   const closePostDetail = () => {
     setShowDetailModal(false);
-    if (window.history.state?.echatPostDetail === post.id) window.history.back();
   };
-
-  useEffect(() => {
-    if (!showDetailModal) return;
-    const handlePopState = () => setShowDetailModal(false);
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [showDetailModal]);
+  useBackButton(showDetailModal, closePostDetail, `post-detail-${post.id}`);
 
   useEffect(() => {
     const node = cardRef.current;
@@ -125,14 +129,60 @@ export const PostCard: React.FC<PostCardProps> = ({
   useEffect(() => {
     const video = videoRef.current;
     if (!reelMode || !video || typeof IntersectionObserver === 'undefined') return;
+    const connection = (navigator as Navigator & { connection?: { type?: string; effectiveType?: string } }).connection;
+    const isMobileData = connection?.type === 'cellular' || ['slow-2g', '2g', '3g'].includes(connection?.effectiveType || '');
+    const blockedByDataSaver = wifiOnlyAutoplay && isMobileData;
+    const pauseOtherReels = () => document.querySelectorAll<HTMLVideoElement>('[data-echat-reel-video="true"]').forEach(other => { if (other !== video) other.pause(); });
+    const playWhenEligible = (allowManual = true) => {
+      if (document.visibilityState === 'hidden') return;
+      if ((reelsAutoplay && !blockedByDataSaver && !manualPauseRef.current) || (allowManual && manualPlayRef.current)) {
+        pauseOtherReels();
+        video.muted = isReelMuted;
+        void video.play().catch(() => {});
+      } else video.pause();
+    };
     const observer = new IntersectionObserver(entries => {
       const visible = entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= 0.65);
-      if (visible) video.play().catch(() => {});
-      else video.pause();
+      if (visible) playWhenEligible();
+      else {
+        manualPauseRef.current = false;
+        manualPlayRef.current = false;
+        video.pause();
+      }
     }, { threshold: [0, 0.65, 1] });
     observer.observe(video);
-    return () => { observer.disconnect(); video.pause(); };
-  }, [reelMode, post.id]);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') video.pause();
+      else playWhenEligible(false);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => { observer.disconnect(); document.removeEventListener('visibilitychange', onVisibilityChange); video.pause(); };
+  }, [reelMode, post.id, reelsAutoplay, wifiOnlyAutoplay, isReelMuted]);
+
+  useEffect(() => {
+    const onReelSettings = () => {
+      setReelsAutoplay(window.localStorage.getItem('reels_autoplay') !== 'false');
+      setWifiOnlyAutoplay(window.localStorage.getItem('reels_wifi_only') === 'true');
+      setIsReelMuted(window.localStorage.getItem('reels_muted') !== 'false');
+    };
+    window.addEventListener('echat:reels-settings', onReelSettings);
+    return () => window.removeEventListener('echat:reels-settings', onReelSettings);
+  }, []);
+
+  const toggleReelPlayback = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      manualPauseRef.current = false;
+      manualPlayRef.current = true;
+      video.muted = isReelMuted;
+      void video.play().catch(() => {});
+    } else {
+      manualPauseRef.current = true;
+      manualPlayRef.current = false;
+      video.pause();
+    }
+  };
 
   const handleCardClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (detailMode) return;
@@ -173,6 +223,8 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   const isSaved = Boolean(user?.savedPosts?.includes(post.id));
   const postMediaUrls = post.mediaUrls?.length ? post.mediaUrls : (post.mediaUrl ? [post.mediaUrl] : []);
+  const network = typeof navigator !== 'undefined' ? (navigator as Navigator & { connection?: { type?: string; effectiveType?: string } }).connection : undefined;
+  const autoplayBlockedByDataSaver = wifiOnlyAutoplay && (network?.type === 'cellular' || ['slow-2g', '2g', '3g'].includes(network?.effectiveType || ''));
 
   const handleToggleSave = async () => {
     if (!user) return;
@@ -502,15 +554,18 @@ export const PostCard: React.FC<PostCardProps> = ({
 
       {/* Post Media (Image / Video) */}
       {postMediaUrls.length > 0 && (
-        <div className={`relative mx-auto flex items-center justify-center overflow-hidden bg-slate-900 ${reelMode ? 'aspect-[9/16] max-h-[68dvh] w-full max-w-[min(100%,390px)]' : `w-full ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`}`}>
+        <div className={`relative mx-auto flex items-center justify-center overflow-hidden bg-slate-900 ${reelMode ? 'aspect-[9/16] max-h-[calc(100dvh-310px)] w-full max-w-[420px]' : `w-full ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`}`}>
           {post.mediaType === 'video' ? (
-            <video ref={videoRef} src={assetUrl(postMediaUrls[0])} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls playsInline preload={reelMode ? 'metadata' : 'none'} muted={reelMode ? isReelMuted : false} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
+            <video data-echat-reel-video={reelMode ? 'true' : undefined} ref={videoRef} src={assetUrl(postMediaUrls[0])} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls={!reelMode} playsInline loop={reelMode} preload={reelMode ? reelPreload : 'none'} muted={reelMode ? isReelMuted : false} onClick={reelMode ? toggleReelPlayback : undefined} onPlay={() => { setIsReelPlaying(true); setIsReelBuffering(false); }} onPause={() => setIsReelPlaying(false)} onLoadStart={() => { if (reelMode) { setIsReelBuffering(true); setReelPlaybackError(false); } }} onWaiting={() => reelMode && setIsReelBuffering(true)} onCanPlay={() => setIsReelBuffering(false)} onError={() => { if (reelMode) { setIsReelBuffering(false); setReelPlaybackError(true); } }} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
           ) : (
             <div className={`grid w-full gap-0.5 ${postMediaUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
               {postMediaUrls.slice(0, 10).map((mediaUrl, index) => <img key={`${post.id}-${index}`} src={assetUrl(mediaUrl)} alt={`Post attachment ${index + 1}`} loading="lazy" className={`w-full object-cover cursor-pointer hover:opacity-95 transition ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'} ${postMediaUrls.length > 4 && index > 3 ? 'hidden' : ''}`} />)}
             </div>
           )}
-          {reelMode && <button type="button" onClick={event => { event.stopPropagation(); setIsReelMuted(value => !value); }} aria-label={isReelMuted ? 'Unmute Reel' : 'Mute Reel'} className="absolute bottom-3 right-3 rounded-full bg-black/70 p-2 text-white">{isReelMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>}
+          {reelMode && !isReelPlaying && (autoplayBlockedByDataSaver || !reelsAutoplay || manualPauseRef.current) && <button type="button" onClick={event => { event.stopPropagation(); toggleReelPlayback(); }} aria-label="Play Reel" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/25 text-white"><span className="grid h-14 w-14 place-items-center rounded-full bg-black/60"><Play size={24} fill="currentColor" /></span>{autoplayBlockedByDataSaver && <span className="rounded-full bg-black/60 px-3 py-1 text-xs">Tap to play — you’re on mobile data</span>}</button>}
+          {reelMode && isReelBuffering && !isReelPlaying && !reelPlaybackError && ((reelsAutoplay && !autoplayBlockedByDataSaver) || manualPlayRef.current) && <div aria-label="Loading Reel" className="pointer-events-none absolute inset-0 grid place-items-center bg-black/10 text-white"><Loader2 size={32} className="animate-spin" /></div>}
+          {reelMode && reelPlaybackError && <div className="absolute inset-0 grid place-items-center bg-black/60 p-4 text-center text-white"><div><p className="mb-2 text-sm font-semibold">This Reel couldn’t play.</p><button type="button" onClick={() => { setReelPlaybackError(false); setIsReelBuffering(true); videoRef.current?.load(); if (reelsAutoplay) videoRef.current?.play().catch(() => {}); }} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-900">Tap to retry</button></div></div>}
+          {reelMode && <button type="button" onClick={event => { event.stopPropagation(); const muted = !isReelMuted; setIsReelMuted(muted); if (videoRef.current) videoRef.current.muted = muted; window.localStorage.setItem('reels_muted', String(muted)); window.dispatchEvent(new Event('echat:reels-settings')); }} aria-label={isReelMuted ? 'Unmute Reel' : 'Mute Reel'} className="absolute bottom-3 right-3 rounded-full bg-black/70 p-2 text-white">{isReelMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>}
         </div>
       )}
 

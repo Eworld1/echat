@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye } from 'lucide-react';
+import { Eye, Play } from 'lucide-react';
 import type { Post } from '../types';
 
 export const ReelThumbnail: React.FC<{ post: Post; onClick: () => void }> = ({ post, onClick }) => {
@@ -10,6 +10,6 @@ export const ReelThumbnail: React.FC<{ post: Post; onClick: () => void }> = ({ p
       setDuration(`${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
     }} className="h-full w-full object-cover transition group-hover:scale-[1.02]" />}
     <span className="absolute right-2 top-2 rounded-md bg-black/70 px-2 py-1 text-[10px] font-bold text-white">{duration || 'Reel'}</span>
-    <span className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/85 to-transparent p-3 pt-10 text-xs font-semibold text-white"><span className="line-clamp-2">{post.content || 'Reel'}</span><span className="flex shrink-0 items-center gap-1 text-[10px] font-normal"><Eye size={12} />{(post.viewsCount || 0).toLocaleString()}</span></span>
+    <span className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/85 to-transparent p-3 pt-10 text-xs font-semibold text-white"><span className="line-clamp-2">{post.content || 'Reel'}</span><span className="flex shrink-0 items-center gap-1 text-[10px] font-normal"><Play size={12} fill="currentColor" /><Eye size={12} />{(post.viewsCount || 0).toLocaleString()}</span></span>
   </button>;
 };

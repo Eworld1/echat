@@ -5,6 +5,7 @@ import { liveRtcConfig } from '../utils/liveRtc';
 import { api } from '../services/api';
 import { LiveStream, LiveComment } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
+import { useBackButton } from '../hooks/useBackButton';
 import {
   X,
   Users,
@@ -27,6 +28,7 @@ interface LiveViewerModalProps {
 
 export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, stream, onClose }) => {
   const currentStream = stream || session;
+  useBackButton(Boolean(currentStream), onClose, 'live-viewer');
   if (!currentStream) return null;
 
   const { user } = useAuth();

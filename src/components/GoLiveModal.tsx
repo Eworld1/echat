@@ -27,6 +27,7 @@ import {
   , Captions
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { useBackButton } from '../hooks/useBackButton';
 
 interface GoLiveModalProps {
   isOpen: boolean;
@@ -45,6 +46,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   onLiveEnded,
   onStreamEnded
 }) => {
+  useBackButton(isOpen, onClose, 'go-live-studio');
   const { user, isDeveloper } = useAuth();
   const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveSignal, sendLiveCaption, socket } = useSocket();
 

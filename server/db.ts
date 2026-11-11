@@ -50,10 +50,21 @@ class Database {
     this.data = loaded.data;
     let assignedPostTypes = false;
     for (const post of this.data.posts) {
-      if (!post.type) {
-        // Existing videos were regular posts until the explicit Reel composer was added.
-        // Keep historical content in Posts; only newly tagged content belongs in Reels.
+      const metadata = post as Post & { videoUrl?: string; videoType?: string; aspectRatio?: number | string };
+      const ratio = typeof metadata.aspectRatio === 'number'
+        ? metadata.aspectRatio
+        : typeof metadata.aspectRatio === 'string' && metadata.aspectRatio.includes(':')
+          ? Number(metadata.aspectRatio.split(':')[0]) / Number(metadata.aspectRatio.split(':')[1])
+          : Number(metadata.aspectRatio);
+      const hasVideo = post.mediaType === 'video' || Boolean(metadata.videoUrl);
+      const isLegacyReel = post.type === 'reel' || metadata.isReel === true || metadata.videoType === 'reel' || (hasVideo && ratio > 0 && ratio <= 0.75);
+      if (isLegacyReel) {
+        if (post.type !== 'reel' || post.isReel !== true) assignedPostTypes = true;
+        post.type = 'reel';
+        post.isReel = true;
+      } else if (!post.type || post.type === 'story') {
         post.type = 'post';
+        post.isReel = false;
         assignedPostTypes = true;
       }
     }
@@ -341,6 +352,8 @@ class Database {
       email: user.email.toLowerCase().trim(),
       dob: user.dob,
       birthdayReminderEnabled: user.birthdayReminderEnabled ?? true,
+      reelsAutoplay: user.reelsAutoplay ?? true,
+      reelsWifiOnly: user.reelsWifiOnly ?? false,
       passwordHash: hashPassword(user.password || ''),
       avatar: user.avatar || initialsAvatar(user.name),
       coverPhoto: user.coverPhoto || gradientCover(user.name),
@@ -573,12 +586,13 @@ class Database {
     mediaType?: 'image' | 'video',
     feeling?: string,
     privacy: 'public' | 'friends' | 'only_me' = 'public',
-    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; type?: 'post' | 'reel'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number } = {}
+    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; type?: 'post' | 'reel' | 'story'; isReel?: boolean; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number } = {}
   ): Post {
     const newPost: Post = {
       id: 'post_' + crypto.randomBytes(6).toString('hex'),
       authorId,
-      ...(extras.type ? { type: extras.type } : {}),
+      type: extras.type || 'post',
+      isReel: extras.isReel ?? extras.type === 'reel',
       content,
       mediaUrl,
       ...(extras.mediaUrls?.length ? { mediaUrls: extras.mediaUrls.slice(0, 10) } : {}),

@@ -49,6 +49,8 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     const saved = localStorage.getItem('echat_birthday_reminders');
     return saved !== null ? saved === 'true' : user?.birthdayReminderEnabled !== false;
   });
+  const [reelsAutoplayEnabled, setReelsAutoplayEnabled] = useState<boolean>(() => { const saved = localStorage.getItem('reels_autoplay'); return saved !== null ? saved === 'true' : user?.reelsAutoplay !== false; });
+  const [reelsWifiOnly, setReelsWifiOnly] = useState<boolean>(() => { const saved = localStorage.getItem('reels_wifi_only'); return saved !== null ? saved === 'true' : Boolean(user?.reelsWifiOnly); });
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('echat_sound');
     return saved !== null ? saved === 'true' : true;
@@ -84,6 +86,10 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     if (user) {
       const savedBirthdayPreference = localStorage.getItem('echat_birthday_reminders');
       setBirthdayRemindersEnabled(savedBirthdayPreference !== null ? savedBirthdayPreference === 'true' : user.birthdayReminderEnabled !== false);
+      const savedAutoplay = localStorage.getItem('reels_autoplay');
+      const savedWifiOnly = localStorage.getItem('reels_wifi_only');
+      setReelsAutoplayEnabled(savedAutoplay !== null ? savedAutoplay === 'true' : user.reelsAutoplay !== false);
+      setReelsWifiOnly(savedWifiOnly !== null ? savedWifiOnly === 'true' : Boolean(user.reelsWifiOnly));
       setName(user.name || '');
       setEmail(user.email || '');
       setBio(user.bio || '');
@@ -147,6 +153,28 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
       setBirthdayRemindersEnabled(!next);
       localStorage.setItem('echat_birthday_reminders', String(!next));
       alert(error instanceof Error ? error.message : 'Could not save birthday reminder preference');
+    }
+  };
+
+  const handleReelPreference = async (preference: 'autoplay' | 'wifi') => {
+    if (!user) return;
+    const nextAutoplay = preference === 'autoplay' ? !reelsAutoplayEnabled : reelsAutoplayEnabled;
+    const nextWifiOnly = preference === 'wifi' ? !reelsWifiOnly : reelsWifiOnly;
+    setReelsAutoplayEnabled(nextAutoplay);
+    setReelsWifiOnly(nextWifiOnly);
+    localStorage.setItem('reels_autoplay', String(nextAutoplay));
+    localStorage.setItem('reels_wifi_only', String(nextWifiOnly));
+    window.dispatchEvent(new Event('echat:reels-settings'));
+    try {
+      const updated = await api.updateProfile(user.id, { reelsAutoplay: nextAutoplay, reelsWifiOnly: nextWifiOnly });
+      updateUser(updated);
+    } catch (error) {
+      setReelsAutoplayEnabled(!nextAutoplay);
+      setReelsWifiOnly(!nextWifiOnly);
+      localStorage.setItem('reels_autoplay', String(!nextAutoplay));
+      localStorage.setItem('reels_wifi_only', String(!nextWifiOnly));
+      window.dispatchEvent(new Event('echat:reels-settings'));
+      alert(error instanceof Error ? error.message : 'Could not save Reel settings');
     }
   };
 
@@ -513,6 +541,12 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                 <button type="button" role="switch" aria-checked={birthdayRemindersEnabled} aria-label="Notify me about friends’ birthdays" onClick={handleBirthdayReminders} className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${birthdayRemindersEnabled ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${birthdayRemindersEnabled ? 'translate-x-5' : 'translate-x-0'}`} /></button>
               </div>
 
+              <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+                <div><div className="text-sm font-bold text-slate-900">Reels</div><div className="text-xs text-slate-500">Control video autoplay and mobile data use.</div></div>
+                <PreferenceToggle label="Autoplay Reels" description="Play the visible Reel automatically." checked={reelsAutoplayEnabled} onChange={() => void handleReelPreference('autoplay')} />
+                <PreferenceToggle label="Data Saver: Wi-Fi only" description="Only autoplay when connected to Wi-Fi." checked={reelsWifiOnly} onChange={() => void handleReelPreference('wifi')} />
+              </div>
+
               <div className="rounded-xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div><div className="text-sm font-bold text-slate-900">Message and typing sounds</div><div className="text-xs text-slate-500">Play quiet sounds for sent, received, and typing activity.</div></div>
@@ -848,3 +882,8 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     </div>
   );
 };
+
+const PreferenceToggle: React.FC<{ label: string; description: string; checked: boolean; onChange: () => void }> = ({ label, description, checked, onChange }) => <div className="flex items-center justify-between gap-4">
+  <div><div className="text-sm font-semibold text-slate-800">{label}</div><div className="text-xs text-slate-500">{description}</div></div>
+  <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={onChange} className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${checked ? 'translate-x-5' : 'translate-x-0'}`} /></button>
+</div>;

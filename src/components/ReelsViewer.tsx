@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import type { Post } from '../types';
 import { PostCard } from './PostCard';
+import { useBackButton } from '../hooks/useBackButton';
 
 interface ReelsViewerProps {
   posts: Post[];
@@ -13,6 +14,7 @@ interface ReelsViewerProps {
 }
 
 export const ReelsViewer: React.FC<ReelsViewerProps> = ({ posts, initialPostId, onClose, onViewProfile, onPostUpdated, onPostDeleted }) => {
+  useBackButton(true, onClose, 'reels-viewer');
   const [index, setIndex] = useState(() => Math.max(0, posts.findIndex(post => post.id === initialPostId)));
   const touchStart = useRef<number | null>(null);
   const current = posts[index];

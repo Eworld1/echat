@@ -4,6 +4,7 @@ import { Story, User } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { X, ChevronLeft, ChevronRight, Eye, Send, Heart } from 'lucide-react';
+import { useBackButton } from '../hooks/useBackButton';
 
 interface StoryViewerModalProps {
   stories: Story[];
@@ -18,6 +19,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   onClose,
   onReply
 }) => {
+  useBackButton(true, onClose, 'story-viewer');
   const { user } = useAuth();
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [progress, setProgress] = useState(0);
