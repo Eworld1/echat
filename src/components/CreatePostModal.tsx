@@ -1,6 +1,6 @@
 import { usePreferences } from '../context/PreferencesContext';
 import { compressImage } from '../utils/image';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { X, Image, Smile, Globe, Users, Lock, Sparkles, UserPlus } from 'lucide-react';
@@ -60,6 +60,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [showFeelingsList, setShowFeelingsList] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState('');
   const [uploadStage, setUploadStage] = useState<'uploading' | 'compressing'>('uploading');
   const [uploadError, setUploadError] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
@@ -67,7 +68,39 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [compressLargeVideo, setCompressLargeVideo] = useState(false);
   const [compressedFile, setCompressedFile] = useState<File | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState('');
   const [mediaDuration, setMediaDuration] = useState(0);
+  const [videoResolution, setVideoResolution] = useState('');
+  const [previewUnavailable, setPreviewUnavailable] = useState(false);
+  const [previewReady, setPreviewReady] = useState(false);
+  const previewUrlsRef = useRef<string[]>([]);
+
+  const createPreviewUrl = (file: Blob) => {
+    const url = URL.createObjectURL(file);
+    previewUrlsRef.current.push(url);
+    return url;
+  };
+  const revokePreviewUrl = (url: string) => {
+    if (!url.startsWith('blob:')) return;
+    URL.revokeObjectURL(url);
+    previewUrlsRef.current = previewUrlsRef.current.filter(item => item !== url);
+  };
+  useEffect(() => () => previewUrlsRef.current.forEach(URL.revokeObjectURL), []);
+  useEffect(() => {
+    if (isOpen) return;
+    previewUrlsRef.current.forEach(URL.revokeObjectURL);
+    previewUrlsRef.current = [];
+    setMediaUrl('');
+    setMediaFile(null);
+    setAdditionalMediaUrls([]);
+    setAdditionalMediaFiles([]);
+    setThumbnailFile(null);
+    setThumbnailPreviewUrl('');
+    setMediaDuration(0);
+    setVideoResolution('');
+    setPreviewReady(false);
+    setPreviewUnavailable(false);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -80,7 +113,16 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     const isVideo = (file: File) => file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.name);
     const hasVideo = pickedFiles.some(isVideo);
     if (videoOnly && (pickedFiles.length !== 1 || !hasVideo)) {
-      setError('Please select a video.');
+      [mediaUrl, ...additionalMediaUrls].forEach(revokePreviewUrl);
+      revokePreviewUrl(thumbnailPreviewUrl);
+      setMediaFile(null);
+      setMediaUrl('');
+      setThumbnailFile(null);
+      setThumbnailPreviewUrl('');
+      setMediaDuration(0);
+      setPreviewUnavailable(false);
+      setPreviewReady(false);
+      setError('Please select a video file - MP4, MOV, or WebM.');
       return;
     }
     if (pickedFiles.length > 10) {
@@ -101,22 +143,30 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       return;
     }
     const files = await Promise.all(pickedFiles.map(file => isVideo(file) ? file : compressImage(file)));
-    [mediaUrl, ...additionalMediaUrls].filter(url => url.startsWith('blob:')).forEach(URL.revokeObjectURL);
-    const urls = files.map(file => URL.createObjectURL(file));
+    [mediaUrl, ...additionalMediaUrls].forEach(revokePreviewUrl);
+    revokePreviewUrl(thumbnailPreviewUrl);
+    setThumbnailPreviewUrl('');
+    const urls = files.map(createPreviewUrl);
     setMediaType(hasVideo ? 'video' : 'image');
     setMediaFile(files[0]);
     setMediaUrl(urls[0]);
     setAdditionalMediaFiles(files.slice(1));
     setAdditionalMediaUrls(urls.slice(1));
     setUploadProgress(0);
+    setUploadStatus('');
     setUploadError(false);
+    setPreviewUnavailable(false);
+    setPreviewReady(false);
+    setVideoResolution('');
+    setMediaDuration(0);
     setCompressedFile(null);
     setCompressLargeVideo(false);
     setShowCompressionPrompt(Boolean(videoOnly && files[0].size > 100 * 1024 * 1024));
     if (videoOnly && hasVideo) {
       const metadata = await makeVideoThumbnail(files[0]).catch(() => ({ file: null, duration: 0 }));
       setThumbnailFile(metadata.file);
-      setMediaDuration(metadata.duration);
+      if (metadata.file) setThumbnailPreviewUrl(createPreviewUrl(metadata.file));
+      if (metadata.duration > 0) setMediaDuration(metadata.duration);
     } else {
       setThumbnailFile(null);
       setMediaDuration(0);
@@ -134,11 +184,15 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const removeMediaAt = (index: number) => {
     const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
     const urls = [mediaUrl, ...additionalMediaUrls];
-    if (urls[index]?.startsWith('blob:')) URL.revokeObjectURL(urls[index]);
+    revokePreviewUrl(urls[index]);
     files.splice(index, 1);
     urls.splice(index, 1);
     updateMediaOrder(files, urls);
-    if (!files.length) { setThumbnailFile(null); setMediaDuration(0); setShowCompressionPrompt(false); setCompressedFile(null); }
+    if (!files.length) {
+      revokePreviewUrl(thumbnailPreviewUrl);
+      setThumbnailPreviewUrl('');
+      setThumbnailFile(null); setMediaDuration(0); setVideoResolution(''); setPreviewUnavailable(false); setPreviewReady(false); setShowCompressionPrompt(false); setCompressedFile(null);
+    }
   };
 
   const moveMedia = (index: number, direction: -1 | 1) => {
@@ -165,6 +219,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setError('');
     setUploadError(false);
     setUploadProgress(0);
+    setUploadStatus('');
     try {
       const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
       let uploadedUrls: string[];
@@ -178,7 +233,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         }
         setUploadStage('uploading');
         reelSize = mediaFile.size;
-        const result = await api.uploadReelFile(reelFile, setUploadProgress);
+        const result = await api.uploadReelFile(reelFile, (progress, status) => {
+          setUploadProgress(progress);
+          if (status) setUploadStatus(status);
+        });
         uploadedUrls = [result.url];
       } else {
         uploadedUrls = await Promise.all(files.map(file => api.uploadFile(file)));
@@ -205,11 +263,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       });
 
       setContent('');
-      [mediaUrl, ...additionalMediaUrls].filter(url => url.startsWith('blob:')).forEach(URL.revokeObjectURL);
+      [mediaUrl, ...additionalMediaUrls].forEach(revokePreviewUrl);
+      revokePreviewUrl(thumbnailPreviewUrl);
       setMediaUrl('');
       setMediaFile(null);
       setThumbnailFile(null);
+      setThumbnailPreviewUrl('');
       setMediaDuration(0);
+      setVideoResolution('');
       setAdditionalMediaUrls([]);
       setAdditionalMediaFiles([]);
       setTaggedFriends([]);
@@ -226,7 +287,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       const compressionFailed = videoOnly && compressLargeVideo && !compressedFile;
       if (compressionFailed) setShowCompressionPrompt(true);
       setUploadError(videoOnly && Boolean(mediaFile) && !compressionFailed);
-      setError(compressionFailed ? `Could not compress this video: ${reason}. Choose Upload Original to continue.` : videoOnly && mediaFile ? `Reel failed to upload - ${reason}. Tap Retry.` : reason);
+      if (videoOnly && mediaFile && !compressionFailed) setUploadStatus(`Paused at ${formatFileSize(Math.round(mediaFile.size * uploadProgress / 100))} / ${formatFileSize(mediaFile.size)}. Tap Retry Upload to resume.`);
+      setError(compressionFailed ? `Could not compress this video: ${reason} Choose Upload Original to continue.` : videoOnly && mediaFile ? `Reel upload failed: ${reason}` : reason);
     } finally {
       setIsSubmitting(false);
     }
@@ -319,13 +381,27 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           {parseVideoLink(content) && <p className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">Video link detected. Your post will include an in-app player with an external fallback.</p>}
 
           {/* Media preview */}
-          {error && <div role="alert" className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-red-700"><span>{error}</span>{uploadError && <button type="button" onClick={() => void handleSubmit()} disabled={isSubmitting} className="min-h-10 rounded-lg bg-rose-600 px-3 py-1.5 text-white disabled:opacity-50">Retry</button>}</div>}
+          {error && <div role="alert" className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-red-700"><span>{error}</span>{uploadError && <button type="button" onClick={() => void handleSubmit()} disabled={isSubmitting} className="min-h-10 rounded-lg bg-rose-600 px-3 py-1.5 text-white disabled:opacity-50">Retry Upload</button>}</div>}
           {successMessage && <p role="status" className="mx-4 mb-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">{successMessage}</p>}
 
           {mediaUrl && (
             <div className={`mt-3 grid gap-2 ${mediaType === 'image' && additionalMediaUrls.length ? 'grid-cols-2' : 'grid-cols-1'}`}>
               {[mediaUrl, ...additionalMediaUrls].map((url, index) => <div key={url} className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
-                {mediaType === 'video' ? <video src={url} controls className="max-h-72 w-full object-contain" /> : <img src={url} alt={`Post image ${index + 1}`} className="h-40 w-full object-cover" />}
+                {mediaType === 'video' ? videoOnly && !previewReady && !previewUnavailable ? <div className="flex min-h-48 flex-col items-center justify-center gap-2 bg-slate-900 p-5 text-center text-white">
+                  {thumbnailPreviewUrl && <img src={thumbnailPreviewUrl} alt="Video thumbnail" className="mb-1 max-h-40 max-w-full rounded-lg object-contain" />}
+                  <p className="text-sm font-semibold">Loading video preview…</p>
+                  <p className="text-xs text-slate-300">{mediaFile ? `${mediaFile.name} · ${formatFileSize(mediaFile.size)}` : ''}</p>
+                </div> : videoOnly && previewUnavailable ? <div className="flex min-h-48 flex-col items-center justify-center gap-2 bg-slate-900 p-5 text-center text-white">
+                  {thumbnailPreviewUrl && <img src={thumbnailPreviewUrl} alt="Video thumbnail" className="mb-1 max-h-40 max-w-full rounded-lg object-contain" />}
+                  <p className="max-w-full break-all text-sm font-semibold">{mediaFile?.name}</p>
+                  <p className="text-xs text-slate-300">{mediaFile ? formatFileSize(mediaFile.size) : ''} · Video preview not available in this browser. The original file can still be uploaded.</p>
+                </div> : <video src={url} poster={videoOnly ? thumbnailPreviewUrl || undefined : undefined} controls preload="metadata" playsInline muted className="max-h-72 w-full object-contain" onLoadedMetadata={event => {
+                  const video = event.currentTarget;
+                  if (Number.isFinite(video.duration)) setMediaDuration(video.duration);
+                  if (video.videoWidth && video.videoHeight) setVideoResolution(`${video.videoWidth} × ${video.videoHeight}`);
+                  setPreviewUnavailable(false);
+                  setPreviewReady(true);
+                }} onError={() => { if (videoOnly) setPreviewUnavailable(true); }} /> : <img src={url} alt={`Post image ${index + 1}`} className="h-40 w-full object-cover" />}
                 <div className="absolute right-1 top-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
                   {mediaType === 'image' && <><button type="button" disabled={index === 0} onClick={() => moveMedia(index, -1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image earlier">←</button><button type="button" disabled={index === additionalMediaUrls.length} onClick={() => moveMedia(index, 1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image later">→</button></>}
                   <button type="button" onClick={() => removeMediaAt(index)} className="rounded-full bg-black/65 p-1.5 text-white" aria-label="Remove attachment"><X size={14} /></button>
@@ -333,12 +409,12 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               </div>)}
             </div>
           )}
-          {videoOnly && mediaFile && <div className="mt-2 px-1 text-xs font-semibold text-slate-500">{formatFileSize(mediaFile.size)} / 250 MB{mediaDuration > 0 && ` · ${Math.round(mediaDuration)} sec`}</div>}
+          {videoOnly && mediaFile && <div className="mt-2 px-1 text-xs font-semibold text-slate-500">{formatFileSize(mediaFile.size)} / 250 MB{mediaDuration > 0 && ` · ${Math.floor(mediaDuration / 60)}:${String(Math.floor(mediaDuration % 60)).padStart(2, '0')}`}{videoResolution && ` · ${videoResolution}`}</div>}
           {videoOnly && showCompressionPrompt && mediaFile && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
             <p className="font-bold">This video is large ({formatFileSize(mediaFile.size)}). Compress it for faster upload?</p>
             <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => { setCompressLargeVideo(true); setShowCompressionPrompt(false); setError(''); }} className="min-h-10 rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-white">Compress &amp; Upload</button><button type="button" onClick={() => { setCompressLargeVideo(false); setShowCompressionPrompt(false); setError(''); }} className="min-h-10 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold">Upload Original</button></div>
           </div>}
-          {isSubmitting && videoOnly && <div className="mt-3 rounded-xl bg-slate-50 p-3" role="status" aria-live="polite"><div className="mb-1 flex items-center justify-between text-xs font-semibold text-slate-600"><span>{uploadStage === 'compressing' ? 'Compressing video…' : 'Uploading Reel…'}</span><span>{uploadProgress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600 transition-[width]" style={{ width: `${uploadProgress}%` }} /></div></div>}
+          {(isSubmitting || uploadError) && videoOnly && <div className="mt-3 rounded-xl bg-slate-50 p-3" role="status" aria-live="polite"><div className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold text-slate-600"><span>{isSubmitting && uploadStage === 'compressing' ? 'Compressing video…' : uploadStatus || 'Uploading Reel…'}</span><span>{uploadProgress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600 transition-[width]" style={{ width: `${uploadProgress}%` }} /></div></div>}
         </div>
 
         {/* Tagged friends */}
@@ -400,10 +476,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
           <button
             onClick={() => void handleSubmit()}
-            disabled={isSubmitting || (!content.trim() && !mediaFile)}
+            disabled={isSubmitting || uploadError || (!content.trim() && !mediaFile)}
             className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 text-white disabled:text-slate-400 font-bold text-sm shadow-sm transition cursor-pointer"
           >
-            {isSubmitting ? (videoOnly ? `${uploadStage === 'compressing' ? 'Compressing' : 'Uploading'} ${uploadProgress}%` : t('posting')) : t('post')}
+            {isSubmitting ? (videoOnly ? `${uploadStage === 'compressing' ? 'Compressing' : 'Uploading'} ${uploadProgress}%` : t('posting')) : uploadError ? 'Retry upload first' : t('post')}
           </button>
         </div>
       </div>

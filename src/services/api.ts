@@ -88,7 +88,7 @@ export const api = {
     return assetUrl(data.url);
   },
 
-  async uploadReelFile(file: File, onProgress: (percent: number) => void): Promise<{ url: string; uploadId: string }> {
+  async uploadReelFile(file: File, onProgress: (percent: number, status?: string) => void): Promise<{ url: string; uploadId: string }> {
     const maxBytes = 250 * 1024 * 1024;
     if (file.size > maxBytes) throw new Error('Video too large - Max 250MB. Please compress or trim your video.');
     const resumeKey = `echat_reel_upload:${file.name}:${file.size}:${file.lastModified}`;
@@ -98,11 +98,17 @@ export const api = {
     let uploadState: { uploadId: string; fileName: string; mimeType: string; size: number; chunkSize: number; totalChunks: number; receivedChunks: number[]; completedUrl?: string } | null = null;
 
     if (uploadId) {
+      let response: Response;
       try {
-        const response = await fetch(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}`), { headers });
-        if (response.ok) uploadState = await response.json();
-        else uploadId = '';
-      } catch { uploadId = ''; }
+        response = await fetch(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}`), { headers });
+      } catch {
+        throw new Error(typeof navigator !== 'undefined' && !navigator.onLine ? 'You are offline. Check your connection and tap Retry.' : 'Could not check saved Reel progress. Your upload is preserved; tap Retry when your connection is stable.');
+      }
+      if (response.ok) uploadState = await response.json();
+      else if (response.status === 404) uploadId = '';
+      else if (response.status === 401) throw new Error('Your session expired. Sign in again, then tap Retry to resume.');
+      else if (response.status === 413) throw new Error('File too large - Max 250MB.');
+      else throw new Error(response.status >= 500 ? 'Server error while checking Reel upload progress. Please try again in 1 min.' : `Could not check Reel upload progress (HTTP ${response.status}). Tap Retry to resume.`);
       if (uploadState && (uploadState.size !== file.size || uploadState.fileName !== file.name)) uploadId = '';
       if (!uploadId && typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
       if (uploadState?.completedUrl) {
@@ -125,8 +131,10 @@ export const api = {
 
     if (!uploadState) throw new Error('Upload session unavailable. Tap Retry to resume.');
     const received = new Set(uploadState.receivedChunks || []);
+    console.info('[Echat] Resuming Reel upload', { uploadId, lastSuccessfulChunk: received.size ? Math.max(...received) : -1 });
     const completedBytes = Array.from(received).reduce((sum, index) => sum + Math.min(uploadState!.chunkSize, file.size - index * uploadState!.chunkSize), 0);
-    onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)));
+    const progressStatus = (bytes: number) => `Uploading ${(bytes / (1024 * 1024)).toFixed(1)} MB / ${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+    onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), progressStatus(completedBytes));
     const uploadChunk = (index: number): Promise<void> => new Promise((resolve, reject) => {
       const start = index * uploadState!.chunkSize;
       const chunk = file.slice(start, Math.min(file.size, start + uploadState!.chunkSize));
@@ -135,14 +143,29 @@ export const api = {
       xhr.timeout = 10 * 60 * 1000;
       Object.entries(getHeaders({ 'Content-Type': 'application/octet-stream' })).forEach(([name, value]) => xhr.setRequestHeader(name, value));
       xhr.upload.onprogress = event => {
-        if (event.lengthComputable) onProgress(Math.min(99, Math.round(((completedBytes + event.loaded) / file.size) * 100)));
+        if (event.lengthComputable) {
+          const loadedBytes = completedBytes + event.loaded;
+          onProgress(Math.min(99, Math.round((loadedBytes / file.size) * 100)), progressStatus(loadedBytes));
+        }
       };
-      xhr.onerror = () => reject(new Error('Network interrupted while uploading a chunk. Tap Retry to resume.'));
-      xhr.ontimeout = () => reject(new Error('Upload timed out while sending a chunk. Tap Retry to resume.'));
+      xhr.onerror = () => {
+        const message = typeof navigator !== 'undefined' && !navigator.onLine ? 'You are offline. Check your connection and retry this chunk.' : `Connection dropped while sending chunk ${index + 1}. Its progress is saved; tap Retry to resume.`;
+        console.error('[Echat] Reel chunk transport error', { uploadId, chunkIndex: index, status: xhr.status, error: message });
+        reject(new Error(message));
+      };
+      xhr.ontimeout = () => {
+        const message = 'Upload timed out - your connection is slow. Tap Retry to resume.';
+        console.error('[Echat] Reel chunk timeout', { uploadId, chunkIndex: index, status: xhr.status, error: message });
+        reject(new Error(message));
+      };
       xhr.onload = () => {
         let payload: { error?: string } = {};
         try { payload = JSON.parse(xhr.responseText); } catch { /* use fallback below */ }
-        if (xhr.status < 200 || xhr.status >= 300) reject(new Error(payload.error || `Upload chunk failed (${xhr.status}). Tap Retry to resume.`));
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const message = xhr.status === 413 ? 'File too large - Max 250MB.' : xhr.status >= 500 ? 'Server error while uploading. Please try again in 1 min.' : payload.error || `Upload chunk failed (HTTP ${xhr.status}). Tap Retry to resume.`;
+          console.error('[Echat] Reel chunk response error', { uploadId, chunkIndex: index, status: xhr.status, error: message });
+          reject(new Error(message));
+        }
         else resolve();
       };
       xhr.send(chunk);
@@ -151,19 +174,38 @@ export const api = {
     for (let index = 0; index < uploadState.totalChunks; index++) {
       if (received.has(index)) continue;
       let lastError: unknown;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 4; attempt++) {
         try { await uploadChunk(index); lastError = null; break; }
-        catch (error) { lastError = error; if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 600 * (attempt + 1))); }
+        catch (error) {
+          lastError = error;
+          const message = error instanceof Error ? error.message : String(error);
+          console.error('[Echat] Reel chunk upload failed', { uploadId, chunkIndex: index, attempt: attempt + 1, error: message });
+          if (attempt < 3) {
+            onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), `Connection slow, retrying chunk ${index + 1}/${uploadState.totalChunks}…`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** attempt)));
+          }
+        }
       }
-      if (lastError) throw lastError instanceof Error ? lastError : new Error('Reel upload failed. Tap Retry to resume.');
+      if (lastError) throw lastError instanceof Error ? lastError : new Error('Reel upload failed. Progress is saved; tap Retry to resume.');
       received.add(index);
-      onProgress(Math.min(99, Math.round((Array.from(received).reduce((sum, part) => sum + Math.min(uploadState!.chunkSize, file.size - part * uploadState!.chunkSize), 0) / file.size) * 100)));
+      const sentBytes = Array.from(received).reduce((sum, part) => sum + Math.min(uploadState!.chunkSize, file.size - part * uploadState!.chunkSize), 0);
+      onProgress(Math.min(99, Math.round((sentBytes / file.size) * 100)), progressStatus(sentBytes));
     }
 
-    const completeResponse = await fetch(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}/complete`), { method: 'POST', headers, body: '{}' });
-    const result = await readResponse<{ url: string }>(completeResponse, 'Could not finalize Reel upload');
+    let completeResponse: Response;
+    try {
+      completeResponse = await fetch(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}/complete`), { method: 'POST', headers, body: '{}' });
+    } catch {
+      throw new Error(typeof navigator !== 'undefined' && !navigator.onLine ? 'You are offline. The uploaded chunks are saved; reconnect and tap Retry to finish.' : 'Connection dropped while finalizing. The uploaded chunks are saved; tap Retry to finish.');
+    }
+    if (!completeResponse.ok) {
+      const details = await completeResponse.json().catch(() => ({})) as { error?: string };
+      const message = completeResponse.status === 413 ? 'File too large - Max 250MB.' : completeResponse.status >= 500 ? 'Server error while finishing the upload. Please try again in 1 min.' : details.error || 'Could not finish Reel upload. Tap Retry to resume.';
+      throw new Error(message);
+    }
+    const result = await completeResponse.json() as { url: string };
     if (typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
-    onProgress(100);
+    onProgress(100, 'Upload complete');
     return { url: assetUrl(result.url), uploadId };
   },
 

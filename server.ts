@@ -111,7 +111,8 @@ const UPLOAD_MIME_EXT: Record<string, string> = {
 };
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // base64 adds ~33%, must stay under the 25mb JSON limit
 const MAX_REEL_SIZE_BYTES = Math.min(250, Math.max(1, Number(process.env.MAX_REEL_SIZE_MB) || 250)) * 1024 * 1024;
-const REEL_CHUNK_SIZE = 5 * 1024 * 1024;
+const REEL_SMALL_CHUNK_SIZE = 1 * 1024 * 1024;
+const REEL_LARGE_CHUNK_SIZE = 2 * 1024 * 1024;
 
 interface ReelUploadSession {
   id: string;
@@ -314,15 +315,16 @@ app.post('/api/reels/upload/init', async (req: Request, res: Response) => {
   if (size > MAX_REEL_SIZE_BYTES) return res.status(413).json({ error: 'Video too large - Max 250MB. Please compress or trim your video.' });
   const id = crypto.randomUUID();
   const session: ReelUploadSession = {
-    id, userId: authUser.id, fileName, mimeType, extension, size, chunkSize: REEL_CHUNK_SIZE,
-    totalChunks: Math.ceil(size / REEL_CHUNK_SIZE), receivedChunks: [], createdAt: Date.now()
+    id, userId: authUser.id, fileName, mimeType, extension, size,
+    chunkSize: size < 50 * 1024 * 1024 ? REEL_SMALL_CHUNK_SIZE : REEL_LARGE_CHUNK_SIZE,
+    totalChunks: Math.ceil(size / (size < 50 * 1024 * 1024 ? REEL_SMALL_CHUNK_SIZE : REEL_LARGE_CHUNK_SIZE)), receivedChunks: [], createdAt: Date.now()
   };
   try {
     const handle = await fs.promises.open(reelUploadPath(id, 'part'), 'w');
     await handle.truncate(size);
     await handle.close();
     await saveReelUpload(session);
-    res.status(201).json({ uploadId: id, chunkSize: REEL_CHUNK_SIZE, totalChunks: session.totalChunks });
+    res.status(201).json({ uploadId: id, chunkSize: session.chunkSize, totalChunks: session.totalChunks });
   } catch (error) {
     await fs.promises.rm(reelUploadPath(id, 'part'), { force: true });
     console.error('[Echat] Could not initialize Reel upload:', error);
@@ -338,6 +340,7 @@ app.get('/api/reels/upload/:uploadId', async (req: Request, res: Response) => {
   res.json({ uploadId: session.id, fileName: session.fileName, mimeType: session.mimeType, size: session.size, chunkSize: session.chunkSize, totalChunks: session.totalChunks, receivedChunks: session.receivedChunks, completedUrl: session.completedUrl });
 });
 
+// Keep the raw limit at 5MB so uploads already started with the prior 5MB chunk size can still resume.
 app.put('/api/reels/upload/:uploadId/chunk/:index', express.raw({ type: 'application/octet-stream', limit: '5mb' }), async (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
