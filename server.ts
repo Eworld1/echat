@@ -976,9 +976,28 @@ app.get('/api/reels', (req: Request, res: Response) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   const authUser = getAuthUser(req);
-  const rawReels = db.getPosts(authUser?.id).filter(p => p.type === 'reel' && p.mediaType === 'video');
-  const populated = rawReels.map(p => populatePost(p));
-  res.json(populated);
+  const limit = 20;
+  const rawReels = db.getPosts(authUser?.id)
+    .filter(post => post.type === 'reel' && post.mediaType === 'video' && post.privacy === 'public')
+    .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+  const rawCursor = typeof req.query.cursor === 'string' ? req.query.cursor : '';
+  let cursor: { createdAt: number; id: string } | null = null;
+  if (rawCursor) {
+    try {
+      const decoded = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8')) as Partial<{ createdAt: number; id: string }>;
+      if (!Number.isFinite(decoded.createdAt) || typeof decoded.id !== 'string') throw new Error('invalid cursor');
+      cursor = { createdAt: Number(decoded.createdAt), id: decoded.id };
+    } catch {
+      return res.status(400).json({ error: 'Invalid Reels cursor. Refresh the feed and try again.' });
+    }
+  }
+  const remaining = cursor
+    ? rawReels.filter(post => post.createdAt < cursor!.createdAt || (post.createdAt === cursor!.createdAt && post.id.localeCompare(cursor!.id) < 0))
+    : rawReels;
+  const page = remaining.slice(0, limit);
+  const last = page[page.length - 1];
+  const nextCursor = last ? Buffer.from(JSON.stringify({ createdAt: last.createdAt, id: last.id })).toString('base64url') : null;
+  res.json({ reels: page.map(post => populatePost(post)), nextCursor });
 });
 
 app.get('/api/dashboard', (req: Request, res: Response) => {

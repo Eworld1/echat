@@ -419,10 +419,13 @@ export const api = {
       return [];
     }
   },
-  async getReels(): Promise<Post[]> {
-    const res = await fetch(apiUrl('/api/reels'), { headers: getHeaders(), cache: 'no-store' });
-    const data = await readResponse<Post[]>(res, 'Could not load Reels');
-    if (!Array.isArray(data)) throw new Error('The server returned an invalid Reels list. Refresh to try again.');
+  async getReels(cursor?: string): Promise<{ reels: Post[]; nextCursor: string | null }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    const res = await fetch(apiUrl(`/api/reels${query}`), { headers: getHeaders(), cache: 'no-store' });
+    const data = await readResponse<{ reels: Post[]; nextCursor: string | null }>(res, 'Could not load Reels');
+    if (!data || !Array.isArray(data.reels) || (data.nextCursor !== null && typeof data.nextCursor !== 'string')) {
+      throw new Error('The server returned an invalid Reels page. Refresh to try again.');
+    }
     return data;
   },
   async getDashboard(): Promise<{ stats: { views: number; likes: number; comments: number; followers: number; posts: number }; viewsByDay: { date: string; views: number }[]; posts: Post[]; reels?: Post[] }> {

@@ -15,35 +15,86 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [showComposer, setShowComposer] = useState(false);
   const [autoplay, setAutoplay] = useState(() => localStorage.getItem('reels_autoplay') !== 'false');
   const [muted, setMuted] = useState(() => localStorage.getItem('reels_muted') !== 'false');
   const [activeIndex, setActiveIndex] = useState(0);
   const feedRef = useRef<HTMLDivElement>(null);
-  const loadInFlight = useRef(false);
+  const refreshInFlight = useRef(false);
+  const moreInFlight = useRef(false);
+  const feedGeneration = useRef(0);
+  const nextCursor = useRef<string | null>(null);
   const hasLoaded = useRef(false);
   const { onNewPost, onPostUpdated, onPostDeleted } = useSocket();
   const { user, updateUser } = useAuth();
 
   const load = useCallback(async () => {
-    if (loadInFlight.current) return;
-    loadInFlight.current = true;
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    const generation = ++feedGeneration.current;
+    moreInFlight.current = false;
+    setLoadingMore(false);
+    nextCursor.current = null;
+    setHasMore(true);
+    setPosts([]);
+    setActiveIndex(0);
     if (hasLoaded.current) setRefreshing(true);
-    else setLoading(true);
+    setLoading(true);
+    setLoadError('');
     try {
-      const reels = await api.getReels();
-      setPosts(reels.filter(post => (post.type === 'reel' || post.isReel === true) && post.mediaType === 'video' && post.mediaUrl && post.privacy === 'public'));
+      const page = await api.getReels();
+      if (generation !== feedGeneration.current) return;
+      const reels = page.reels.filter(post => (post.type === 'reel' || post.isReel === true) && post.mediaType === 'video' && post.mediaUrl && post.privacy === 'public');
+      setPosts([...new Map(reels.map(post => [post.id, post])).values()]);
+      nextCursor.current = page.nextCursor;
+      setHasMore(Boolean(page.nextCursor));
       hasLoaded.current = true;
-      setLoadError('');
     } catch (error) {
+      if (generation !== feedGeneration.current) return;
       setLoadError(error instanceof Error ? error.message : 'Could not load Reels. Check your connection and refresh.');
     } finally {
-      loadInFlight.current = false;
-      setLoading(false);
-      setRefreshing(false);
+      if (generation === feedGeneration.current) {
+        refreshInFlight.current = false;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
+
+  const loadMore = useCallback(async () => {
+    const cursor = nextCursor.current;
+    if (!cursor || refreshInFlight.current || moreInFlight.current || !hasMore) return;
+    moreInFlight.current = true;
+    const generation = feedGeneration.current;
+    setLoadingMore(true);
+    try {
+      const page = await api.getReels(cursor);
+      if (generation !== feedGeneration.current) return;
+      const reels = page.reels.filter(post => (post.type === 'reel' || post.isReel === true) && post.mediaType === 'video' && post.mediaUrl && post.privacy === 'public');
+      setPosts(current => [...new Map([...current, ...reels].map(post => [post.id, post])).values()]);
+      nextCursor.current = page.nextCursor;
+      setHasMore(Boolean(page.nextCursor));
+      setLoadError('');
+    } catch (error) {
+      if (generation === feedGeneration.current) setLoadError(error instanceof Error ? error.message : 'Could not load more Reels. Scroll or refresh to retry.');
+    } finally {
+      if (generation === feedGeneration.current) {
+        moreInFlight.current = false;
+        setLoadingMore(false);
+      }
+    }
+  }, [hasMore]);
+
+  useEffect(() => {
+    const feed = feedRef.current;
+    if (!feed || loading || loadingMore || refreshing || loadError || !hasMore || posts.length === 0) return;
+    // Keep fetching when a short page does not fill the mobile viewport; only the
+    // empty server page marks the true end of the feed.
+    if (feed.scrollHeight <= feed.clientHeight + 200) void loadMore();
+  }, [posts.length, loading, loadingMore, refreshing, loadError, hasMore, loadMore]);
 
   useEffect(() => {
     void load();
@@ -108,8 +159,11 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
     </header>
 
     {loadError && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"><span>{posts.length ? `Could not refresh Reels: ${loadError}` : loadError}</span><button type="button" onClick={() => void load()} className="min-h-10 rounded-lg bg-rose-700 px-3 font-bold text-white">Retry</button></div>}
-    {loading ? <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading Reels…</div> : posts.length === 0 ? loadError ? null : <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><Sparkles size={30} className="mx-auto mb-2 text-fuchsia-500" /><p className="font-bold text-slate-800">No Reels yet</p><p className="mt-1 text-sm text-slate-500">Create a Reel to start the video feed.</p><button onClick={() => setShowComposer(true)} className="mt-4 rounded-xl bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-700">Create your first Reel</button></div> : <div ref={feedRef} aria-label="Reels feed" className="h-[calc(100dvh-190px)] min-h-[420px] snap-y snap-mandatory space-y-3 overflow-y-auto overscroll-contain pb-2 lg:h-[calc(100dvh-140px)]">
+    {loading ? <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading Reels…</div> : posts.length === 0 ? loadError ? null : <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><Sparkles size={30} className="mx-auto mb-2 text-fuchsia-500" /><p className="font-bold text-slate-800">No Reels yet</p><p className="mt-1 text-sm text-slate-500">Create a Reel to start the video feed.</p><button onClick={() => setShowComposer(true)} className="mt-4 rounded-xl bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-700">Create your first Reel</button></div> : <div ref={feedRef} aria-label="Reels feed" onScroll={event => { const feed = event.currentTarget; if (feed.scrollHeight - feed.scrollTop - feed.clientHeight < 500) void loadMore(); }} className="h-[calc(100dvh-190px)] min-h-[420px] snap-y snap-mandatory space-y-3 overflow-y-auto overscroll-contain pb-2 lg:h-[calc(100dvh-140px)]">
       {posts.map((post, index) => <ReelSlide key={post.id} post={post} index={index} activeIndex={activeIndex} onActive={setActiveIndex} root={feedRef} onPostUpdated={handleUpdated} onPostDeleted={handleDeleted} onViewProfile={onViewProfile} />)}
+      <div aria-live="polite" className="flex min-h-12 items-center justify-center py-3 text-sm text-slate-500">
+        {loadingMore ? <span className="inline-flex items-center gap-2"><RefreshCw size={16} className="animate-spin" />Loading more reels...</span> : !hasMore ? 'No more reels' : null}
+      </div>
     </div>}
 
     <CreatePostModal isOpen={showComposer} onClose={() => setShowComposer(false)} onPostCreated={() => { void load(); }} forcePublic videoOnly title="Create a public Reel" />
