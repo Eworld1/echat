@@ -44,6 +44,7 @@ import {
   , Film, BarChart3
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
+import { LANGUAGES, type LanguageName } from '../i18n/translations';
 
 export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
@@ -52,6 +53,7 @@ interface NavbarProps {
   onNavigate: (view: AppView, targetProfileId?: string, targetPostId?: string) => void;
   onOpenMessenger: () => void;
   onOpenCreate: () => void;
+  onProfileMenuChange: (open: boolean) => void;
 }
 
 interface PageItem {
@@ -68,15 +70,18 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentView,
   onNavigate,
   onOpenMessenger,
-  onOpenCreate
+  onOpenCreate,
+  onProfileMenuChange
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
-  const { t } = usePreferences();
+  const { t, theme, setTheme, language, setLanguage } = usePreferences();
   const { onlineUserIds, onNotification, startCall } = useSocket();
   const { canInstall, install } = useInstallPrompt();
   const [showIosHelp, setShowIosHelp] = useState(false);
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [showHelpInfo, setShowHelpInfo] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [toast, setToast] = useState<Notification | null>(null);
@@ -99,12 +104,29 @@ export const Navbar: React.FC<NavbarProps> = ({
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const profileTouchStartRef = useRef<number | null>(null);
 
   useEffect(() => {
     setShowProfileMenu(false);
+    onProfileMenuChange(false);
+    setSettingsExpanded(false);
     setShowNotifications(false);
     setShowSearchDropdown(false);
-  }, [currentView]);
+  }, [currentView, onProfileMenuChange]);
+
+  const closeProfileMenu = () => {
+    setShowProfileMenu(false);
+    onProfileMenuChange(false);
+  };
+
+  const toggleProfileMenu = () => {
+    setShowProfileMenu(open => {
+      onProfileMenuChange(!open);
+      return !open;
+    });
+    setSettingsExpanded(false);
+    setShowHelpInfo(false);
+  };
 
   // App Pages definition for search
   const searchablePages: PageItem[] = useMemo(() => [
@@ -422,7 +444,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const unreadMessageCount = notifications.filter(n => !n.read && n.type === 'message').length;
 
   return (
-    <header className="sticky top-0 z-30 bg-white border-b border-slate-200/90 shadow-2xs">
+    <header className={`sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} bg-white border-b border-slate-200/90 shadow-2xs`}>
       <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px_48px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
@@ -1058,7 +1080,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* User Profile Menu */}
           <div className="relative">
             <button
-              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              onClick={toggleProfileMenu}
               className="flex items-center gap-1 cursor-pointer"
             >
               <img
@@ -1068,30 +1090,31 @@ export const Navbar: React.FC<NavbarProps> = ({
               />
             </button>
 
-          {showProfileMenu && (
-              <div className="fixed inset-x-0 bottom-0 z-[80] max-h-[82dvh] w-full overflow-y-auto rounded-t-3xl border border-slate-100 bg-white p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl animate-in slide-in-from-bottom-3 min-[769px]:absolute min-[769px]:inset-auto min-[769px]:right-0 min-[769px]:top-12 min-[769px]:max-h-[80vh] min-[769px]:w-64 min-[769px]:rounded-3xl min-[769px]:p-2 min-[769px]:animate-in min-[769px]:fade-in">
+          {showProfileMenu && <>
+              <button type="button" onClick={closeProfileMenu} aria-label="Close profile menu" className="fixed inset-0 z-[100] bg-black/45" />
+              <div role="dialog" aria-label="Profile menu" onTouchStart={event => { profileTouchStartRef.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={event => { const start = profileTouchStartRef.current; const end = event.changedTouches[0]?.clientY; if (start !== null && end !== undefined && end - start > 90) closeProfileMenu(); profileTouchStartRef.current = null; }} className="fixed bottom-0 left-0 right-0 z-[110] max-h-[75dvh] w-full touch-pan-y overflow-y-auto overscroll-contain rounded-t-[20px] border border-slate-200 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl animate-in slide-in-from-bottom-3 dark:border-slate-700 dark:bg-[#1a2a3a] min-[769px]:bottom-auto min-[769px]:left-auto min-[769px]:right-4 min-[769px]:top-[calc(env(safe-area-inset-top)+60px)] min-[769px]:max-h-[calc(100dvh-80px)] min-[769px]:w-[360px] min-[769px]:rounded-xl min-[769px]:p-3 min-[769px]:animate-in min-[769px]:fade-in">
                 <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-slate-300 min-[769px]:hidden" />
-                <button onClick={() => setShowProfileMenu(false)} aria-label="Close profile menu" className="absolute right-4 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-600 min-[769px]:hidden"><X size={18} /></button>
+                <button onClick={closeProfileMenu} aria-label="Close profile menu" className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-white min-[769px]:h-8 min-[769px]:w-8"><X size={18} /></button>
                 {/* User card shortcut */}
                 <button type="button"
                   onClick={() => {
                     if (user) onNavigate('profile', user.id);
-                    setShowProfileMenu(false);
+                    closeProfileMenu();
                   }}
-                  className="mb-2 flex w-full items-center gap-3 rounded-2xl bg-slate-50 p-3 text-left transition hover:bg-slate-100"
+                  className="mb-3 flex min-h-16 w-full items-center gap-3 rounded-xl bg-slate-50 p-3 pr-12 text-left transition hover:bg-slate-100 dark:bg-white/5 dark:hover:bg-white/10"
                 >
-                  <img src={user?.avatar} alt={user?.name} className="w-11 h-11 rounded-full object-cover" />
+                  <img src={user?.avatar || initialsAvatar(user?.name || '')} alt={user?.name} className="h-12 w-12 shrink-0 rounded-full object-cover" />
                   <div className="min-w-0">
-                    <p className="font-bold text-slate-900 text-sm truncate">{user?.name}</p>
-                    <p className="text-xs text-slate-500">{t('see_profile')}</p>
+                    <p className="truncate text-[17px] font-bold text-slate-900 dark:text-white">{user?.name}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-300">{t('see_profile')}</p>
                   </div>
                 </button>
 
-                <div className="mb-2 rounded-xl border border-slate-100 p-2">
-                  <p className="px-2 pb-1 text-[10px] font-bold uppercase text-slate-400">Switch identity</p>
-                  <button onClick={() => { switchIdentity(null); setShowProfileMenu(false); }} className="w-full rounded-lg p-2 text-left text-xs hover:bg-slate-50">{user?.name} · Personal</button>
-                  {myPages.map(page => <button key={page.id} onClick={() => { switchIdentity(page); setShowProfileMenu(false); }} className="flex w-full items-center gap-2 rounded-lg p-2 text-left text-xs hover:bg-slate-50"><img src={page.avatar || '/logo-192.png'} className="h-7 w-7 rounded-full object-cover" />{page.name}</button>)}
-                  <button onClick={() => { onNavigate('pages'); setShowProfileMenu(false); }} className="w-full rounded-lg p-2 text-left text-xs font-bold text-blue-700 hover:bg-slate-50">+ Create or manage Pages</button>
+                <div className="mb-3 rounded-xl border border-slate-100 p-2 dark:border-slate-600">
+                  <p className="px-2 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Switch identity</p>
+                  <button onClick={() => { switchIdentity(null); closeProfileMenu(); }} className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2 text-left text-[15px] text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-white/10"><img src={user?.avatar || initialsAvatar(user?.name || '')} className="h-8 w-8 rounded-full object-cover" />{user?.name} · Personal</button>
+                  {myPages.map(page => <button key={page.id} onClick={() => { switchIdentity(page); closeProfileMenu(); }} className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2 text-left text-[15px] text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-white/10"><img src={page.avatar || '/logo-192.png'} className="h-8 w-8 rounded-full object-cover" />{page.name}</button>)}
+                  <button onClick={() => { onNavigate('pages'); closeProfileMenu(); }} className="flex min-h-12 w-full items-center rounded-lg px-2 text-left text-[15px] font-semibold text-blue-700 hover:bg-slate-50 dark:text-blue-300 dark:hover:bg-white/10">+ Create or manage Pages</button>
                   {activePage && <p className="px-2 pt-1 text-[10px] text-blue-700">Currently using {activePage.name}</p>}
                 </div>
 
@@ -1100,26 +1123,39 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ['groups', 'Groups', UsersRound],
                   ['events', 'Events', CalendarDays],
                   ['dashboard', 'Dashboard', BarChart3],
-                  ['saved', 'Saved Posts', Bookmark],
-                  ['settings', 'Settings & Privacy', Settings2]
+                  ['saved', 'Saved Posts', Bookmark]
                 ] as const).map(([view, label, Icon]) => (
                   <button
                     key={view}
                     onClick={() => {
                       onNavigate(view);
-                      setShowProfileMenu(false);
+                      closeProfileMenu();
                     }}
-                    className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 rounded-xl text-xs font-semibold text-slate-700 flex items-center gap-2.5 transition"
+                    className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === view ? 'bg-slate-100 dark:bg-white/10' : ''}`}
                   >
-                    <Icon size={16} className="text-slate-500" />
+                    <Icon size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />
                     {label}
                   </button>
                 ))}
 
+                <button type="button" onClick={() => setSettingsExpanded(value => !value)} aria-expanded={settingsExpanded} className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === 'settings' ? 'bg-slate-100 dark:bg-white/10' : ''}`}>
+                  <Settings2 size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Settings &amp; Privacy<ChevronRight size={18} className={`ml-auto transition-transform ${settingsExpanded ? 'rotate-90' : ''}`} />
+                </button>
+                {settingsExpanded && <div className="mb-1 ml-8 space-y-1 border-l border-slate-200 pl-2 dark:border-slate-600">
+                  <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Settings</button>
+                  <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Privacy Checkup</button>
+                  <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Dark Mode: {theme === 'dark' ? 'On' : 'Off'}</button>
+                  <label className="flex h-11 items-center justify-between gap-2 rounded-lg px-3 text-sm font-medium text-slate-700 dark:text-slate-100">Language<select aria-label="Language" value={language} onChange={event => setLanguage(event.target.value as LanguageName)} className="max-w-36 rounded-md border border-slate-200 bg-white px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800">{(Object.keys(LANGUAGES) as LanguageName[]).map(name => <option key={name} value={name}>{LANGUAGES[name].label}</option>)}</select></label>
+                  <button onClick={() => { logout(); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">Logout</button>
+                </div>}
+
+                <button type="button" onClick={() => setShowHelpInfo(value => !value)} aria-expanded={showHelpInfo} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><MessageCircle size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Help &amp; Support</button>
+                {showHelpInfo && <p className="mx-4 mb-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-200">For help with your account, contact your EChat administrator.</p>}
+
                 {canInstall && (
                   <button
                     onClick={async () => {
-                      setShowProfileMenu(false);
+                      closeProfileMenu();
                       const result = await install();
                       if (result === 'ios') setShowIosHelp(true);
                     }}
@@ -1134,7 +1170,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     onClick={() => {
                       onNavigate('admin');
-                      setShowProfileMenu(false);
+                      closeProfileMenu();
                     }}
                     className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 rounded-xl text-xs font-semibold text-slate-700 flex items-center gap-2.5 transition"
                   >
@@ -1146,7 +1182,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   onClick={() => {
                     logout();
-                    setShowProfileMenu(false);
+                    closeProfileMenu();
                   }}
                   className="w-full text-left px-3.5 py-2.5 hover:bg-red-50 rounded-xl text-xs font-semibold text-red-600 flex items-center gap-2.5 transition border-t border-slate-100 mt-1"
                 >
@@ -1154,7 +1190,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {t('log_out')}
                 </button>
               </div>
-            )}
+            </>}
           </div>
         </div>
       </div>
