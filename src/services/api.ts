@@ -420,14 +420,10 @@ export const api = {
     }
   },
   async getReels(): Promise<Post[]> {
-    try {
-      const res = await fetch(apiUrl('/api/reels'), { headers: getHeaders() });
-      if (!res.ok) return [];
-      const data = await readResponse<Post[]>(res);
-      return Array.isArray(data) ? data : [];
-    } catch {
-      return [];
-    }
+    const res = await fetch(apiUrl('/api/reels'), { headers: getHeaders(), cache: 'no-store' });
+    const data = await readResponse<Post[]>(res, 'Could not load Reels');
+    if (!Array.isArray(data)) throw new Error('The server returned an invalid Reels list. Refresh to try again.');
+    return data;
   },
   async getDashboard(): Promise<{ stats: { views: number; likes: number; comments: number; followers: number; posts: number }; viewsByDay: { date: string; views: number }[]; posts: Post[]; reels?: Post[] }> {
     const res = await fetch(apiUrl('/api/dashboard'), { headers: getHeaders() });

@@ -48,8 +48,16 @@ class Database {
   constructor() {
     const loaded = this.load();
     this.data = loaded.data;
+    const assignedPostTypes = this.normalizePostTypes(this.data.posts);
+    this.currentDbPath = loaded.path;
+    this.removeLegacyTestAccounts();
+    if (assignedPostTypes) this.save();
+  }
+
+  /** Apply the same legacy-Reel migration to local JSON and durable database records. */
+  private normalizePostTypes(posts: Post[]): boolean {
     let assignedPostTypes = false;
-    for (const post of this.data.posts) {
+    for (const post of posts) {
       const metadata = post as Post & { videoUrl?: string; videoType?: string; aspectRatio?: number | string };
       const ratio = typeof metadata.aspectRatio === 'number'
         ? metadata.aspectRatio
@@ -59,18 +67,18 @@ class Database {
       const hasVideo = post.mediaType === 'video' || Boolean(metadata.videoUrl);
       const isLegacyReel = post.type === 'reel' || metadata.isReel === true || metadata.videoType === 'reel' || (hasVideo && ratio > 0 && ratio <= 0.75);
       if (isLegacyReel) {
-        if (post.type !== 'reel' || post.isReel !== true) assignedPostTypes = true;
+        if (post.type !== 'reel' || post.isReel !== true || post.mediaType !== 'video' || (!post.mediaUrl && Boolean(metadata.videoUrl))) assignedPostTypes = true;
         post.type = 'reel';
         post.isReel = true;
+        post.mediaType = 'video';
+        if (!post.mediaUrl && metadata.videoUrl) post.mediaUrl = metadata.videoUrl;
       } else if (!post.type || post.type === 'story') {
         post.type = 'post';
         post.isReel = false;
         assignedPostTypes = true;
       }
     }
-    this.currentDbPath = loaded.path;
-    this.removeLegacyTestAccounts();
-    if (assignedPostTypes) this.save();
+    return assignedPostTypes;
   }
 
   private findExistingDbFile(): { path: string; raw: string } | null {
@@ -224,9 +232,11 @@ class Database {
     if (!users.some((u: User) => u.email?.toLowerCase() === 'eldermoses89@gmail.com')) {
       users = [...SEED_USERS, ...users];
     }
+    const posts = Array.isArray(parsed.posts) ? parsed.posts : [];
+    this.normalizePostTypes(posts);
     return {
       users,
-      posts: parsed.posts || [],
+      posts,
       stories: parsed.stories || [],
       messages: parsed.messages || [],
       notifications: parsed.notifications || [],

@@ -972,6 +972,9 @@ app.get('/api/posts', (req: Request, res: Response) => {
 });
 
 app.get('/api/reels', (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   const authUser = getAuthUser(req);
   const rawReels = db.getPosts(authUser?.id).filter(p => p.type === 'reel' && p.mediaType === 'video');
   const populated = rawReels.map(p => populatePost(p));
