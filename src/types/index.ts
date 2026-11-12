@@ -7,6 +7,7 @@ export interface User {
   avatar: string; coverPhoto: string; bio: string; location: string;
   dob?: string; dobMonthDay?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
+  v2?: { whatsapp?: string; whatsappEnabled?: boolean; whatsappDisplay?: boolean; whatsappAutoReplyTemplate?: string; [key:string]: unknown };
   role: 'user' | 'admin' | 'developer';
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
@@ -28,7 +29,7 @@ export interface Post {
   id: string; authorId: string; author?: User; // FIX: optional
   type?: 'post' | 'reel' | 'story';
   isReel?: boolean; videoType?: string; aspectRatio?: number | string;
-  content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
+  content: string; mediaUrl?: string; mediaUrls?: string[]; images?: string[]; v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown }; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
   viewsCount?: number; views?: string[]; isReported: boolean;
@@ -53,7 +54,7 @@ export interface MessageAttachment { url: string; name: string; mimeType: string
 export interface Message {
   id: string; conversationId?: string; // Optional
   senderId: string; receiverId: string;
-  text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio';
+  text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio'; v2_market_order?: { orderId?:string; listingId:string; buyerId:string; sellerId:string; status:string; createdAt:number; source?:'echat'|'whatsapp' };
   audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number; editHistory?: { text: string; editedAt: number }[]; deletedFor?: string[];
 }
 

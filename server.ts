@@ -1058,6 +1058,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
   const { content, mediaUrl, mediaType, feeling, privacy, taggedUserIds, type, thumbnailUrl, mediaDuration, mediaSize } = req.body;
+  const v2 = req.body.v2 && typeof req.body.v2 === 'object' ? req.body.v2 : undefined;
   const requestedMediaUrls = Array.isArray(req.body.mediaUrls) ? req.body.mediaUrls : [];
   if (requestedMediaUrls.length > 10) return res.status(400).json({ error: 'A post can include at most 10 images' });
   const mediaUrls = requestedMediaUrls.filter((url: unknown): url is string => typeof url === 'string' && (/^https:\/\//i.test(url) || url.startsWith('/uploads/'))).slice(0, 10);
@@ -1087,7 +1088,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
     mediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds, mediaUrls, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', isReel: type === 'reel' && mediaType === 'video', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
+    { taggedUserIds: cleanTaggedIds, mediaUrls, images: mediaUrls, v2: v2 ? { feeling: typeof v2.feeling === 'string' ? v2.feeling.slice(0, 80) : undefined, privacy: safePrivacy } : undefined, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', isReel: type === 'reel' && mediaType === 'video', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
   );
   if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 
@@ -1402,6 +1403,7 @@ app.post('/api/messages', (req: Request, res: Response) => {
     mediaType,
     audioDuration,
     attachments,
+    ...(req.body.v2_market_order && typeof req.body.v2_market_order === 'object' ? { v2_market_order: req.body.v2_market_order } : {}),
     status
   });
 

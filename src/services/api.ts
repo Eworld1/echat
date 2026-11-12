@@ -437,6 +437,8 @@ export const api = {
     content: string;
     mediaUrl?: string;
     mediaUrls?: string[];
+    images?: string[];
+    v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown };
     mediaType?: 'image' | 'video';
     type?: 'post' | 'reel';
     thumbnailUrl?: string;
@@ -584,6 +586,7 @@ export const api = {
     mediaType?: 'image' | 'video' | 'audio';
     audioDuration?: number;
     attachments?: MessageAttachment[];
+    v2_market_order?: Message['v2_market_order'];
   }): Promise<Message> {
     const res = await fetch(apiUrl('/api/messages'), {
       method: 'POST',
