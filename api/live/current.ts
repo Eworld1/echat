@@ -1,5 +1,5 @@
-import type { ApiRequest, ApiResponse } from '../_live.js';
-import { handleError, lives, sendJson } from '../_live.js';
+import type { ApiRequest, ApiResponse } from '../../serverless/live.js';
+import { handleError, lives, sendJson } from '../../serverless/live.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed', code: 'method-not-allowed' });

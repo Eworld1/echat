@@ -1,6 +1,5 @@
-import type { ApiRequest, ApiResponse } from '../_live.js';
-import type { RemoteTrack } from 'livekit-client';
-import { createRoomToken, handleError, liveKitUrl, lives, sendJson, verifyLiveUser } from '../_live.js';
+import type { ApiRequest, ApiResponse } from '../../serverless/live.js';
+import { createRoomToken, handleError, liveKitUrl, lives, sendJson, verifyLiveUser } from '../../serverless/live.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed', code: 'method-not-allowed' });

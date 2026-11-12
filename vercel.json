@@ -7,12 +7,11 @@
     }
   },
   "rewrites": [
-    { "source": "/api/live/:path*", "destination": "/api/live/:path*" },
     { "source": "/((?!api/|uploads/|assets/|.*\\..*).*)", "destination": "/index.html" }
   ],
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "npm install --legacy-peer-deps",
+  "installCommand": "npm install --legacy-peer-deps --package-lock=false",
   "headers": [
     {
       "source": "/sw.js",
