@@ -1,20 +1,21 @@
 {
-  "name": "EchatSl",
-  "short_name": "EchatSl",
+  "name": "Echat",
+  "short_name": "Echat",
   "description": "Real-time social app: feed, stories, chat, voice and video calls.",
   "id": "/",
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#F0F2F5",
+  "theme_color": "#FFFFFF",
   "categories": ["social", "communication"],
   "icons": [
+    { "src": "/logo-mark-blue.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
     { "src": "/logo-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ],
   "shortcuts": [
-    { "name": "Messages", "short_name": "Messages", "url": "/?source=shortcut", "icons": [{ "src": "/logo-192.png", "sizes": "192x192" }] }
+    { "name": "Messages", "short_name": "Messages", "url": "/?source=shortcut", "icons": [{ "src": "/logo-mark-blue.svg", "sizes": "any", "type": "image/svg+xml" }] }
   ]
 }

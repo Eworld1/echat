@@ -10,7 +10,7 @@ import { V2RightRail } from '../../components/v2/V2RightRail';
 import type { Story } from '../../types';
 import type { V2Route } from '../../components/EchatV2Layout';
 
-const feelings=['✨ Feeling inspired','😊 Feeling happy','🔥 Feeling excited','🙏 Feeling grateful','🎉 Celebrating'];
+const feelings=['Feeling inspired','😊 Feeling happy','🔥 Feeling excited','🙏 Feeling grateful','🎉 Celebrating'];
 export const V2Home:React.FC<{onNavigate:(route:V2Route)=>void}>=({onNavigate})=>{
   const {user}=useAuth();const [posts,setPosts]=useState<Post[]>([]);const [stories,setStories]=useState<Story[]>([]);const [selectedStory,setSelectedStory]=useState<Story|null>(null);const [content,setContent]=useState('');const [feeling,setFeeling]=useState('');const [privacy,setPrivacy]=useState<'public'|'friends'|'only_me'>('public');const [files,setFiles]=useState<File[]>([]);const [previews,setPreviews]=useState<string[]>([]);const [busy,setBusy]=useState(false);const [progress,setProgress]=useState('');const [error,setError]=useState('');
   const previewUrls=useRef<string[]>([]);

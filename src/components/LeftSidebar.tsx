@@ -71,14 +71,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
 
         <button
           onClick={() => onNavigate('reels')}
-          className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'reels' ? 'bg-fuchsia-50 text-fuchsia-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}
+          className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'reels' ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}
         >
-          <div className="w-9 h-9 rounded-full bg-fuchsia-100 text-fuchsia-600 flex items-center justify-center"><Film size={19} /></div>
+          <div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><Film size={19} /></div>
           <span className="truncate">Reels</span>
         </button>
 
         <button onClick={() => onNavigate('dashboard')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'dashboard' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}>
-          <div className="w-9 h-9 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center"><BarChart3 size={19} /></div>
+          <div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><BarChart3 size={19} /></div>
           <span className="truncate">Dashboard</span>
         </button>
 
@@ -119,10 +119,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
         <button
           onClick={() => onNavigate('groups')}
           className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${
-            currentView === 'groups' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
+            currentView === 'groups' ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
           }`}
         >
-          <div className="w-9 h-9 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center">
+          <div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center">
             <Users2 size={20} />
           </div>
           <span className="flex-1 truncate">{t('groups')}</span>
@@ -159,14 +159,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
           <button
             onClick={() => onNavigate('admin')}
             className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${
-              currentView === 'admin' ? 'bg-purple-50 text-purple-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
+              currentView === 'admin' ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
             }`}
           >
-            <div className="w-9 h-9 rounded-full bg-purple-100 text-purple-700 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center">
               <Shield size={20} />
             </div>
             <span className="flex-1 truncate">Developer Mode</span>
-            <span className="bg-purple-600 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded uppercase">
+            <span className="bg-[#0A2A6B] text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded uppercase">
               Admin
             </span>
           </button>

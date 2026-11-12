@@ -2,7 +2,7 @@
 const VERSION = 'echat-v2';
 const STATIC_CACHE = `${VERSION}-static`;
 const OFFLINE_URL = '/offline.html';
-const PRECACHE = [OFFLINE_URL, '/logo-192.png', '/logo-512.png', '/apple-touch-icon.png', '/favicon.svg', '/manifest.webmanifest'];
+const PRECACHE = [OFFLINE_URL, '/logo-mark-blue.svg', '/logo-blue.svg', '/logo-192.png', '/logo-512.png', '/apple-touch-icon.png', '/favicon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(STATIC_CACHE).then((cache) => cache.addAll(PRECACHE)).then(() => self.skipWaiting()));

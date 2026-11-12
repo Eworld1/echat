@@ -38,21 +38,21 @@ export const UpgradePrompt: React.FC = () => {
   };
 
   if (!open) return null;
-  return <div className="fixed inset-0 z-[10010] flex items-end justify-center bg-black/65 p-3 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
-    <section className="w-full max-w-md rounded-3xl border border-amber-300/20 bg-slate-950 p-6 text-white shadow-2xl">
-      <button onClick={() => { localStorage.setItem(DISMISS_KEY, '1'); setOpen(false); }} aria-label="Close" className="float-right rounded-full p-2 text-slate-400 hover:bg-white/10"><X size={18} /></button>
-      <img src="/logo-192.png" alt="EchatSl" className="mb-4 h-16 w-16 rounded-full" />
+  return <div className="fixed inset-0 z-[10010] flex items-end justify-center bg-black/35 p-3 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
+    <section className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 text-slate-900">
+      <button onClick={() => { localStorage.setItem(DISMISS_KEY, '1'); setOpen(false); }} aria-label="Close" className="float-right rounded-full p-2 text-slate-500 hover:bg-slate-100"><X size={18} /></button>
+      <img src="/logo-mark-blue.svg" alt="Echat" className="mb-4 h-16 w-16 object-contain" />
       <h2 id="upgrade-title" className="text-xl font-black">New EChat Look is Here</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-300">Upgrade to get the new EChat logo and new features on your device.</p>
-      {showInstructions && <div className="mt-4 rounded-xl bg-white/5 p-3 text-sm text-slate-200">
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">Upgrade to get the new EChat logo and new features on your device.</p>
+      {showInstructions && <div className="mt-4 rounded-xl bg-[#F0F2F5] p-3 text-sm text-slate-800">
         <p className="font-bold">Add EchatSl to your Home Screen</p>
         <p className="mt-2"><b>Android:</b> Open the browser menu (⋮), then tap <i>Install app</i> or <i>Add to Home screen</i>.</p>
         <p className="mt-2"><b>iPhone/iPad:</b> Tap Share in Safari, then <i>Add to Home Screen</i>.</p>
-        <button onClick={finish} className="mt-3 rounded-lg bg-amber-400 px-3 py-2 font-bold text-black">Done</button>
+        <button onClick={finish} className="mt-3 rounded-lg bg-[#0A2A6B] px-3 py-2 font-bold text-white">Done</button>
       </div>}
       {!showInstructions && <div className="mt-5 flex gap-3">
-        <button onClick={() => { localStorage.setItem(DISMISS_KEY, '1'); setOpen(false); }} className="min-h-11 flex-1 rounded-xl border border-slate-700 px-4 py-2 font-bold text-slate-200">Later</button>
-        <button onClick={() => void upgrade()} className="min-h-11 flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-amber-400 px-4 py-2 font-extrabold text-black"><Download size={17} />Upgrade Now</button>
+        <button onClick={() => { localStorage.setItem(DISMISS_KEY, '1'); setOpen(false); }} className="min-h-11 flex-1 rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700">Later</button>
+        <button onClick={() => void upgrade()} className="min-h-11 flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[#1877F2] px-4 py-2 font-extrabold text-white"><Download size={17} />Upgrade Now</button>
       </div>}
     </section>
   </div>;

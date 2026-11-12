@@ -639,7 +639,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
               {/* Floating Live Badge Over Video */}
               {liveCaption && captionsEnabled && <div className="absolute bottom-20 left-1/2 z-30 max-w-[85%] -translate-x-1/2 rounded bg-black/80 px-3 py-1.5 text-center text-sm font-semibold text-white">{liveCaption}</div>}
-              <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex items-center gap-1 rounded bg-black/50 px-2 py-1 text-[10px] font-bold text-white"><img src="/logo-192.png" alt="" className="h-5 w-5 rounded-full" />EchatSl</div>
+              <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex items-center gap-1 rounded bg-black/50 px-2 py-1 text-[10px] font-bold text-white"><img src="/logo-mark-blue.svg" alt="" className="h-5 w-5" />Echat</div>
               {isBroadcasting && (
                 <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
                   <span className="bg-rose-600 text-white text-xs font-black uppercase px-2.5 py-1 rounded-md tracking-wider flex items-center gap-1 shadow-lg animate-pulse">

@@ -1,11 +1,25 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-
-.echat-v2 { --v2-gold:#F5B301; --v2-gold-light:#FFC107; --v2-midnight:#0F1B2D; --v2-teal:#00C2A8; --v2-cream:#FFF8E7; font-family:'Plus Jakarta Sans',ui-sans-serif,system-ui,sans-serif; color:#122033; background:#fff8e7; min-height:100dvh; }
+/* Clean, solid Echat palette. The Classic app remains on its own route and shares these brand tokens only. */
+.echat-v2 { --v2-gold:#0A2A6B; --v2-gold-light:#1877F2; --v2-midnight:#0A2A6B; --v2-teal:#1877F2; --v2-cream:#F0F2F5; font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#111827; background:#F0F2F5; min-height:100dvh; }
 .echat-v2 * { box-sizing:border-box; }
 .echat-v2 button,.echat-v2 input,.echat-v2 textarea,.echat-v2 select { font:inherit; }
 .echat-v2 button { touch-action:manipulation; }
-.echat-v2-card { border:1px solid rgba(15,27,45,.08); border-radius:20px; background:#fff; box-shadow:0 8px 28px rgba(15,27,45,.06); }
+.echat-v2-card { border:1px solid #D9DDE3; border-radius:12px; background:#fff; box-shadow:none; }
 .echat-v2-pill { border-radius:999px; }
+.echat-v2 [class*="bg-[#0F1B2D]"] { background-color:#0A2A6B!important; }
+.echat-v2 header[class*="bg-[#0F1B2D]"] { background:#fff!important; border:1px solid #D9DDE3; color:#111827!important; }
+.echat-v2 header[class*="bg-[#0F1B2D]"] .text-white { color:#111827!important; }
+.echat-v2 header[class*="bg-[#0F1B2D]"] [class*="text-[#FFC107]"] { color:#0A2A6B!important; }
+.echat-v2 [class*="text-[#0F1B2D]"],.echat-v2 [class*="text-[#735000]"],.echat-v2 [class*="text-[#8C6200]"],.echat-v2 [class*="text-[#9A6800]"] { color:#0A2A6B!important; }
+.echat-v2 [class*="bg-[#F5B301]"],.echat-v2 [class*="bg-[#FFC107]"] { background-color:#1877F2!important; color:#fff!important; }
+.echat-v2 [class*="bg-[#FFF2C7]"],.echat-v2 [class*="bg-[#FFF8E7]"],.echat-v2 [class*="bg-[#FFF8E7]/"] { background-color:#E8EEF7!important; }
+.echat-v2 [class*="bg-gradient"]:not([style*="backgroundImage"]) { background-image:none!important; background-color:#E8EEF7!important; }
+.echat-v2 [class*="bg-gradient"][class*="from-black"] { background-image:none!important; background-color:rgba(0,0,0,.68)!important; }
+.echat-v2 [class*="bg-violet-"],.echat-v2 [class*="bg-purple-"],.echat-v2 [class*="bg-fuchsia-"] { background-color:#E8EEF7!important; }
+.echat-v2 [class*="text-violet-"],.echat-v2 [class*="text-purple-"],.echat-v2 [class*="text-fuchsia-"] { color:#0A2A6B!important; }
+.echat-v2 [class*="backdrop-blur"] { backdrop-filter:none!important; }
+.echat-v2 [class*="shadow-"] { box-shadow:none!important; }
+.echat-v2 [style*="linear-gradient"] { background-image:none!important; background-color:#0A2A6B!important; }
+.echat-v2 input:not([type="checkbox"]),.echat-v2 textarea,.echat-v2 select { border-color:#D9DDE3; border-radius:10px; background-color:#F0F2F5; color:#111827; }
 @media(max-width:767px) { .echat-v2 { padding-bottom:calc(76px + env(safe-area-inset-bottom)); } }
 html.echat-v2-dark .echat-v2 { background:#091321; color:#f8fafc; }
 html.echat-v2-dark .echat-v2 .echat-v2-card { background:#142235; border-color:rgba(255,255,255,.1); color:#f8fafc; }

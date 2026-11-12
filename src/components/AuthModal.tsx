@@ -121,7 +121,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         {/* Left Brand Column */}
         <div className="w-full lg:w-1/2 space-y-5 text-center lg:text-left text-white drop-shadow-md">
           <div className="flex items-center justify-center lg:justify-start gap-3">
-            <img src="/logo-192.png" alt="EchatSl logo" className="h-14 w-14 rounded-2xl object-cover shadow-lg" />
+            <img src="/logo-mark-blue.svg" alt="Echat logo" className="h-14 w-14 object-contain" />
             <h1 className="text-4xl sm:text-5xl font-black text-white tracking-tight">
               {welcomeConfig.welcomeTitle || welcomeConfig.appName || 'EchatSl'}
             </h1>

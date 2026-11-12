@@ -271,7 +271,7 @@ export function MainApp() {
   if (isV2Route) return <EchatV2Boundary><EchatV2App /></EchatV2Boundary>;
 
   return (
-    <div className="min-h-screen bg-[#F0F2F5] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
+    <div className="echat-classic min-h-screen bg-[#F0F2F5] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
       <InstallAppBanner />
       {splashHidden && <UpgradePrompt />}

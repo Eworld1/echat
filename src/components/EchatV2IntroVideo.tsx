@@ -5,7 +5,7 @@ import './echat-v2-intro.css';
 
 const DURATION = 30;
 const scenes = [
-  { title: 'Echat is NEW ✨', subtitle: 'Chat, Connect, Belong - Like Never Before', kind: 'intro' },
+  { title: 'Echat is NEW', subtitle: 'Chat, Connect, Belong - Like Never Before', kind: 'intro' },
   { title: 'Your Space - Moments, Posts & Vibes in One Place', subtitle: 'Catch up with the people and moments you care about.', kind: 'home' },
   { title: 'Vibes - Swipe. Fire. Spread.', subtitle: 'Find your people and grow Your Circle.', kind: 'vibes' },
   { title: 'Echat Chat - Reply, Voice & Delete for Everyone', subtitle: 'Every conversation, all in one place.', kind: 'chat' },
@@ -39,7 +39,7 @@ export const EchatV2IntroVideo: React.FC<Props> = ({mode='modal', onClose, onExp
     {mode==='modal'&&<button className="ev2-close" aria-label="Close tour" onClick={onClose}><X size={22}/></button>}
     <div className={`ev2-stage ev2-scene-${scene.kind}`}>
       <div className="ev2-scene-inner" key={scene.kind}><ScenePreview kind={scene.kind}/><h1>{scene.title}</h1><p>{scene.subtitle}</p></div>
-      {finished&&<div className="ev2-end-actions"><button type="button" className="ev2-explore" onClick={onExplore}>Explore New Echat ✨ <ArrowRight size={18}/></button><button type="button" className="ev2-watch" onClick={replay}><RotateCcw size={16}/> Watch Again</button></div>}
+      {finished&&<div className="ev2-end-actions"><button type="button" className="ev2-explore" onClick={onExplore}>Explore New Echat <ArrowRight size={18}/></button><button type="button" className="ev2-watch" onClick={replay}><RotateCcw size={16}/> Watch Again</button></div>}
       <div className="ev2-controls"><div className="ev2-progress"><span>{`0:${String(Math.floor(elapsed)).padStart(2,'0')}`}</span><input aria-label="Tour progress" type="range" min="0" max={DURATION} step="0.1" value={elapsed} onChange={event=>{const value=Number(event.target.value);setElapsed(value);setFinished(value>=DURATION);}}/><span>0:30</span></div><div className="ev2-control-buttons"><button type="button" aria-label={playing?'Pause':'Play'} onClick={()=>setPlaying(value=>!value)}>{playing?<Pause size={18}/>:<Play size={18}/>}</button><button type="button" aria-label={muted?'Unmute':'Mute'} onClick={toggleSound}>{muted?<VolumeX size={18}/>:<Volume2 size={18}/>}<span>{muted?'Unmute':'Mute'}</span></button><button type="button" onClick={()=>{setElapsed(DURATION);setFinished(true);setPlaying(false);}}><SkipForward size={18}/><span>Skip</span></button><button type="button" onClick={replay}><RotateCcw size={18}/><span>Replay</span></button></div>{soundReady&&!muted&&<span className="ev2-sound-note"><Check size={12}/> Sound is enabled when audio is available</span>}</div>
     </div>
   </div>;

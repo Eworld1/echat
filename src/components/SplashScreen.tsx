@@ -1,10 +1,10 @@
 import React from 'react';
 
-export const SplashScreen: React.FC<{ leaving?: boolean }> = ({ leaving = false }) => <div className="fixed inset-0 z-[10000] grid place-items-center bg-black text-white transition-opacity duration-500" style={{ opacity: leaving ? 0 : 1 }}>
+export const SplashScreen: React.FC<{ leaving?: boolean }> = ({ leaving = false }) => <div className="fixed inset-0 z-[10000] grid place-items-center bg-white text-slate-900 transition-opacity duration-500" style={{ opacity: leaving ? 0 : 1 }}>
   <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-700">
-    <img src="/logo-512.png" alt="EchatSl" className="h-56 w-56 rounded-full object-cover shadow-[0_0_80px_rgba(245,158,11,.25)] sm:h-72 sm:w-72" />
-    <h1 className="mt-5 text-3xl font-black tracking-wide text-amber-300">EchatSl</h1>
-    <p className="mt-1 text-sm text-slate-300">Connect, Share &amp; Chat</p>
-    <span className="mt-5 h-5 w-5 animate-spin rounded-full border-2 border-amber-300 border-t-transparent" />
+    <img src="/logo-mark-blue.svg" alt="Echat" className="h-40 w-40 object-contain sm:h-48 sm:w-48" />
+    <h1 className="mt-5 text-3xl font-black tracking-wide text-[#0A2A6B]">Echat</h1>
+    <p className="mt-1 text-sm text-slate-600">Connect, Share &amp; Chat</p>
+    <span className="mt-5 h-5 w-5 animate-spin rounded-full border-2 border-[#0A2A6B] border-t-transparent" />
   </div>
 </div>;

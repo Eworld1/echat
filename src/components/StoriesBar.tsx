@@ -102,7 +102,7 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
               )}
 
               {/* Gradient tint */}
-              <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/70" />
+              <div className="absolute inset-0 bg-black/50" />
 
               {/* Author Avatar with Ring */}
               <div className="absolute top-2.5 left-2.5 z-10">
@@ -110,7 +110,7 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
                   className={`w-9 h-9 rounded-full p-0.5 ${
                     isViewed
                       ? 'bg-slate-300 ring-1 ring-slate-400'
-                      : 'bg-gradient-to-tr from-blue-600 to-cyan-400 ring-2 ring-blue-500'
+                      : 'bg-[#1877F2] ring-2 ring-[#0A2A6B]'
                   }`}
                 >
                   <img

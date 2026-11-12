@@ -31,3 +31,11 @@ header.sticky { padding-top: env(safe-area-inset-top); }
   input:not([type="range"]), textarea, select { font-size: 16px !important; line-height: 1.5; }
   textarea { max-width: 100%; }
 }
+
+/* Classic Echat keeps its routes and behavior while using the refreshed solid palette. */
+.echat-classic { color:#111827; background:#F0F2F5; }
+.echat-classic header.sticky { background:#fff; border-color:#D9DDE3; }
+.echat-classic aside button > div[class*="bg-"] { background-color:#F0F2F5!important; color:#0A2A6B!important; }
+.echat-classic [class*="bg-purple-"],.echat-classic [class*="bg-violet-"],.echat-classic [class*="bg-fuchsia-"],.echat-classic [class*="bg-indigo-"] { background-color:#E8EEF7!important; }
+.echat-classic [class*="text-purple-"],.echat-classic [class*="text-violet-"],.echat-classic [class*="text-fuchsia-"],.echat-classic [class*="text-indigo-"] { color:#0A2A6B!important; }
+.echat-classic [class*="border-purple-"],.echat-classic [class*="border-violet-"],.echat-classic [class*="border-fuchsia-"],.echat-classic [class*="border-indigo-"] { border-color:#B9C9E1!important; }

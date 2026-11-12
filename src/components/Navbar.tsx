@@ -460,7 +460,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className={`sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} bg-white border-b border-slate-200/90 shadow-2xs`}>
-      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px]">
+      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px_48px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
         <div className="contents">
@@ -468,12 +468,12 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => onNavigate('feed')}
             className="col-start-1 row-start-1 flex min-w-0 shrink-0 cursor-pointer items-center gap-2 group min-[1025px]:w-[280px]"
           >
-            <img src="/logo.png" alt="EchatSl" className="h-10 w-10 shrink-0 rounded-full object-cover shadow-md transition group-hover:scale-105" />
-            <span className="hidden truncate text-xl font-black tracking-tight text-amber-600 min-[1025px]:inline">EchatSl</span>
+            <img src="/logo-mark-blue.svg" alt="" className="h-10 w-10 shrink-0 object-contain transition group-hover:scale-105 min-[1025px]:hidden" />
+            <img src="/logo-blue.svg" alt="Echat" className="hidden h-10 w-[190px] shrink-0 object-contain object-left min-[1025px]:block" />
           </div>
 
           {/* Global Search Bar */}
-          <div ref={searchContainerRef} className={`relative col-start-2 row-start-1 min-w-0 w-full ${showSearchDropdown ? 'min-[1025px]:fixed min-[1025px]:left-1/2 min-[1025px]:top-16 min-[1025px]:z-50 min-[1025px]:w-[min(500px,calc(100vw-24px))] min-[1025px]:-translate-x-1/2 min-[1025px]:rounded-full min-[1025px]:bg-white min-[1025px]:shadow-xl min-[1025px]:block' : 'min-[1025px]:hidden'}`}>
+          <div ref={searchContainerRef} className="relative col-start-2 row-start-1 mx-auto min-w-0 w-full min-[1025px]:max-w-[500px]">
             <div className="relative flex items-center">
               <div className="absolute left-3 text-slate-400 flex items-center pointer-events-none">
                 {isSearching ? (
@@ -844,7 +844,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div>
                         <div className="px-2.5 py-1"><span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Reels ({matchingReels.length})</span></div>
                         <div className="mt-1 space-y-1.5">
-                          {matchingReels.map(reel => <div key={reel.id} onClick={() => handleSelectPost(reel)} className="flex cursor-pointer items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition hover:border-fuchsia-100 hover:bg-fuchsia-50/60">
+                          {matchingReels.map(reel => <div key={reel.id} onClick={() => handleSelectPost(reel)} className="flex cursor-pointer items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition hover:border-blue-100 hover:bg-blue-50/60">
                             <Film size={18} className="shrink-0 text-fuchsia-600" />
                             <div className="min-w-0 flex-1"><p className="truncate text-xs font-bold text-slate-800">{reel.author?.name || 'EChat Reel'}</p><p className="truncate text-[11px] text-slate-500">{reel.content || 'Video Reel'}</p></div>
                             <ArrowRight size={14} className="text-slate-300" />
@@ -870,7 +870,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Center: Main Navigation Icons (Facebook style) */}
 
-        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-2 min-[1025px]:col-span-1 min-[1025px]:row-start-1 min-[1025px]:overflow-visible">
+        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-1 min-[1025px]:col-span-3 min-[1025px]:row-start-2 min-[1025px]:overflow-visible">
           <button
             onClick={() => onNavigate('feed')}
             className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex flex-col items-center justify-center gap-0 transition cursor-pointer ${
@@ -927,7 +927,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <div className="flex items-center gap-1.5">
                 <Shield size={20} strokeWidth={currentView === 'admin' ? 2.5 : 2} />
-                <span className="hidden md:inline text-[11px] font-extrabold uppercase bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-md">
+                <span className="hidden md:inline text-[11px] font-extrabold uppercase bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-md">
                   Developer
                 </span>
               </div>
@@ -937,8 +937,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right: Actions, Messenger, Notifications, Profile */}
         <div className="col-start-3 row-start-1 flex shrink-0 items-center justify-end gap-1 min-[1025px]:gap-2">
-
-          <button onClick={() => { setShowSearchDropdown(true); searchInputRef.current?.focus(); }} className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200 min-[1025px]:flex" title="Search EChat" aria-label="Search EChat"><Search size={19} /></button>
 
           <button onClick={onOpenCreate} className="hidden h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-700 min-[1025px]:flex" title="Create post"><PlusSquare size={19} /></button>
           <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title="Go Live"><Radio size={17}/>Go Live</button>
