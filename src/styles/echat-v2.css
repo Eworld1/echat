@@ -7,3 +7,8 @@
 .echat-v2-card { border:1px solid rgba(15,27,45,.08); border-radius:20px; background:#fff; box-shadow:0 8px 28px rgba(15,27,45,.06); }
 .echat-v2-pill { border-radius:999px; }
 @media(max-width:767px) { .echat-v2 { padding-bottom:calc(76px + env(safe-area-inset-bottom)); } }
+html.echat-v2-dark .echat-v2 { background:#091321; color:#f8fafc; }
+html.echat-v2-dark .echat-v2 .echat-v2-card { background:#142235; border-color:rgba(255,255,255,.1); color:#f8fafc; }
+html.echat-v2-dark .echat-v2 input:not([type="checkbox"]),html.echat-v2-dark .echat-v2 textarea,html.echat-v2-dark .echat-v2 select { background-color:#203149; color:#f8fafc; }
+html.echat-v2-dark .echat-v2 .bg-slate-50,html.echat-v2-dark .echat-v2 .bg-slate-100 { background-color:#203149; color:#f8fafc; }
+html.echat-v2-dark .echat-v2 .text-slate-500,html.echat-v2-dark .echat-v2 .text-slate-600 { color:#b8c5d6; }
