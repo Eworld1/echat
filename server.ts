@@ -10,7 +10,7 @@ import { createServer as createViteServer } from 'vite';
 import { db, hashPassword } from './server/db.js';
 import { SocketManager } from './server/socket.js';
 import { getAuth } from 'firebase-admin/auth';
-import { app as firebaseAdminApp, firestore } from './server/firebase-admin.js';
+import { app as firebaseAdminApp, firebaseProjectId, firestore } from './server/firebase-admin.js';
 
 const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
 const PORT = Number(process.env.PORT) || 3000;
@@ -1953,7 +1953,11 @@ app.post('/api/live/auth', async (req: Request, res: Response) => {
     res.json({ liveAuthToken: createLiveAuthToken(user), userId: user.id });
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || 'verification-failed') : 'verification-failed';
-    console.error('[Echat] Firebase live-auth verification failed:', code, error instanceof Error ? error.message : error);
+    console.error('[Echat] Firebase live-auth verification failed:', {
+      code,
+      configuredProject: firebaseAdminApp.options.projectId || firebaseProjectId,
+      error: error instanceof Error ? error.message : error
+    });
     res.status(401).json({ error: 'Could not verify your sign-in. Please try again.', code });
   }
 });

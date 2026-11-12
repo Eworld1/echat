@@ -74,6 +74,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [captionLanguage, setCaptionLanguage] = useState('en-US');
   const [liveCaption, setLiveCaption] = useState('');
   const [sourceError, setSourceError] = useState('');
+  const [liveStartError, setLiveStartError] = useState('');
   const [cameraRetry, setCameraRetry] = useState(0);
   const [accessInfo, setAccessInfo] = useState<Awaited<ReturnType<typeof api.getLiveAccess>> | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
@@ -432,6 +433,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   };
 
   const handleStartBroadcast = async () => {
+    setLiveStartError('');
     try {
       if (!mediaStreamRef.current?.getVideoTracks().length) {
         alert('Allow camera access before starting a live video.');
@@ -446,8 +448,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         onStreamStarted?.(res.live);
         confetti({ particleCount: 50, spread: 70 });
       }
-    } catch (err: any) {
-      alert(err.message || 'Failed to start live stream');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to start live stream';
+      setLiveStartError(`${message}. Check your connection and try Go Live again.`);
+      console.error('[Go Live] Could not start broadcast', err);
     }
   };
 
@@ -719,6 +723,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
               {!isBroadcasting && (
                 <div className="max-h-[25vh] shrink-0 space-y-2 overflow-y-auto border-b border-slate-800 p-3">
+                  {liveStartError && <p role="alert" className="rounded-lg border border-rose-800 bg-rose-950/70 p-2 text-xs leading-5 text-rose-200">{liveStartError}</p>}
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Camera
                     <select value={selectedCameraId} onChange={event => setSelectedCameraId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
                       <option value="">Default camera</option>{devices.filter(device => device.kind === 'videoinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Camera'}</option>)}

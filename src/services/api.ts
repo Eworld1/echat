@@ -78,19 +78,15 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
 async function getLiveHeaders(forceRefresh = false): Promise<Record<string, string>> {
   const proof = typeof window !== 'undefined' ? window.localStorage.getItem('echat_live_auth') || '' : '';
   const currentUserId = typeof window !== 'undefined' ? window.localStorage.getItem('echat_user_id') || '' : '';
-  if (auth.currentUser && (!currentUserId || currentUserId === auth.currentUser.uid)) {
-    try {
-      const firebaseIdToken = await auth.currentUser.getIdToken(forceRefresh);
-      const response = await fetch(apiUrl('/api/live/auth'), { method: 'POST', headers: getHeaders({ 'x-firebase-id-token': firebaseIdToken }), body: '{}' });
-      const session = await readResponse<{ liveAuthToken: string; userId: string }>(response, 'Could not refresh live sign-in');
-      if (currentUserId && session.userId !== currentUserId) throw new Error('The signed-in account changed. Refresh and try again.');
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem('echat_live_auth', session.liveAuthToken);
-      }
-      return getHeaders({ 'x-user-id': session.userId, 'x-live-auth-token': session.liveAuthToken });
-    } catch (error) {
-      if (!proof || forceRefresh) throw error;
+  if (auth.currentUser) {
+    const firebaseIdToken = await auth.currentUser.getIdToken(forceRefresh);
+    const response = await fetch(apiUrl('/api/live/auth'), { method: 'POST', headers: getHeaders({ 'x-firebase-id-token': firebaseIdToken }), body: '{}' });
+    const session = await readResponse<{ liveAuthToken: string; userId: string }>(response, 'Could not refresh live sign-in');
+    if (currentUserId && session.userId !== currentUserId) throw new Error('The signed-in account changed. Refresh and try again.');
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('echat_live_auth', session.liveAuthToken);
     }
+    return getHeaders({ 'x-user-id': session.userId, 'x-live-auth-token': session.liveAuthToken });
   }
   return getHeaders(proof ? { 'x-live-auth-token': proof } : {});
 }
