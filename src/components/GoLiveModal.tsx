@@ -47,7 +47,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   onStreamEnded
 }) => {
   useBackButton(isOpen, onClose, 'go-live-studio');
-  const { user, isDeveloper } = useAuth();
+  const { user, isDeveloper, isLoading: authLoading } = useAuth();
   const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveSignal, sendLiveCaption, socket } = useSocket();
 
   const [streamTitle, setStreamTitle] = useState(`${user?.name || 'User'} is Live on EChat! 🔥`);
@@ -143,17 +143,38 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   const hasLivePermission = Boolean(accessInfo?.canGoLive);
 
+  const checkLiveAccess = async () => {
+    if (authLoading || !user) return;
+    setAccessLoading(true);
+    setAccessError('');
+    try {
+      const info = await api.getLiveAccess();
+      setAccessInfo(info);
+      if (info.autoApproved) setAccessNotice('You are now eligible! Your account has been approved for Go Live.');
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : 'Could not check Go Live access.');
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) return;
     let active = true;
     setAccessLoading(true);
     setAccessError('');
     setAccessNotice('');
-    void api.getLiveAccess().then(info => { if (active) setAccessInfo(info); }).catch(error => {
+    if (authLoading) return () => { active = false; };
+    if (!user) { setAccessInfo(null); setAccessLoading(false); return () => { active = false; }; }
+    void api.getLiveAccess().then(info => {
+      if (!active) return;
+      setAccessInfo(info);
+      if (info.autoApproved) setAccessNotice('You are now eligible! Your account has been approved for Go Live.');
+    }).catch(error => {
       if (active) setAccessError(error instanceof Error ? error.message : 'Could not check Go Live access.');
     }).finally(() => { if (active) setAccessLoading(false); });
     return () => { active = false; };
-  }, [isOpen, user?.id]);
+  }, [isOpen, user?.id, authLoading]);
 
   const sendAccessRequest = async () => {
     setAccessBusy(true); setAccessError('');
@@ -438,18 +459,26 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-rose-50 text-rose-600"><Radio size={30}/></div>
           <h2 className="text-2xl font-black text-slate-900">Go Live on Echat</h2>
           {accessNotice && <p role="status" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{accessNotice}</p>}
-          {accessLoading ? <p className="mt-4 text-sm text-slate-500">Checking Go Live access…</p> : accessInfo?.liveAccess === 'pending' ? <>
-            <p className="mt-3 text-sm leading-6 text-slate-600">Your request is pending. Admin will review soon.</p>
+          {accessLoading || authLoading ? <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-600"><span className="h-5 w-5 animate-spin rounded-full border-2 border-rose-600 border-t-transparent"/>Checking login…</div> : !user ? <>
+            <p className="mt-3 text-sm leading-6 text-slate-600">Log in to check your Go Live eligibility.</p>
+            <button onClick={onClose} className="mt-5 min-h-12 w-full rounded-xl bg-blue-600 px-4 font-extrabold text-white">Log In to Go Live</button>
+          </> : accessError && !accessInfo ? <>
+            <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-left text-sm text-rose-700">{accessError}</p>
+            <button onClick={() => void checkLiveAccess()} className="mt-4 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700">Retry access check</button>
+          </> : accessInfo?.liveAccess === 'pending' ? <>
+            <p className="mt-3 text-sm leading-6 text-slate-600">Pending - Waiting for Moses to approve.</p>
             <button disabled={accessBusy} onClick={() => void cancelAccessRequest()} className="mt-5 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700 disabled:opacity-60">{accessBusy ? 'Please wait…' : 'Cancel Request'}</button>
           </> : accessInfo?.liveAccess === 'blocked' ? <>
             <p className="mt-3 text-sm leading-6 text-rose-700">Your Go Live access has been blocked. Contact an administrator if you think this is a mistake.</p>
           </> : <>
+            <p className="mt-3 text-sm leading-6 text-slate-600">You need approval OR your account must be 60 days old.</p>
+            <p className="mt-2 text-sm font-bold text-slate-700">Your account is {Math.floor(accessInfo?.accountAgeDays || 0)} days old - {accessInfo?.daysUntilEligible ?? 60} days left for auto-approval.</p>
             <p className="mt-3 text-sm leading-6 text-slate-600">Tell us why you want to go live.</p>
             <textarea value={accessReason} onChange={event => setAccessReason(event.target.value)} maxLength={500} rows={4} placeholder="Why do you want to go live?" className="mt-4 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:ring-2 focus:ring-rose-300" />
             <p className="mt-2 text-left text-xs text-slate-500">Admin usually reviews within 24h.</p>
             <button disabled={accessBusy || !accessInfo || accessReason.trim().length < 3} onClick={() => void sendAccessRequest()} className="mt-4 min-h-12 w-full rounded-xl bg-rose-600 px-4 font-extrabold text-white shadow disabled:opacity-50">{accessBusy ? 'Sending…' : 'Request Go Live Access'}</button>
           </>}
-          {accessError && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-left text-sm text-rose-700">{accessError}</p>}
+          {accessError && accessInfo && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-left text-sm text-rose-700">{accessError}</p>}
         </div>
       ) : (
         <div className="bg-slate-950 w-full max-w-4xl h-[90dvh] max-h-[90vh] rounded-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col">
@@ -518,6 +547,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               )}
             </div>
           </div>
+          {accessNotice && <p role="status" className="bg-emerald-950 px-4 py-2 text-center text-sm font-bold text-emerald-200">{accessNotice}</p>}
 
           {/* Main Broadcast Stage */}
           <div className="flex-1 min-h-0 relative bg-black flex flex-col md:flex-row overflow-hidden">

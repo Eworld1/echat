@@ -1,8 +1,53 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function canCreateLiveStream(uid) {
+      let profilePath = /databases/$(database)/documents/users/$(uid);
+      let profile = exists(profilePath) ? get(profilePath).data : {};
+      return exists(profilePath) &&
+        (profile.get('role', '') == 'super_admin' ||
+          (profile.get('role', '') == 'developer' && profile.get('isOfficialDeveloper', false) == true) ||
+          (profile.get('isBlocked', false) == false &&
+            (profile.get('liveAccess', 'none') == 'approved' ||
+              (profile.get('createdAt', 0) is int &&
+                profile.get('createdAt', 0) <= request.time.toMillis() - 5184000000))));
+    }
+
+    // Preserve the existing access behavior for the app's other collections,
+    // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams';
+    }
+
+    match /users/{userId} {
+      allow read, delete: if true;
+      allow create: if request.auth != null && request.auth.uid == userId &&
+        request.resource.data.get('role', 'user') == 'user' &&
+        request.resource.data.get('liveAccess', 'none') == 'none' &&
+        request.resource.data.get('createdAt', 0) is int &&
+        request.resource.data.get('createdAt', 0) >= request.time.toMillis() - 300000 &&
+        request.resource.data.get('createdAt', 0) <= request.time.toMillis() + 300000;
+      allow update: if request.resource.data.get('role', null) == resource.data.get('role', null) &&
+        request.resource.data.get('liveAccess', null) == resource.data.get('liveAccess', null) &&
+        request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null) &&
+        request.resource.data.get('isOfficialDeveloper', null) == resource.data.get('isOfficialDeveloper', null) &&
+        request.resource.data.get('isBlocked', null) == resource.data.get('isBlocked', null);
+
+      match /settings/{settingId} {
+        allow read, write: if true;
+      }
+    }
+
+    match /liveStreams/{streamId} {
+      allow read: if true;
+      allow create: if request.auth != null &&
+        request.resource.data.get('hostId', '') == request.auth.uid &&
+        canCreateLiveStream(request.auth.uid);
+      allow update: if request.auth != null &&
+        resource.data.get('hostId', '') == request.auth.uid &&
+        request.resource.data.get('hostId', '') == resource.data.get('hostId', '') &&
+        canCreateLiveStream(request.auth.uid);
+      allow delete: if false;
     }
   }
 }

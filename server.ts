@@ -9,6 +9,8 @@ import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { db, hashPassword } from './server/db.js';
 import { SocketManager } from './server/socket.js';
+import { getAuth } from 'firebase-admin/auth';
+import { app as firebaseAdminApp, firestore } from './server/firebase-admin.js';
 
 const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
 const PORT = Number(process.env.PORT) || 3000;
@@ -33,7 +35,7 @@ app.use((req: Request, res: Response, next) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   // x-page-id is sent by the client when acting as a Page. It must be allowed
   // for cross-origin requests (including the Reel chunk upload preflight).
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-user-id, x-developer-key, x-page-id, x-live-auth-token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-user-id, x-developer-key, x-page-id, x-live-auth-token, x-firebase-id-token');
   res.setHeader('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -408,14 +410,52 @@ function isAdminUser(user: any): boolean {
   return Boolean(user && (user.role === 'developer' || user.role === 'super_admin' || user.role === 'admin' || user.isAdmin === true));
 }
 
+const LIVE_AUTO_APPROVAL_DAYS = 60;
+const LIVE_DAY_MS = 24 * 60 * 60 * 1000;
+function isSuperAdminLiveUser(user: any): boolean {
+  return Boolean(user && (user.role === 'super_admin' || (user.role === 'developer' && user.isOfficialDeveloper === true)));
+}
+
+function liveAccountAgeDays(user: any): number {
+  const createdAt = Number(user?.createdAt);
+  return Number.isFinite(createdAt) && createdAt > 0 ? Math.max(0, (Date.now() - createdAt) / LIVE_DAY_MS) : 0;
+}
+
+function syncLiveProfileToFirestore(user: any): void {
+  if (!user?.id) return;
+  const ref = firestore.collection('users').doc(user.id);
+  void ref.get().then(snapshot => {
+    if (!snapshot.exists) return;
+    const data = snapshot.data() || {};
+    const fields = {
+      role: user.role,
+      liveAccess: user.liveAccess || 'none',
+      createdAt: user.createdAt,
+      isOfficialDeveloper: user.isOfficialDeveloper === true,
+      isBlocked: user.isBlocked === true
+    };
+    if (Object.entries(fields).every(([key, value]) => data[key] === value)) return;
+    return ref.set(fields, { merge: true });
+  }).catch(error => console.warn('[Echat] Could not sync server live eligibility to Firestore:', error instanceof Error ? error.message : error));
+}
+
+function autoApproveMatureLiveUser(user: any): boolean {
+  if (!user || isSuperAdminLiveUser(user) || user.liveAccess === 'blocked' || user.liveAccess === 'approved' || liveAccountAgeDays(user) < LIVE_AUTO_APPROVAL_DAYS) return false;
+  const pending = db.getLiveRequests().find(item => item.userId === user.id && item.status === 'pending');
+  if (pending) db.reviewLiveRequest(pending.id, 'approved', 'system:auto-60-days');
+  else {
+    db.updateUser(user.id, { liveAccess: 'approved' });
+    user.liveAccess = 'approved';
+  }
+  syncLiveProfileToFirestore(db.getUserById(user.id));
+  return true;
+}
+
 function canStartLive(user: any): boolean {
   if (!user) return false;
-  if (isAdminUser(user)) return true;
+  if (isSuperAdminLiveUser(user)) return true;
   if (user.liveAccess === 'blocked') return false;
-  const mode = db.getLiveAccessMode();
-  if (mode === 'everyone') return true;
-  if (mode === 'admins_creators_only') return user.role === 'creator';
-  return user.liveAccess === 'approved';
+  return user.liveAccess === 'approved' || liveAccountAgeDays(user) >= LIVE_AUTO_APPROVAL_DAYS;
 }
 
 /** Constant-time string comparison (avoids leaking the secret through timing). */
@@ -1832,11 +1872,60 @@ app.post('/api/users/:id/boost', (req: Request, res: Response) => {
 });
 
 // ----------------- GO-LIVE SYSTEM (GATED) -----------------
+app.post('/api/live/auth', async (req: Request, res: Response) => {
+  const firebaseIdToken = req.get('x-firebase-id-token');
+  if (!firebaseIdToken) return res.status(401).json({ error: 'Firebase sign-in is required.' });
+  try {
+    const firebaseAuth = getAuth(firebaseAdminApp);
+    const decoded = await firebaseAuth.verifyIdToken(firebaseIdToken);
+    const email = String(decoded.email || '').toLowerCase().trim();
+    if (!email) return res.status(403).json({ error: 'The Firebase account has no email associated with it.' });
+    let user = db.getUserById(decoded.uid);
+    if (!user || user.isBlocked) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.' });
+
+    // Keep the server-side age record tied to the Firebase account creation time. Prefer the
+    // Firestore createdAt value when it agrees with Firebase Auth; otherwise use Auth metadata,
+    // so a client-edited profile timestamp cannot grant early Go Live access.
+    const firebaseProfile = await firestore.collection('users').doc(decoded.uid).get().catch(() => null);
+    const profileData = firebaseProfile?.exists ? firebaseProfile.data() : undefined;
+    if (user.email.endsWith('@echat.local')) {
+      const isReservedDeveloper = email === ADMIN_EMAIL;
+      if (isReservedDeveloper && decoded.email_verified !== true) return res.status(403).json({ error: 'Verify the official developer email before using Go Live.' });
+      const updated = db.updateUser(user.id, {
+        email,
+        ...(typeof profileData?.name === 'string' && { name: profileData.name }),
+        ...(typeof profileData?.avatar === 'string' && { avatar: profileData.avatar }),
+        ...(typeof profileData?.coverPhoto === 'string' && { coverPhoto: profileData.coverPhoto }),
+        ...(isReservedDeveloper ? { role: 'developer' as const, isOfficialDeveloper: true, isVerified: true, liveAccess: 'approved' as const } : {})
+      });
+      if (updated) user = updated;
+    }
+    if (user.email.toLowerCase().trim() !== email) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.' });
+    const rawCreatedAt = profileData?.createdAt;
+    const firestoreCreatedAt = typeof rawCreatedAt === 'number' ? rawCreatedAt : typeof rawCreatedAt?.toMillis === 'function' ? rawCreatedAt.toMillis() : Number(rawCreatedAt);
+    const firebaseUser = await firebaseAuth.getUser(decoded.uid);
+    const authCreatedAt = Date.parse(firebaseUser.metadata.creationTime || '');
+    const firestoreDateIsCredible = Number.isFinite(firestoreCreatedAt) && firestoreCreatedAt > 0 && firestoreCreatedAt <= Date.now() && Number.isFinite(authCreatedAt) && Math.abs(firestoreCreatedAt - authCreatedAt) <= LIVE_DAY_MS;
+    const verifiedCreatedAt = firestoreDateIsCredible ? firestoreCreatedAt : authCreatedAt;
+    if (Number.isFinite(verifiedCreatedAt) && verifiedCreatedAt > 0 && user.createdAt !== verifiedCreatedAt) {
+      user = db.updateUser(user.id, { createdAt: verifiedCreatedAt }) || user;
+    }
+    syncLiveProfileToFirestore(user);
+
+    res.json({ liveAuthToken: createLiveAuthToken(user), userId: user.id });
+  } catch (error) {
+    console.warn('[Echat] Firebase live-auth verification failed:', error instanceof Error ? error.message : error);
+    res.status(401).json({ error: 'Could not verify your sign-in. Please try again.' });
+  }
+});
+
 app.get('/api/live/access', (req: Request, res: Response) => {
   const authUser = getLiveAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const autoApproved = autoApproveMatureLiveUser(authUser);
   const request = db.getLiveRequests().find(item => item.userId === authUser.id && item.status === 'pending') || null;
-  res.json({ liveAccess: authUser.liveAccess || 'none', mode: db.getLiveAccessMode(), canGoLive: canStartLive(authUser), request });
+  const accountAgeDays = liveAccountAgeDays(authUser);
+  res.json({ liveAccess: authUser.liveAccess || 'none', mode: db.getLiveAccessMode(), canGoLive: canStartLive(authUser), request, accountAgeDays, daysUntilEligible: Math.max(0, Math.ceil(LIVE_AUTO_APPROVAL_DAYS - accountAgeDays)), autoApproved });
 });
 
 app.post('/api/live/request', (req: Request, res: Response) => {
@@ -1845,9 +1934,11 @@ app.post('/api/live/request', (req: Request, res: Response) => {
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   if (reason.length < 3 || reason.length > 500) return res.status(400).json({ error: 'Please tell us why you want to go live (3–500 characters).' });
   if (authUser.liveAccess === 'blocked') return res.status(403).json({ error: 'Your Go Live access is blocked. Contact an administrator.' });
+  autoApproveMatureLiveUser(authUser);
   if (canStartLive(authUser)) return res.status(409).json({ error: 'You already have Go Live access.' });
   const request = db.createLiveRequest(authUser.id, reason);
   if (!request) return res.status(400).json({ error: 'Could not submit your request.' });
+  syncLiveProfileToFirestore(db.getUserById(authUser.id));
   res.status(201).json({ success: true, request, liveAccess: 'pending' });
 });
 
@@ -1855,18 +1946,19 @@ app.post('/api/live/request/cancel', (req: Request, res: Response) => {
   const authUser = getLiveAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
   if (!db.cancelLiveRequest(authUser.id)) return res.status(404).json({ error: 'No pending request to cancel.' });
+  syncLiveProfileToFirestore(db.getUserById(authUser.id));
   res.json({ success: true, liveAccess: 'none' });
 });
 
 app.get('/api/admin/live-access', (req: Request, res: Response) => {
   const admin = getLiveAuthUser(req);
-  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
   res.json({ requests: db.getLiveRequests().filter(item => item.status === 'pending'), mode: db.getLiveAccessMode(), users: db.getUsers(true).map(user => db.sanitizeUser(user, admin!.id)) });
 });
 
 app.put('/api/admin/live-access/settings', (req: Request, res: Response) => {
   const admin = getLiveAuthUser(req);
-  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
   const mode = req.body?.mode;
   if (!['everyone', 'approved_only', 'admins_creators_only'].includes(mode)) return res.status(400).json({ error: 'Invalid Go Live access mode.' });
   db.setLiveAccessMode(mode);
@@ -1876,11 +1968,12 @@ app.put('/api/admin/live-access/settings', (req: Request, res: Response) => {
 
 app.post('/api/admin/live-access/requests/:id/review', (req: Request, res: Response) => {
   const admin = getLiveAuthUser(req);
-  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
   const decision = req.body?.decision;
   if (!['approved', 'rejected', 'blocked'].includes(decision)) return res.status(400).json({ error: 'Invalid review decision.' });
   const request = db.reviewLiveRequest(req.params.id, decision, admin!.id);
   if (!request) return res.status(404).json({ error: 'Pending request not found.' });
+  syncLiveProfileToFirestore(db.getUserById(request.userId));
   if (decision === 'blocked') endLiveForBlockedUser(request.userId);
   const message = decision === 'approved' ? 'You can now Go Live! 🎉' : decision === 'rejected' ? 'Your Go Live request was declined.' : 'Your Go Live access has been blocked.';
   const notification = db.addNotification({ userId: request.userId, actorId: admin!.id, type: 'announcement', message, targetId: request.id, read: false });
@@ -1891,7 +1984,7 @@ app.post('/api/admin/live-access/requests/:id/review', (req: Request, res: Respo
 
 app.post('/api/admin/live-access/users/:id', (req: Request, res: Response) => {
   const admin = getLiveAuthUser(req);
-  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
   const target = db.getUserById(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found.' });
   if (isDeveloperUser(target)) return res.status(403).json({ error: 'Super-admin live access cannot be changed.' });
@@ -1904,6 +1997,7 @@ app.post('/api/admin/live-access/users/:id', (req: Request, res: Response) => {
     endLiveForBlockedUser(target.id);
   }
   const updated = db.updateUser(target.id, { liveAccess: access });
+  syncLiveProfileToFirestore(updated);
   if (action === 'grant') {
     const notification = db.addNotification({ userId: target.id, actorId: admin!.id, type: 'announcement', message: 'You can now Go Live! 🎉', read: false });
     socketManager.sendToUser(target.id, { type: 'new_notification', notification: populateNotification(notification) });
@@ -1954,6 +2048,7 @@ app.get('/api/live/current', (_req: Request, res: Response) => {
 app.post('/api/live/start', (req: Request, res: Response) => {
   const authUser = getLiveAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  autoApproveMatureLiveUser(authUser);
   if (!canStartLive(authUser)) return res.status(403).json({ error: authUser.liveAccess === 'blocked' ? 'Your Go Live access is blocked.' : 'Request Go Live access from an administrator first.' });
   const isDev = isDeveloperUser(authUser);
 

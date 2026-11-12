@@ -20,6 +20,7 @@ import type {
   GroupPost,
   EventItem
 } from '../types';
+import { auth } from './firebase';
 
 async function readResponse<T>(res: Response, fallbackMessage = 'Request failed'): Promise<T> {
   const contentType = res.headers.get('content-type') || '';
@@ -68,8 +69,23 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
   };
 }
 
-function getLiveHeaders() {
+async function getLiveHeaders(): Promise<Record<string, string>> {
   const proof = typeof window !== 'undefined' ? window.localStorage.getItem('echat_live_auth') || '' : '';
+  const currentUserId = typeof window !== 'undefined' ? window.localStorage.getItem('echat_user_id') || '' : '';
+  if (auth.currentUser && (!currentUserId || currentUserId === auth.currentUser.uid)) {
+    try {
+      const firebaseIdToken = await auth.currentUser.getIdToken();
+      const response = await fetch(apiUrl('/api/live/auth'), { method: 'POST', headers: getHeaders({ 'x-firebase-id-token': firebaseIdToken }), body: '{}' });
+      const session = await readResponse<{ liveAuthToken: string; userId: string }>(response, 'Could not refresh live sign-in');
+      if (currentUserId && session.userId !== currentUserId) throw new Error('The signed-in account changed. Refresh and try again.');
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('echat_live_auth', session.liveAuthToken);
+      }
+      return getHeaders({ 'x-user-id': session.userId, 'x-live-auth-token': session.liveAuthToken });
+    } catch (error) {
+      if (!proof) throw error;
+    }
+  }
   return getHeaders(proof ? { 'x-live-auth-token': proof } : {});
 }
 
@@ -750,38 +766,38 @@ export const api = {
   },
 
   // Admin-controlled Go-Live access
-  async getLiveAccess(): Promise<{ liveAccess: NonNullable<User['liveAccess']>; mode: LiveAccessMode; canGoLive: boolean; request: LiveAccessRequest | null }> {
-    const res = await fetch(apiUrl('/api/live/access'), { headers: getLiveHeaders() });
+  async getLiveAccess(): Promise<{ liveAccess: NonNullable<User['liveAccess']>; mode: LiveAccessMode; canGoLive: boolean; request: LiveAccessRequest | null; accountAgeDays: number; daysUntilEligible: number; autoApproved: boolean }> {
+    const res = await fetch(apiUrl('/api/live/access'), { headers: await getLiveHeaders() });
     return readResponse(res, 'Could not check Go Live access');
   },
 
   async requestLiveAccess(reason: string): Promise<{ success: boolean; liveAccess: 'pending'; request: LiveAccessRequest }> {
-    const res = await fetch(apiUrl('/api/live/request'), { method: 'POST', headers: getLiveHeaders(), body: JSON.stringify({ reason }) });
+    const res = await fetch(apiUrl('/api/live/request'), { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ reason }) });
     return readResponse(res, 'Could not send Go Live request');
   },
 
   async cancelLiveAccessRequest(): Promise<{ success: boolean; liveAccess: 'none' }> {
-    const res = await fetch(apiUrl('/api/live/request/cancel'), { method: 'POST', headers: getLiveHeaders() });
+    const res = await fetch(apiUrl('/api/live/request/cancel'), { method: 'POST', headers: await getLiveHeaders() });
     return readResponse(res, 'Could not cancel Go Live request');
   },
 
   async getAdminLiveAccess(): Promise<{ requests: LiveAccessRequest[]; mode: LiveAccessMode; users: User[] }> {
-    const res = await fetch(apiUrl('/api/admin/live-access'), { headers: getLiveHeaders() });
+    const res = await fetch(apiUrl('/api/admin/live-access'), { headers: await getLiveHeaders() });
     return readResponse(res, 'Could not load Go Live access requests');
   },
 
   async reviewLiveAccessRequest(requestId: string, decision: 'approved' | 'rejected' | 'blocked'): Promise<void> {
-    const res = await fetch(apiUrl(`/api/admin/live-access/requests/${encodeURIComponent(requestId)}/review`), { method: 'POST', headers: getLiveHeaders(), body: JSON.stringify({ decision }) });
+    const res = await fetch(apiUrl(`/api/admin/live-access/requests/${encodeURIComponent(requestId)}/review`), { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ decision }) });
     await readResponse(res, 'Could not review Go Live request');
   },
 
   async updateUserLiveAccess(userId: string, action: 'grant' | 'revoke' | 'block' | 'unblock'): Promise<User> {
-    const res = await fetch(apiUrl(`/api/admin/live-access/users/${encodeURIComponent(userId)}`), { method: 'POST', headers: getLiveHeaders(), body: JSON.stringify({ action }) });
+    const res = await fetch(apiUrl(`/api/admin/live-access/users/${encodeURIComponent(userId)}`), { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ action }) });
     return readResponse(res, 'Could not change user Go Live access');
   },
 
   async updateLiveAccessMode(mode: LiveAccessMode): Promise<void> {
-    const res = await fetch(apiUrl('/api/admin/live-access/settings'), { method: 'PUT', headers: getLiveHeaders(), body: JSON.stringify({ mode }) });
+    const res = await fetch(apiUrl('/api/admin/live-access/settings'), { method: 'PUT', headers: await getLiveHeaders(), body: JSON.stringify({ mode }) });
     await readResponse(res, 'Could not update Go Live settings');
   },
 
@@ -795,7 +811,7 @@ export const api = {
   async startLive(title?: string, taggedPageIds: string[] = []): Promise<{ success: boolean; live: LiveStream }> {
     const res = await fetch(apiUrl('/api/live/start'), {
       method: 'POST',
-      headers: getLiveHeaders(),
+      headers: await getLiveHeaders(),
       body: JSON.stringify({ title, taggedPageIds })
     });
     return readResponse(res, 'Failed to start live stream');
@@ -804,7 +820,7 @@ export const api = {
   async stopLive(): Promise<{ success: boolean }> {
     const res = await fetch(apiUrl('/api/live/stop'), {
       method: 'POST',
-      headers: getLiveHeaders()
+      headers: await getLiveHeaders()
     });
     return readResponse(res);
   },

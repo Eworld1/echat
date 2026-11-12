@@ -300,7 +300,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
             ['profile', 'My controls', <Shield key="p" size={14} />],
             ['welcome', 'Welcome page', <Edit3 key="w" size={14} />],
             ['liveAccess', 'Live Access', <Radio key="live" size={14} />]
-          ] as const).map(([id, label, icon]) => (
+          ] as const).filter(([id]) => id !== 'liveAccess' || isDeveloper).map(([id, label, icon]) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
@@ -603,7 +603,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
       {activeTab === 'announce' && <AdminAnnouncements />}
 
       {activeTab === 'activity' && <AdminActivity />}
-      {activeTab === 'liveAccess' && <LiveAccessAdmin onPendingCount={setPendingLiveRequests} />}
+      {activeTab === 'liveAccess' && isDeveloper && <LiveAccessAdmin onPendingCount={setPendingLiveRequests} />}
     </div>
   );
 };

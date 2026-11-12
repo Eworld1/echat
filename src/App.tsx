@@ -253,16 +253,18 @@ export function MainApp() {
   if (!splashHidden) return <SplashScreen leaving={splashElapsed && !isLoading} />;
 
   if (isLoading) {
+    const checkingLiveLogin = ['/live', '/go-live'].includes(window.location.pathname);
     return (
       <div className="min-h-screen bg-[#F0F2F5] flex flex-col items-center justify-center text-slate-500">
         <div className="w-12 h-12 rounded-full border-4 border-blue-600 border-t-transparent animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-slate-800">Loading EchatSL...</h2>
-        <p className="text-xs text-slate-400 mt-1">Connecting to real-time socket engine</p>
+        <h2 className="text-xl font-bold text-slate-800">{checkingLiveLogin ? 'Checking login…' : 'Loading EchatSL...'}</h2>
+        <p className="text-xs text-slate-400 mt-1">{checkingLiveLogin ? 'Waiting for Firebase sign-in to finish' : 'Connecting to real-time socket engine'}</p>
       </div>
     );
   }
 
   if (!user) {
+    if (['/live', '/go-live'].includes(window.location.pathname)) return <GoLiveModal isOpen onClose={closeGoLive} />;
     return <AuthModal isOpen={true} />;
   }
 
