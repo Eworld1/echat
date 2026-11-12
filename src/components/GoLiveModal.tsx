@@ -87,7 +87,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   const firebaseUser = auth.currentUser;
   const developerUid = String(import.meta.env.VITE_SUPER_ADMIN_UID || '').trim();
-  const developerEmail = String(import.meta.env.VITE_SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  const developerEmail = String(import.meta.env.VITE_SUPER_ADMIN_EMAIL || 'eldermoses89@gmail.com').trim().toLowerCase();
   const configuredDeveloper = Boolean(firebaseUser && (
     (developerUid && firebaseUser.uid === developerUid) ||
     (developerEmail && firebaseUser.email?.toLowerCase() === developerEmail && firebaseUser.emailVerified)
