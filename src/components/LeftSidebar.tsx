@@ -23,10 +23,12 @@ import {
 interface LeftSidebarProps {
   currentView: string;
   onNavigate: (view: AppView, targetProfileId?: string) => void;
+  onOpenGoLive?: () => void;
 }
 
-export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigate }) => {
+export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigate, onOpenGoLive }) => {
   const { user, isDeveloper, myPages, activePage, switchIdentity, createIdentityPage } = useAuth();
+  const canAdmin = Boolean(user?.role === 'admin' || isDeveloper || (user as (typeof user & {isAdmin?:boolean})|null)?.isAdmin);
   const { t } = usePreferences();
   const [showTerms, setShowTerms] = useState(false);
   const [showIdentityPicker, setShowIdentityPicker] = useState(false);
@@ -79,6 +81,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
           <div className="w-9 h-9 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center"><BarChart3 size={19} /></div>
           <span className="truncate">Dashboard</span>
         </button>
+
+        <button onClick={onOpenGoLive} className="w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left hover:bg-rose-50 text-slate-700 font-semibold text-sm"><div className="w-9 h-9 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center"><Video size={19}/></div><span className="truncate">Go Live</span></button>
 
         {/* Friends */}
         <button
@@ -151,7 +155,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
         </button>
 
         {/* Developer Admin (Only visible to Super Admin) */}
-        {isDeveloper && (
+        {canAdmin && (
           <button
             onClick={() => onNavigate('admin')}
             className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${

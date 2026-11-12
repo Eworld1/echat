@@ -19,7 +19,7 @@ const systemPrefersDark = () =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
 
 function readTheme(): ThemeChoice {
-  const saved = localStorage.getItem('echat_theme');
+  const saved = localStorage.getItem('echat_color_theme') || localStorage.getItem('echat_theme');
   return saved === 'dark' || saved === 'light' || saved === 'system' ? saved : 'light';
 }
 
@@ -58,7 +58,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [language]);
 
   const setTheme = useCallback((next: ThemeChoice) => {
-    localStorage.setItem('echat_theme', next);
+    localStorage.setItem('echat_color_theme', next);
     setThemeState(next);
   }, []);
 

@@ -32,17 +32,14 @@ import { runTopBackAction, useBackButton } from './hooks/useBackButton';
 import { EchatV2App } from './components/EchatV2App';
 import { EchatV2Boundary } from './components/EchatV2Boundary';
 import { useEchatTheme } from './hooks/useEchatTheme';
+import { TryNewEchatBanner } from './components/TryNewEchatBanner';
 
-const v2Aliases: Record<string, string> = {
-  '/': '/v2/home', '/home': '/v2/home', '/feed': '/v2/home', '/reels': '/v2/vibes',
-  '/friends': '/v2/circle', '/messages': '/v2/chat', '/profile': '/v2/profile',
-  '/market': '/v2/market', '/groups': '/v2/communities', '/events': '/v2/events',
-  '/saved': '/v2/saved', '/settings': '/v2/settings', '/v2': '/v2/home'
-};
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
-  useEchatTheme();
+  const { theme } = useEchatTheme();
+  const canAdmin = Boolean(user && (user.role === 'admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const { onLiveStarted, onLiveStopped, onLiveStreamUpdated } = useSocket();
   const [splashElapsed, setSplashElapsed] = useState(false);
   const [splashHidden, setSplashHidden] = useState(false);
@@ -50,7 +47,7 @@ export function MainApp() {
   useEffect(() => { if (!splashElapsed || isLoading) return; const timer = window.setTimeout(() => setSplashHidden(true), 500); return () => window.clearTimeout(timer); }, [splashElapsed, isLoading]);
 
   const [currentView, setCurrentView] = useState<AppView>('feed');
-  const [isV2Route, setIsV2Route] = useState(() => !window.location.pathname.startsWith('/classic'));
+  const [isV2Route, setIsV2Route] = useState(() => window.location.pathname.startsWith('/v2/'));
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
@@ -66,42 +63,68 @@ export function MainApp() {
   currentViewRef.current = currentView;
   useEffect(() => {
     const syncRoute = () => {
-      let path = window.location.pathname;
-      if (path.startsWith('/classic')) { setIsV2Route(false); return; }
-      const target = v2Aliases[path] || (!path.startsWith('/v2/') ? '/v2/home' : null);
-      if (target) {
-        window.history.replaceState({ ...window.history.state, echatV2: true }, '', `${target}${window.location.search}`);
-        path = target;
+      const path = window.location.pathname;
+      if (path.startsWith('/v2/')) { setIsV2Route(true); return; }
+      setIsV2Route(false);
+      if (path === '/market') {
+        window.history.replaceState({ echatV2: true }, '', `/v2/market${window.location.search}`);
+        setIsV2Route(true);
+        return;
       }
-      setIsV2Route(path.startsWith('/v2/'));
+      if (path === '/' || path.startsWith('/classic')) {
+        window.history.replaceState({ echatApp: true, tab: 'feed' }, '', `/home${window.location.search}`);
+        setCurrentView('feed');
+        return;
+      }
+      const route = path.startsWith('/admin/') ? 'admin' : classicRoutes[path];
+      if (route) {
+        if (route === 'admin' && !isLoading && !canAdmin) {
+          window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
+          setCurrentView('feed');
+          return;
+        }
+        setCurrentView(route);
+        if (route === 'profile') setProfileUserId(user?.id || null);
+        if (path === '/messages') setIsMessengerDrawerOpen(true);
+        if (path === '/live' || path === '/go-live') setIsGoLiveOpen(true);
+      }
     };
     syncRoute();
     window.addEventListener('echat:navigate', syncRoute);
     window.addEventListener('popstate', syncRoute);
     return () => { window.removeEventListener('echat:navigate', syncRoute); window.removeEventListener('popstate', syncRoute); };
-  }, []);
+  }, [user?.id, canAdmin, isLoading]);
   useBackButton(Boolean(activeChatPartner), () => setActiveChatPartner(null), 'chat-conversation');
   useEffect(() => {
     if (isLoading) return;
-    if (initialAuthResolved.current && user && !previousLoggedIn.current) {
+    if (!initialAuthResolved.current && user && theme === 'v2' && (window.location.pathname === '/' || window.location.pathname === '/home')) {
       window.history.replaceState({ echatV2: true }, '', '/v2/home');
       setIsV2Route(true);
+      setCurrentView('feed');
+    }
+    if (initialAuthResolved.current && user && !previousLoggedIn.current && (window.location.pathname === '/' || window.location.pathname === '/v2/home')) {
+      const goV2 = theme === 'v2';
+      const target = goV2 ? '/v2/home' : '/home';
+      window.history.replaceState({ [goV2 ? 'echatV2' : 'echatApp']: true }, '', target);
+      setIsV2Route(goV2);
+      setCurrentView('feed');
     }
     previousLoggedIn.current = Boolean(user);
     initialAuthResolved.current = true;
-  }, [isLoading, user?.id]);
+  }, [isLoading, user?.id, theme]);
 
   // Live streaming states
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream | null>(null);
   const [isGoLiveOpen, setIsGoLiveOpen] = useState(false);
   const [activeViewerStream, setActiveViewerStream] = useState<LiveStream | null>(null);
 
-  // Strict route protection: Normal users can never access admin dashboard
+  // Only authenticated administrators can access the administration console.
   useEffect(() => {
-    if (currentView === 'admin' && !isDeveloper) {
+    if (!isLoading && currentView === 'admin' && !canAdmin) {
       setCurrentView('feed');
+      window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
     }
-  }, [currentView, isDeveloper]);
+  }, [currentView, canAdmin, isLoading]);
 
   // Load and listen for active live streams
   useEffect(() => {
@@ -135,9 +158,10 @@ export function MainApp() {
     targetProfileId?: string,
     targetPostId?: string
   ) => {
-    if (view === 'admin' && !isDeveloper) return;
+    if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${window.location.pathname}${window.location.search}`);
+    const routeByView:Record<AppView,string>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard'};
+    window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routeByView[view]}${window.location.search}`);
     setActiveChatPartner(null);
     setIsMessengerDrawerOpen(false);
     setIsGoLiveOpen(false);
@@ -217,6 +241,13 @@ export function MainApp() {
   const handleOpenChat = (partner: User) => {
     setActiveChatPartner(partner);
   };
+  const closeGoLive = () => {
+    setIsGoLiveOpen(false);
+    if (window.location.pathname === '/live' || window.location.pathname === '/go-live') {
+      window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
+      window.dispatchEvent(new Event('echat:navigate'));
+    }
+  };
 
   if (!splashHidden) return <SplashScreen leaving={splashElapsed && !isLoading} />;
 
@@ -247,6 +278,7 @@ export function MainApp() {
         onNavigate={handleNavigate}
         onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
         onOpenCreate={() => setIsCreatePostOpen(true)}
+        onOpenGoLive={() => setIsGoLiveOpen(true)}
         onProfileMenuChange={handleProfileMenuChange}
       />
 
@@ -258,10 +290,12 @@ export function MainApp() {
         <LeftSidebar
           currentView={currentView}
           onNavigate={handleNavigate}
+          onOpenGoLive={() => setIsGoLiveOpen(true)}
         />
 
         {/* Central Stage */}
         <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
+          {currentView === 'feed' && <TryNewEchatBanner/>}
           {currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
@@ -307,7 +341,7 @@ export function MainApp() {
             <SavedPosts onViewProfile={(uid) => handleNavigate('profile', uid)} />
           )}
 
-          {currentView === 'admin' && isDeveloper && (
+          {currentView === 'admin' && canAdmin && (
             <AdminDashboard
               onViewProfile={(uid) => handleNavigate('profile', uid)}
             />
@@ -342,7 +376,7 @@ export function MainApp() {
       {/* Go Live Studio Modal */}
       <GoLiveModal
         isOpen={isGoLiveOpen}
-        onClose={() => setIsGoLiveOpen(false)}
+        onClose={closeGoLive}
         onStreamStarted={(stream) => {
           setCurrentLiveStream(stream);
         }}

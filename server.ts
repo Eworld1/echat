@@ -255,7 +255,7 @@ app.post('/api/link-preview', async (req: Request, res: Response) => {
 
 app.put('/api/admin/site-config', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
-  if (!authUser || !isDeveloperUser(authUser)) return res.status(403).json({ error: 'Administrator access required' });
+  if (!authUser || !isAdminUser(authUser)) return res.status(403).json({ error: 'Administrator access required' });
   const updates: Record<string, string> = {};
   for (const [key, limit] of [['welcomeTitle', 90], ['welcomeSubtitle', 280], ['primaryButtonText', 36], ['secondaryText', 280], ['appName', 48]] as const) {
     if (req.body[key] !== undefined) {
@@ -402,6 +402,10 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'eldermoses89@gmail.com').toLowe
 
 function isDeveloperUser(user: any): boolean {
   return Boolean(user && user.role === 'developer');
+}
+
+function isAdminUser(user: any): boolean {
+  return Boolean(user && (user.role === 'developer' || user.role === 'admin' || user.isAdmin === true));
 }
 
 /** Constant-time string comparison (avoids leaking the secret through timing). */
@@ -1592,8 +1596,8 @@ app.post('/api/admin/claim', (req: Request, res: Response) => {
 
 app.get('/api/admin/stats', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
-  if (!isDeveloperUser(authUser)) {
-    return res.status(403).json({ error: 'Access denied: Master Developer credentials required' });
+  if (!isAdminUser(authUser)) {
+    return res.status(403).json({ error: 'Administrator access required' });
   }
 
   const stats = db.getAdminStats(socketManager.getActiveCount());
@@ -1655,8 +1659,8 @@ app.post('/api/admin/users/:id/verify', (req: Request, res: Response) => {
 
 app.get('/api/admin/users', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
-  if (!isDeveloperUser(authUser)) {
-    return res.status(403).json({ error: 'Access denied: Master Developer credentials required' });
+  if (!isAdminUser(authUser)) {
+    return res.status(403).json({ error: 'Administrator access required' });
   }
 
   const postCounts = new Map<string, number>();
@@ -1667,8 +1671,8 @@ app.get('/api/admin/users', (req: Request, res: Response) => {
 
 app.post('/api/admin/users/:id/toggle-block', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
-  if (!isDeveloperUser(authUser)) {
-    return res.status(403).json({ error: 'Access denied: Master Developer credentials required' });
+  if (!isAdminUser(authUser)) {
+    return res.status(403).json({ error: 'Administrator access required' });
   }
 
   const target = db.getUserById(req.params.id);
@@ -1684,8 +1688,8 @@ app.post('/api/admin/users/:id/toggle-block', (req: Request, res: Response) => {
 
 app.get('/api/admin/reports', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
-  if (!isDeveloperUser(authUser)) {
-    return res.status(403).json({ error: 'Access denied: Master Developer credentials required' });
+  if (!isAdminUser(authUser)) {
+    return res.status(403).json({ error: 'Administrator access required' });
   }
 
   const reportedPosts = db.getReportedPosts().map(p => populatePost(p));
@@ -1694,8 +1698,8 @@ app.get('/api/admin/reports', (req: Request, res: Response) => {
 
 app.post('/api/admin/reports/:postId/dismiss', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
-  if (!isDeveloperUser(authUser)) {
-    return res.status(403).json({ error: 'Access denied: Master Developer credentials required' });
+  if (!isAdminUser(authUser)) {
+    return res.status(403).json({ error: 'Administrator access required' });
   }
 
   db.dismissReport(req.params.postId);

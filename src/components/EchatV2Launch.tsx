@@ -1,0 +1,13 @@
+import React from 'react';
+import { Sparkles } from 'lucide-react';
+import { ECHAT_V2_ENABLED } from '../config/featureFlags';
+
+export const openEchatV2=()=>{
+  if(!ECHAT_V2_ENABLED)return;
+  localStorage.setItem('echat_theme','v2');
+  window.history.pushState({echatV2:true},'','/v2/home');
+  window.dispatchEvent(new Event('echat:navigate'));
+};
+
+/** Retained for older Classic entry points; the feed now uses TryNewEchatBanner. */
+export const EchatV2Launch:React.FC<{banner?:boolean}>=({banner=false})=>!ECHAT_V2_ENABLED?null:banner?<button type="button" onClick={openEchatV2} className="mb-4 flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-gradient-to-r from-[#FFF8E7] to-amber-100 p-4 text-left shadow-sm"><span><b className="flex items-center gap-2 text-sm text-[#0F1B2D]"><Sparkles size={17} className="text-[#B17A00]"/>Try New Echat ✨</b><small className="mt-1 block text-xs text-slate-600">A new look, new features, and your same Echat account.</small></span><span className="rounded-full bg-[#F5B301] px-4 py-2 text-xs font-extrabold text-[#0F1B2D]">Explore Echat V2</span></button>:<button type="button" onClick={openEchatV2} className="rounded-full border border-amber-200 bg-[#FFF8E7] px-3 py-1.5 text-xs font-extrabold text-[#735000] hover:bg-amber-100"><Sparkles size={13} className="mr-1 inline"/>New Echat</button>;

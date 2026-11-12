@@ -40,6 +40,7 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, onOpenGoLive }) => {
   const { user, isDeveloper, updateUser } = useAuth();
+  const canAdmin = Boolean(user && (user.role === 'admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const [setupPassword, setSetupPassword] = useState('');
   const [isClaiming, setIsClaiming] = useState(false);
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -73,8 +74,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
   }, [user]);
 
   useEffect(() => {
-    if (isDeveloper) api.getSiteConfig().then(setWelcomeConfig).catch(err => setErrorMsg(err.message || 'Could not load welcome page settings'));
-  }, [isDeveloper]);
+    if (canAdmin) api.getSiteConfig().then(setWelcomeConfig).catch(err => setErrorMsg(err.message || 'Could not load welcome page settings'));
+  }, [canAdmin]);
 
   const handleClaimAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,14 +115,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
   };
 
   useEffect(() => {
-    if (isDeveloper) {
+    if (canAdmin) {
       loadAdminData();
     }
-  }, [isDeveloper]);
+  }, [canAdmin]);
 
   // Task 1: 100% Gated - Only my developer account can see and access it
   const ADMIN_EMAIL = 'eldermoses89@gmail.com';
-  const isAuthorized = Boolean(user && user.email?.toLowerCase().trim() === ADMIN_EMAIL);
+  const isAuthorized = Boolean(user && (user.email?.toLowerCase().trim() === ADMIN_EMAIL || user.role === 'admin' || (user as User & {isAdmin?:boolean}).isAdmin));
 
   if (!isAuthorized) {
     return (

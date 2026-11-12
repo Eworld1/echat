@@ -9,6 +9,7 @@ export interface User {
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
   v2?: { whatsapp?: string; whatsappEnabled?: boolean; whatsappDisplay?: boolean; whatsappAutoReplyTemplate?: string; [key:string]: unknown };
   role: 'user' | 'admin' | 'developer';
+  isAdmin?: boolean;
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
   isBlocked: boolean; isOnline: boolean; lastSeen: number; createdAt: number;

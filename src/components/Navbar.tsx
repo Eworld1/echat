@@ -10,6 +10,7 @@ import { getNotifications as getFirestoreNotifications, markNotificationsRead as
 import { User, Notification, Post } from '../types';
 import {
   MessageSquare,
+  Radio,
   Search,
   Home,
   PlusSquare,
@@ -46,6 +47,7 @@ import {
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
+import { EchatThemeToggle } from './EchatThemeToggle';
 
 export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
@@ -54,6 +56,7 @@ interface NavbarProps {
   onNavigate: (view: AppView, targetProfileId?: string, targetPostId?: string) => void;
   onOpenMessenger: () => void;
   onOpenCreate: () => void;
+  onOpenGoLive?: () => void;
   onProfileMenuChange: (open: boolean) => void;
 }
 
@@ -72,9 +75,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onNavigate,
   onOpenMessenger,
   onOpenCreate,
+  onOpenGoLive,
   onProfileMenuChange
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
+  const canAdmin = Boolean(user && (user.role === 'admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const { t, theme, setTheme, language, setLanguage } = usePreferences();
   const { onlineUserIds, onNotification, startCall } = useSocket();
   const { canInstall, install } = useInstallPrompt();
@@ -187,7 +192,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       action: () => onOpenMessenger(),
       keywords: ['messenger', 'chat', 'messages', 'dm', 'calls', 'video call', 'audio call']
     },
-    ...(isDeveloper ? [{
+    ...(canAdmin ? [{
       id: 'page_admin',
       title: 'Developer Mode & Admin',
       description: 'System metrics, user moderation, database inspection',
@@ -214,7 +219,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       action: () => onNavigate('saved'),
       keywords: ['saved', 'bookmarks', 'favorites', 'saved posts']
     }
-  ], [user, isDeveloper, onNavigate, onOpenMessenger]);
+  ], [user, canAdmin, onNavigate, onOpenMessenger]);
 
 
   // Filtered pages based on search query
@@ -910,7 +915,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button onClick={onOpenMessenger} className="relative flex h-12 min-w-14 max-w-28 flex-1 flex-col items-center justify-center gap-0 border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Messages"><MessageSquare size={20} /><span className="text-[9px] leading-3">Messages</span>{unreadMessageCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white">{unreadMessageCount}</span>}</button>
           <button onClick={() => { setShowNotifications(value => !value); if (!showNotifications) handleMarkNotificationsRead(); }} className="relative flex h-12 min-w-14 max-w-28 flex-1 flex-col items-center justify-center gap-0 border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Notifications"><Bell size={20} /><span className="text-[9px] leading-3">Notifications</span>{unreadNotificationsCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unreadNotificationsCount}</span>}</button>
 
-          {isDeveloper && (
+          {canAdmin && (
             <button
               onClick={() => onNavigate('admin')}
               className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] items-center justify-center transition cursor-pointer hidden min-[1025px]:flex ${
@@ -936,6 +941,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button onClick={() => { setShowSearchDropdown(true); searchInputRef.current?.focus(); }} className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200 min-[1025px]:flex" title="Search EChat" aria-label="Search EChat"><Search size={19} /></button>
 
           <button onClick={onOpenCreate} className="hidden h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-700 min-[1025px]:flex" title="Create post"><PlusSquare size={19} /></button>
+          <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title="Go Live"><Radio size={17}/>Go Live</button>
+          <div className="hidden min-[1440px]:block"><EchatThemeToggle compact/></div>
 
           {/* Messenger Icon */}
           <button
@@ -1159,6 +1166,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
                 {settingsExpanded && <div className="mb-1 ml-8 space-y-1 border-l border-slate-200 pl-2 dark:border-slate-600">
                   <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Settings</button>
+                  <div className="px-2 py-2"><p className="mb-2 text-xs font-semibold text-slate-500">Echat experience</p><EchatThemeToggle/></div>
                   <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Privacy Checkup</button>
                   <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Dark Mode: {theme === 'dark' ? 'On' : 'Off'}</button>
                   <label className="flex h-11 items-center justify-between gap-2 rounded-lg px-3 text-sm font-medium text-slate-700 dark:text-slate-100">Language<select aria-label="Language" value={language} onChange={event => setLanguage(event.target.value as LanguageName)} className="max-w-36 rounded-md border border-slate-200 bg-white px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800">{(Object.keys(LANGUAGES) as LanguageName[]).map(name => <option key={name} value={name}>{LANGUAGES[name].label}</option>)}</select></label>
@@ -1182,7 +1190,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </button>
                 )}
 
-                {isDeveloper && (
+                <button type="button" onClick={() => { onOpenGoLive?.(); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-700 transition hover:bg-rose-50 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={22} className="shrink-0 text-rose-600"/>Go Live</button>
+
+                {canAdmin && (
                   <button
                     onClick={() => {
                       onNavigate('admin');
