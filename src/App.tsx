@@ -29,6 +29,9 @@ import { UpgradePrompt } from './components/UpgradePrompt';
 import { CreatePostModal } from './components/CreatePostModal';
 import type { AppView } from './components/Navbar';
 import { runTopBackAction, useBackButton } from './hooks/useBackButton';
+import { EchatV2App } from './components/EchatV2App';
+import { EchatV2Launch } from './components/EchatV2Launch';
+import { EchatV2Boundary } from './components/EchatV2Boundary';
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -39,6 +42,7 @@ export function MainApp() {
   useEffect(() => { if (!splashElapsed || isLoading) return; const timer = window.setTimeout(() => setSplashHidden(true), 500); return () => window.clearTimeout(timer); }, [splashElapsed, isLoading]);
 
   const [currentView, setCurrentView] = useState<AppView>('feed');
+  const [isV2Route, setIsV2Route] = useState(() => window.location.pathname.startsWith('/v2'));
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
@@ -50,6 +54,12 @@ export function MainApp() {
   const backToastTimer = useRef<number | null>(null);
   const handleProfileMenuChange = useCallback(() => {}, []);
   currentViewRef.current = currentView;
+  useEffect(() => {
+    const syncRoute = () => setIsV2Route(window.location.pathname.startsWith('/v2'));
+    window.addEventListener('echat:navigate', syncRoute);
+    window.addEventListener('popstate', syncRoute);
+    return () => { window.removeEventListener('echat:navigate', syncRoute); window.removeEventListener('popstate', syncRoute); };
+  }, []);
   useBackButton(Boolean(activeChatPartner), () => setActiveChatPartner(null), 'chat-conversation');
 
   // Live streaming states
@@ -126,6 +136,7 @@ export function MainApp() {
   useEffect(() => {
     if (!window.history.state?.echatApp) window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);
     const handlePopState = () => {
+      if (window.location.pathname.startsWith('/v2')) return;
       if (runTopBackAction()) {
         window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);
         return;
@@ -194,6 +205,17 @@ export function MainApp() {
     return <AuthModal isOpen={true} />;
   }
 
+  const returnToClassic = () => {
+    localStorage.setItem('echat_theme', 'classic');
+    window.history.pushState({ echatApp: true, tab: 'feed' }, '', '/home');
+    setIsV2Route(false);
+    setCurrentView('feed');
+    setProfileUserId(null);
+    window.dispatchEvent(new Event('echat:navigate'));
+  };
+
+  if (isV2Route) return <EchatV2Boundary onClassic={returnToClassic}><EchatV2App onClassic={returnToClassic} /></EchatV2Boundary>;
+
   return (
     <div className="min-h-screen bg-[#F0F2F5] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
@@ -207,6 +229,7 @@ export function MainApp() {
         onOpenCreate={() => setIsCreatePostOpen(true)}
         onProfileMenuChange={handleProfileMenuChange}
       />
+      <div className="mx-auto flex w-full max-w-7xl justify-end px-4 pt-2"><EchatV2Launch /></div>
 
       {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
 
@@ -220,6 +243,10 @@ export function MainApp() {
 
         {/* Central Stage */}
         <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
+          {currentView === 'feed' && (
+            <EchatV2Launch banner />
+          )}
+
           {currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
