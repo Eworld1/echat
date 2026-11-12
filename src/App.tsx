@@ -38,7 +38,7 @@ const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
-  const { theme } = useEchatTheme();
+  useEchatTheme();
   const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const { onLiveStarted, onLiveStopped, onLiveStreamUpdated } = useSocket();
   const [splashElapsed, setSplashElapsed] = useState(false);
@@ -103,21 +103,16 @@ export function MainApp() {
   useBackButton(Boolean(activeChatPartner), () => setActiveChatPartner(null), 'chat-conversation');
   useEffect(() => {
     if (isLoading) return;
-    if (!initialAuthResolved.current && user && theme === 'v2' && (window.location.pathname === '/' || window.location.pathname === '/home')) {
-      window.history.replaceState({ echatV2: true }, '', '/v2/home');
-      setIsV2Route(true);
-      setCurrentView('feed');
-    }
     if (initialAuthResolved.current && user && !previousLoggedIn.current && (window.location.pathname === '/' || window.location.pathname === '/v2/home')) {
-      const goV2 = theme === 'v2';
-      const target = goV2 ? '/v2/home' : '/home';
+      const target = window.location.pathname === '/v2/home' ? '/v2/home' : '/home';
+      const goV2 = target === '/v2/home';
       window.history.replaceState({ [goV2 ? 'echatV2' : 'echatApp']: true }, '', target);
       setIsV2Route(goV2);
       setCurrentView('feed');
     }
     previousLoggedIn.current = Boolean(user);
     initialAuthResolved.current = true;
-  }, [isLoading, user?.id, theme]);
+  }, [isLoading, user?.id]);
 
   // Live streaming states
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream | null>(null);
