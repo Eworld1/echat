@@ -5,7 +5,9 @@ export interface User {
   avatar: string; coverPhoto: string; bio: string; location: string;
   dob?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
-  role: 'user' | 'admin' | 'developer';
+  role: 'user' | 'creator' | 'admin' | 'developer' | 'super_admin';
+  liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';
+  liveAuthSecret?: string;
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
   isBlocked: boolean; isOnline: boolean; lastSeen: number; createdAt: number; lastLogin?: number;
@@ -23,6 +25,8 @@ export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUs
 export interface GlobalSearchResults { users: User[]; posts: Post[]; }
 export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
 export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
+export interface LiveAccessRequest { id: string; userId: string; name: string; avatar: string; reason: string; status: 'pending' | 'approved' | 'rejected' | 'blocked' | 'cancelled'; createdAt: number; reviewedBy?: string; }
+export type LiveAccessMode = 'everyone' | 'approved_only' | 'admins_creators_only';
 export interface PagePost {
   id: string;
   pageId: string;
@@ -95,5 +99,5 @@ export interface EventItem {
 export interface SavedItem { id: string; userId: string; postId: string; type: 'post' | 'page' | 'reel' | 'event'; title?: string; subtitle?: string; mediaUrl?: string; savedAt: number; }
 export interface ReelComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
 export interface ReelItem { id: string; videoUrl: string; caption: string; ownerId: string; ownerName?: string; ownerAvatar?: string; likes: string[]; likesCount?: number; comments: ReelComment[]; sharesCount?: number; createdAt: number; }
-export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; bannerEnabled?: boolean; bannerText?: string; maintenanceMode?: boolean; appName?: string; themeColor?: string; updatedAt?: number; welcomePage?: any; }
+export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; bannerEnabled?: boolean; bannerText?: string; maintenanceMode?: boolean; appName?: string; themeColor?: string; updatedAt?: number; welcomePage?: any; liveAccessMode?: LiveAccessMode; }
 export interface DeviceSession { id: string; deviceName: string; browser: string; os: string; location: string; isCurrent: boolean; lastActive: number; }

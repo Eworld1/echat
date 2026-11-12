@@ -26,7 +26,7 @@ interface Props { route:V2Route; onNavigate:(route:V2Route)=>void; onCreate:()=>
 
 export const EchatV2Layout:React.FC<Props>=({route,onNavigate,onCreate,children})=>{
   const {user,isDeveloper}=useAuth();
-  const canAdmin=Boolean(user&&(user.role==='admin'||user.isAdmin||isDeveloper));
+  const canAdmin=Boolean(user&&(user.role==='admin'||user.role==='super_admin'||user.isAdmin||isDeveloper));
   const [menuOpen,setMenuOpen]=useState(false);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [notifications,setNotifications]=useState<Notification[]>([]);

@@ -8,7 +8,8 @@ export interface User {
   dob?: string; dobMonthDay?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
   v2?: { whatsapp?: string; whatsappEnabled?: boolean; whatsappDisplay?: boolean; whatsappAutoReplyTemplate?: string; [key:string]: unknown };
-  role: 'user' | 'admin' | 'developer';
+  role: 'user' | 'creator' | 'admin' | 'developer' | 'super_admin';
+  liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';
   isAdmin?: boolean;
   isVerified?: boolean; isOfficialDeveloper?: boolean;
   boostsCount?: number; boostedBy?: string[];
@@ -67,10 +68,12 @@ export interface Notification {
 }
 
 export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUsers: number; totalPosts: number; totalMessages: number; totalStories: number; pendingReports: number; activeSockets: number; uptimeSeconds: number; }
-export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; appName?: string; }
+export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; appName?: string; liveAccessMode?: LiveAccessMode; }
 export interface GlobalSearchResults { users: User[]; posts: Post[]; }
 export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
 export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; taggedPageIds?: string[]; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
+export interface LiveAccessRequest { id: string; userId: string; name: string; avatar: string; reason: string; status: 'pending' | 'approved' | 'rejected' | 'blocked' | 'cancelled'; createdAt: number; reviewedBy?: string; }
+export type LiveAccessMode = 'everyone' | 'approved_only' | 'admins_creators_only';
 
 export interface PagePost {
   id: string;

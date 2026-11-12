@@ -11,6 +11,8 @@ import type {
   GlobalSearchResults,
   LiveStream,
   LiveComment,
+  LiveAccessRequest,
+  LiveAccessMode,
   ReactionType,
   Page,
   PagePost,
@@ -64,6 +66,11 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
     ...(pageIdentity ? { 'x-page-id': pageIdentity } : {}),
     ...customHeaders
   };
+}
+
+function getLiveHeaders() {
+  const proof = typeof window !== 'undefined' ? window.localStorage.getItem('echat_live_auth') || '' : '';
+  return getHeaders(proof ? { 'x-live-auth-token': proof } : {});
 }
 
 export const api = {
@@ -274,7 +281,7 @@ export const api = {
       headers: getHeaders(),
       body: JSON.stringify(data)
     });
-    return readResponse<{ user: User; token: string }>(res, 'Registration failed');
+    return readResponse<{ user: User; token: string; liveAuthToken?: string }>(res, 'Registration failed');
   },
 
   async login(data: { email: string; password: string }) {
@@ -283,7 +290,7 @@ export const api = {
       headers: getHeaders(),
       body: JSON.stringify(data)
     });
-    return readResponse<{ user: User; token: string }>(res, 'Login failed');
+    return readResponse<{ user: User; token: string; liveAuthToken?: string }>(res, 'Login failed');
   },
 
   async forgotPassword(email: string): Promise<{ success: boolean; message: string; token?: string }> {
@@ -742,7 +749,43 @@ export const api = {
     return readResponse<{ success: boolean; hasBoosted: boolean; boostsCount: number }>(res, 'Failed to boost user');
   },
 
-  // Gated Go-Live System
+  // Admin-controlled Go-Live access
+  async getLiveAccess(): Promise<{ liveAccess: NonNullable<User['liveAccess']>; mode: LiveAccessMode; canGoLive: boolean; request: LiveAccessRequest | null }> {
+    const res = await fetch(apiUrl('/api/live/access'), { headers: getLiveHeaders() });
+    return readResponse(res, 'Could not check Go Live access');
+  },
+
+  async requestLiveAccess(reason: string): Promise<{ success: boolean; liveAccess: 'pending'; request: LiveAccessRequest }> {
+    const res = await fetch(apiUrl('/api/live/request'), { method: 'POST', headers: getLiveHeaders(), body: JSON.stringify({ reason }) });
+    return readResponse(res, 'Could not send Go Live request');
+  },
+
+  async cancelLiveAccessRequest(): Promise<{ success: boolean; liveAccess: 'none' }> {
+    const res = await fetch(apiUrl('/api/live/request/cancel'), { method: 'POST', headers: getLiveHeaders() });
+    return readResponse(res, 'Could not cancel Go Live request');
+  },
+
+  async getAdminLiveAccess(): Promise<{ requests: LiveAccessRequest[]; mode: LiveAccessMode; users: User[] }> {
+    const res = await fetch(apiUrl('/api/admin/live-access'), { headers: getLiveHeaders() });
+    return readResponse(res, 'Could not load Go Live access requests');
+  },
+
+  async reviewLiveAccessRequest(requestId: string, decision: 'approved' | 'rejected' | 'blocked'): Promise<void> {
+    const res = await fetch(apiUrl(`/api/admin/live-access/requests/${encodeURIComponent(requestId)}/review`), { method: 'POST', headers: getLiveHeaders(), body: JSON.stringify({ decision }) });
+    await readResponse(res, 'Could not review Go Live request');
+  },
+
+  async updateUserLiveAccess(userId: string, action: 'grant' | 'revoke' | 'block' | 'unblock'): Promise<User> {
+    const res = await fetch(apiUrl(`/api/admin/live-access/users/${encodeURIComponent(userId)}`), { method: 'POST', headers: getLiveHeaders(), body: JSON.stringify({ action }) });
+    return readResponse(res, 'Could not change user Go Live access');
+  },
+
+  async updateLiveAccessMode(mode: LiveAccessMode): Promise<void> {
+    const res = await fetch(apiUrl('/api/admin/live-access/settings'), { method: 'PUT', headers: getLiveHeaders(), body: JSON.stringify({ mode }) });
+    await readResponse(res, 'Could not update Go Live settings');
+  },
+
+  // Live broadcast system
   async getCurrentLive(): Promise<{ live: LiveStream | null }> {
     const res = await fetch(apiUrl('/api/live/current'), { headers: getHeaders() });
     if (!res.ok) return { live: null };
@@ -752,7 +795,7 @@ export const api = {
   async startLive(title?: string, taggedPageIds: string[] = []): Promise<{ success: boolean; live: LiveStream }> {
     const res = await fetch(apiUrl('/api/live/start'), {
       method: 'POST',
-      headers: getHeaders(),
+      headers: getLiveHeaders(),
       body: JSON.stringify({ title, taggedPageIds })
     });
     return readResponse(res, 'Failed to start live stream');
@@ -761,7 +804,7 @@ export const api = {
   async stopLive(): Promise<{ success: boolean }> {
     const res = await fetch(apiUrl('/api/live/stop'), {
       method: 'POST',
-      headers: getHeaders()
+      headers: getLiveHeaders()
     });
     return readResponse(res);
   },

@@ -39,7 +39,7 @@ const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
   const { theme } = useEchatTheme();
-  const canAdmin = Boolean(user && (user.role === 'admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
+  const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const { onLiveStarted, onLiveStopped, onLiveStreamUpdated } = useSocket();
   const [splashElapsed, setSplashElapsed] = useState(false);
   const [splashHidden, setSplashHidden] = useState(false);
@@ -76,7 +76,7 @@ export function MainApp() {
         setCurrentView('feed');
         return;
       }
-      const route = path.startsWith('/admin/') ? 'admin' : classicRoutes[path];
+      const route = path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : classicRoutes[path];
       if (route) {
         if (route === 'admin' && !isLoading && !canAdmin) {
           window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
@@ -87,6 +87,12 @@ export function MainApp() {
         if (route === 'profile') setProfileUserId(user?.id || null);
         if (path === '/messages') setIsMessengerDrawerOpen(true);
         if (path === '/live' || path === '/go-live') setIsGoLiveOpen(true);
+        if (path.startsWith('/live/')) {
+          const streamId = decodeURIComponent(path.slice('/live/'.length));
+          void api.getCurrentLive().then(result => {
+            if (result.live?.id === streamId) setActiveViewerStream(result.live);
+          }).catch(() => {});
+        }
       }
     };
     syncRoute();
@@ -243,7 +249,7 @@ export function MainApp() {
   };
   const closeGoLive = () => {
     setIsGoLiveOpen(false);
-    if (window.location.pathname === '/live' || window.location.pathname === '/go-live') {
+    if (window.location.pathname === '/live' || window.location.pathname.startsWith('/live/') || window.location.pathname === '/go-live') {
       window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
       window.dispatchEvent(new Event('echat:navigate'));
     }
@@ -389,7 +395,13 @@ export function MainApp() {
       {activeViewerStream && (
         <LiveViewerModal
           stream={activeViewerStream}
-          onClose={() => setActiveViewerStream(null)}
+          onClose={() => {
+            setActiveViewerStream(null);
+            if (window.location.pathname.startsWith('/live/')) {
+              window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
+              window.dispatchEvent(new Event('echat:navigate'));
+            }
+          }}
         />
       )}
     </div>

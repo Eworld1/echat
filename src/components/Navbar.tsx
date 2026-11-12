@@ -79,7 +79,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onProfileMenuChange
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
-  const canAdmin = Boolean(user && (user.role === 'admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
+  const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const { t, theme, setTheme, language, setLanguage } = usePreferences();
   const { onlineUserIds, onNotification, startCall } = useSocket();
   const { canInstall, install } = useInstallPrompt();

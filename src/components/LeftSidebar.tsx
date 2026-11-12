@@ -28,7 +28,7 @@ interface LeftSidebarProps {
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigate, onOpenGoLive }) => {
   const { user, isDeveloper, myPages, activePage, switchIdentity, createIdentityPage } = useAuth();
-  const canAdmin = Boolean(user?.role === 'admin' || isDeveloper || (user as (typeof user & {isAdmin?:boolean})|null)?.isAdmin);
+  const canAdmin = Boolean(user?.role === 'admin' || user?.role === 'super_admin' || isDeveloper || (user as (typeof user & {isAdmin?:boolean})|null)?.isAdmin);
   const { t } = usePreferences();
   const [showTerms, setShowTerms] = useState(false);
   const [showIdentityPicker, setShowIdentityPicker] = useState(false);

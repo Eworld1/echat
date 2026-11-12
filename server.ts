@@ -33,7 +33,7 @@ app.use((req: Request, res: Response, next) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   // x-page-id is sent by the client when acting as a Page. It must be allowed
   // for cross-origin requests (including the Reel chunk upload preflight).
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-user-id, x-developer-key, x-page-id');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-user-id, x-developer-key, x-page-id, x-live-auth-token');
   res.setHeader('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -401,11 +401,21 @@ app.post('/api/reels/upload/:uploadId/complete', async (req: Request, res: Respo
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'eldermoses89@gmail.com').toLowerCase().trim();
 
 function isDeveloperUser(user: any): boolean {
-  return Boolean(user && user.role === 'developer');
+  return Boolean(user && (user.role === 'developer' || user.role === 'super_admin'));
 }
 
 function isAdminUser(user: any): boolean {
-  return Boolean(user && (user.role === 'developer' || user.role === 'admin' || user.isAdmin === true));
+  return Boolean(user && (user.role === 'developer' || user.role === 'super_admin' || user.role === 'admin' || user.isAdmin === true));
+}
+
+function canStartLive(user: any): boolean {
+  if (!user) return false;
+  if (isAdminUser(user)) return true;
+  if (user.liveAccess === 'blocked') return false;
+  const mode = db.getLiveAccessMode();
+  if (mode === 'everyone') return true;
+  if (mode === 'admins_creators_only') return user.role === 'creator';
+  return user.liveAccess === 'approved';
 }
 
 /** Constant-time string comparison (avoids leaking the secret through timing). */
@@ -439,6 +449,22 @@ function getAuthUser(req: Request) {
     });
   }
   return user || null;
+}
+
+function createLiveAuthToken(user: { id: string; liveAuthSecret?: string }): string {
+  const secret = user.liveAuthSecret || crypto.randomBytes(32).toString('hex');
+  if (!user.liveAuthSecret) db.updateUser(user.id, { liveAuthSecret: secret });
+  return crypto.createHmac('sha256', secret).update(user.id).digest('hex');
+}
+
+function getLiveAuthUser(req: Request) {
+  const userId = req.headers['x-user-id'];
+  const user = typeof userId === 'string' ? db.getUserById(userId) : undefined;
+  const suppliedToken = req.headers['x-live-auth-token'];
+  if (!user || user.isBlocked || typeof suppliedToken !== 'string' || !user.liveAuthSecret) return null;
+  const expectedToken = crypto.createHmac('sha256', user.liveAuthSecret).update(user.id).digest('hex');
+  if (!safeEqual(suppliedToken, expectedToken)) return null;
+  return user;
 }
 
 // ----------------- AUTH ROUTES -----------------
@@ -524,7 +550,7 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
     if (existing) {
       // Only the real owner (correct password) may re-enter an existing account.
       if (existing.passwordHash && existing.passwordHash === hashPassword(password)) {
-        return res.json({ user: db.sanitizeUser(existing), token: existing.id });
+        return res.json({ user: db.sanitizeUser(existing), token: existing.id, liveAuthToken: createLiveAuthToken(existing) });
       }
       return res.status(409).json({ error: 'An account with this email already exists. Please log in.' });
     }
@@ -555,7 +581,7 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
         ...(location && { location }),
         ...(isDev && { role: 'developer' as const, isVerified: true, isOfficialDeveloper: true })
       });
-      if (upgraded) return res.json({ user: db.sanitizeUser(upgraded), token: upgraded.id });
+      if (upgraded) return res.json({ user: db.sanitizeUser(upgraded), token: upgraded.id, liveAuthToken: createLiveAuthToken(upgraded) });
     }
 
     if (typeof req.body.id === 'string' && db.getUserById(req.body.id)) {
@@ -579,7 +605,8 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
     res.json({
       user: db.sanitizeUser(user, user.id),
-      token: user.id
+      token: user.id,
+      liveAuthToken: createLiveAuthToken(user)
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message || 'Registration failed' });
@@ -609,7 +636,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 
     res.json({
       user: db.sanitizeUser(user, user.id),
-      token: user.id
+      token: user.id,
+      liveAuthToken: createLiveAuthToken(user)
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message || 'Login failed' });
@@ -1804,6 +1832,86 @@ app.post('/api/users/:id/boost', (req: Request, res: Response) => {
 });
 
 // ----------------- GO-LIVE SYSTEM (GATED) -----------------
+app.get('/api/live/access', (req: Request, res: Response) => {
+  const authUser = getLiveAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const request = db.getLiveRequests().find(item => item.userId === authUser.id && item.status === 'pending') || null;
+  res.json({ liveAccess: authUser.liveAccess || 'none', mode: db.getLiveAccessMode(), canGoLive: canStartLive(authUser), request });
+});
+
+app.post('/api/live/request', (req: Request, res: Response) => {
+  const authUser = getLiveAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (reason.length < 3 || reason.length > 500) return res.status(400).json({ error: 'Please tell us why you want to go live (3–500 characters).' });
+  if (authUser.liveAccess === 'blocked') return res.status(403).json({ error: 'Your Go Live access is blocked. Contact an administrator.' });
+  if (canStartLive(authUser)) return res.status(409).json({ error: 'You already have Go Live access.' });
+  const request = db.createLiveRequest(authUser.id, reason);
+  if (!request) return res.status(400).json({ error: 'Could not submit your request.' });
+  res.status(201).json({ success: true, request, liveAccess: 'pending' });
+});
+
+app.post('/api/live/request/cancel', (req: Request, res: Response) => {
+  const authUser = getLiveAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  if (!db.cancelLiveRequest(authUser.id)) return res.status(404).json({ error: 'No pending request to cancel.' });
+  res.json({ success: true, liveAccess: 'none' });
+});
+
+app.get('/api/admin/live-access', (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  res.json({ requests: db.getLiveRequests().filter(item => item.status === 'pending'), mode: db.getLiveAccessMode(), users: db.getUsers(true).map(user => db.sanitizeUser(user, admin!.id)) });
+});
+
+app.put('/api/admin/live-access/settings', (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  const mode = req.body?.mode;
+  if (!['everyone', 'approved_only', 'admins_creators_only'].includes(mode)) return res.status(400).json({ error: 'Invalid Go Live access mode.' });
+  db.setLiveAccessMode(mode);
+  audit(admin!, 'live_access.settings', undefined, `Go Live access mode: ${mode}`);
+  res.json({ success: true, mode });
+});
+
+app.post('/api/admin/live-access/requests/:id/review', (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  const decision = req.body?.decision;
+  if (!['approved', 'rejected', 'blocked'].includes(decision)) return res.status(400).json({ error: 'Invalid review decision.' });
+  const request = db.reviewLiveRequest(req.params.id, decision, admin!.id);
+  if (!request) return res.status(404).json({ error: 'Pending request not found.' });
+  if (decision === 'blocked') endLiveForBlockedUser(request.userId);
+  const message = decision === 'approved' ? 'You can now Go Live! 🎉' : decision === 'rejected' ? 'Your Go Live request was declined.' : 'Your Go Live access has been blocked.';
+  const notification = db.addNotification({ userId: request.userId, actorId: admin!.id, type: 'announcement', message, targetId: request.id, read: false });
+  socketManager.sendToUser(request.userId, { type: 'new_notification', notification: populateNotification(notification) });
+  audit(admin!, `live_access.${decision}`, { type: 'user', id: request.userId, name: request.name });
+  res.json({ success: true, request, liveAccess: decision === 'approved' ? 'approved' : decision === 'blocked' ? 'blocked' : 'none' });
+});
+
+app.post('/api/admin/live-access/users/:id', (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isAdminUser(admin)) return res.status(403).json({ error: 'Administrator access required' });
+  const target = db.getUserById(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (isDeveloperUser(target)) return res.status(403).json({ error: 'Super-admin live access cannot be changed.' });
+  const action = req.body?.action;
+  if (!['grant', 'revoke', 'block', 'unblock'].includes(action)) return res.status(400).json({ error: 'Invalid user access action.' });
+  const access = action === 'grant' ? 'approved' : action === 'block' ? 'blocked' : 'none';
+  const pending = db.getLiveRequests().find(item => item.userId === target.id && item.status === 'pending');
+  if (pending && action !== 'unblock') db.reviewLiveRequest(pending.id, action === 'grant' ? 'approved' : action === 'block' ? 'blocked' : 'rejected', admin!.id);
+  if (action === 'block') {
+    endLiveForBlockedUser(target.id);
+  }
+  const updated = db.updateUser(target.id, { liveAccess: access });
+  if (action === 'grant') {
+    const notification = db.addNotification({ userId: target.id, actorId: admin!.id, type: 'announcement', message: 'You can now Go Live! 🎉', read: false });
+    socketManager.sendToUser(target.id, { type: 'new_notification', notification: populateNotification(notification) });
+  }
+  audit(admin!, `live_access.${action}`, { type: 'user', id: target.id, name: target.name });
+  res.json({ success: true, user: db.sanitizeUser(updated!, admin!.id) });
+});
+
 interface LiveComment {
   id: string;
   userId: string;
@@ -1831,28 +1939,23 @@ interface LiveSession {
 
 let activeLiveSession: LiveSession | null = null;
 
+function endLiveForBlockedUser(userId: string): void {
+  if (activeLiveSession?.hostId !== userId) return;
+  const endedHostId = activeLiveSession.hostId;
+  socketManager.clearLiveHost(activeLiveSession.id);
+  activeLiveSession = null;
+  socketManager.broadcast({ type: 'live_ended', hostId: endedHostId });
+}
+
 app.get('/api/live/current', (_req: Request, res: Response) => {
   res.json({ live: activeLiveSession });
 });
 
 app.post('/api/live/start', (req: Request, res: Response) => {
-  const authUser = getAuthUser(req);
+  const authUser = getLiveAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
-
+  if (!canStartLive(authUser)) return res.status(403).json({ error: authUser.liveAccess === 'blocked' ? 'Your Go Live access is blocked.' : 'Request Go Live access from an administrator first.' });
   const isDev = isDeveloperUser(authUser);
-  const accountAgeDays = Math.floor((Date.now() - (authUser.createdAt || Date.now())) / (1000 * 60 * 60 * 24));
-
-  // Gating rule:
-  // a) For normal users: Go Live is locked. "Go Live unlocks after 60 days on EChat. Keep posting and engaging to unlock!"
-  // b) Calculate account age from createdAt field. If now - createdAt < 60 days, block live.
-  // c) For developer only: Bypass the 60-day rule. Developer can Go Live anytime.
-  if (!isDev && accountAgeDays < 60) {
-    return res.status(403).json({
-      error: 'Go Live unlocks after 60 days on EChat. Keep posting and engaging to unlock!',
-      accountAgeDays,
-      daysRemaining: 60 - accountAgeDays
-    });
-  }
 
   const { title, taggedPageIds } = req.body;
   const pageIdentityId = String(req.get('x-page-id') || '');
@@ -1918,7 +2021,7 @@ app.post('/api/live/start', (req: Request, res: Response) => {
 });
 
 app.post('/api/live/stop', (req: Request, res: Response) => {
-  const authUser = getAuthUser(req);
+  const authUser = getLiveAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
   if (activeLiveSession) {

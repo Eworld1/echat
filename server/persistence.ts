@@ -7,11 +7,11 @@
  */
 export type CollectionName =
   | 'users' | 'posts' | 'stories' | 'messages' | 'notifications'
-  | 'pages' | 'groups' | 'events' | 'passwordResetTokens' | 'auditLogs' | 'siteConfig';
+  | 'pages' | 'groups' | 'events' | 'passwordResetTokens' | 'auditLogs' | 'siteConfig' | 'liveRequests';
 
 export const COLLECTIONS: CollectionName[] = [
   'users', 'posts', 'stories', 'messages', 'notifications',
-  'pages', 'groups', 'events', 'passwordResetTokens', 'auditLogs', 'siteConfig'
+  'pages', 'groups', 'events', 'passwordResetTokens', 'auditLogs', 'siteConfig', 'liveRequests'
 ];
 
 export type Snapshot = Partial<Record<CollectionName, Record<string, unknown>[]>>;

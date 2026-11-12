@@ -153,6 +153,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await signOut(auth);
           localStorage.removeItem('echat_user_id');
           localStorage.removeItem('echat_token');
+          localStorage.removeItem('echat_live_auth');
           setUser(null);
           setIsLoading(false);
           return;
@@ -190,12 +191,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         localStorage.removeItem('echat_user_id');
         localStorage.removeItem('echat_token');
+        localStorage.removeItem('echat_live_auth');
         setUser(null);
       }
     } catch (err) {
       console.error('refreshUser failed:', err);
       localStorage.removeItem('echat_user_id');
       localStorage.removeItem('echat_token');
+      localStorage.removeItem('echat_live_auth');
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -211,6 +214,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await signOut(auth);
             localStorage.removeItem('echat_user_id');
             localStorage.removeItem('echat_token');
+            localStorage.removeItem('echat_live_auth');
             setUser(null);
           } else if (userDoc) {
             localStorage.setItem('echat_user_id', userDoc.id);
@@ -224,6 +228,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               await signOut(auth);
               localStorage.removeItem('echat_user_id');
               localStorage.removeItem('echat_token');
+              localStorage.removeItem('echat_live_auth');
               setUser(null);
             } else if (byEmail) {
               localStorage.setItem('echat_user_id', byEmail.id);
@@ -300,15 +305,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem('echat_token', profile.id);
       setUser(profile);
 
-      // ✅ FIX 2: Sync with Express backend so /api/friends works
+      // Sync with Express and retain its signed proof for protected live controls.
+      let liveAuthToken: string | undefined;
+      try { liveAuthToken = (await api.login({ email: cleanEmail, password })).liveAuthToken; } catch {}
       try {
-        await api.login({ email: cleanEmail, password });
+        const registered = await api.register({ name: profile.name, email: cleanEmail, password, dob: profile.dob || '2000-01-01', id: profile.id, termsAccepted: true });
+        liveAuthToken = registered.liveAuthToken || liveAuthToken;
       } catch {}
-      
-      // Also register in backend if not exists
-      try {
-        await api.register({ name: profile.name, email: cleanEmail, password, dob: profile.dob || '2000-01-01', id: profile.id, termsAccepted: true });
-      } catch {}
+      if (liveAuthToken) localStorage.setItem('echat_live_auth', liveAuthToken);
       setUser(await withServerSocial(profile));
 
     } catch (firebaseErr: any) {
@@ -317,6 +321,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const res = await api.login({ email: cleanEmail, password });
         localStorage.setItem('echat_user_id', res.user.id);
         localStorage.setItem('echat_token', res.token || res.user.id);
+        if (res.liveAuthToken) localStorage.setItem('echat_live_auth', res.liveAuthToken);
         setUser(res.user);
       } catch (backendErr) {
         throw firebaseErr;
@@ -378,7 +383,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // ✅ FIX: Also create in Express backend so friends/call API works
       try {
-        await api.register({ ...data, email: cleanEmail, id: uid });
+        const backendAuth = await api.register({ ...data, email: cleanEmail, id: uid });
+        if (backendAuth.liveAuthToken) localStorage.setItem('echat_live_auth', backendAuth.liveAuthToken);
       } catch {
         // Firebase remains authoritative; backend registration may already exist.
       }
@@ -427,6 +433,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       localStorage.removeItem('echat_user_id');
       localStorage.removeItem('echat_token');
+      localStorage.removeItem('echat_live_auth');
       setUser(null);
       setIsLoading(false);
     }
@@ -439,12 +446,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (targetUser) {
         localStorage.setItem('echat_user_id', targetUser.id);
         localStorage.setItem('echat_token', targetUser.id);
+        localStorage.removeItem('echat_live_auth');
         setUser(targetUser);
         return;
       }
       const res = await api.quickSwitch(userId);
       localStorage.setItem('echat_user_id', res.user.id);
       localStorage.setItem('echat_token', res.token || res.user.id);
+      localStorage.removeItem('echat_live_auth');
       setUser(res.user);
     } finally {
       setIsLoading(false);
@@ -483,7 +492,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(prev => (prev ? { ...prev, ...updated } : updated));
   };
 
-  const isDeveloper = Boolean(user && user.role === 'developer' && user.isOfficialDeveloper);
+  const isDeveloper = Boolean(user && (user.role === 'super_admin' || (user.role === 'developer' && user.isOfficialDeveloper)));
 
   return (
     <AuthContext.Provider value={{ 

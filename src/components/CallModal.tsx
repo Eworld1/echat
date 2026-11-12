@@ -500,7 +500,7 @@ const CallModalView: React.FC = () => {
  * when the UI switches between ringing / active / minimized views.
  */
 export const CallModal: React.FC = () => {
-  const { remoteStream, activeCall, callNotice, clearCallNotice, registerCallAudioElement } = useSocket();
+  const { remoteStream, activeCall, callNotice, clearCallNotice, registerCallAudioElement, speakerEnabled } = useSocket();
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {

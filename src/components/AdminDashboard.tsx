@@ -2,6 +2,7 @@ import { AdminOverview } from './admin/AdminOverview';
 import { AdminUsers } from './admin/AdminUsers';
 import { AdminAnnouncements } from './admin/AdminAnnouncements';
 import { AdminActivity } from './admin/AdminActivity';
+import { LiveAccessAdmin } from './admin/LiveAccessAdmin';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -40,13 +41,14 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, onOpenGoLive }) => {
   const { user, isDeveloper, updateUser } = useAuth();
-  const canAdmin = Boolean(user && (user.role === 'admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
+  const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const [setupPassword, setSetupPassword] = useState('');
   const [isClaiming, setIsClaiming] = useState(false);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [reportedPosts, setReportedPosts] = useState<Post[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'reports' | 'announce' | 'activity' | 'profile' | 'welcome'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'reports' | 'announce' | 'activity' | 'profile' | 'welcome' | 'liveAccess'>('overview');
+  const [pendingLiveRequests, setPendingLiveRequests] = useState(0);
   const [userSearch, setUserSearch] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -107,6 +109,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
       setStats(s);
       setUsersList(u);
       setReportedPosts(r);
+      try { setPendingLiveRequests((await api.getAdminLiveAccess()).requests.length); } catch { setPendingLiveRequests(0); }
     } catch (err: any) {
       setErrorMsg(err.message || 'Access denied');
     } finally {
@@ -122,7 +125,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
 
   // Task 1: 100% Gated - Only my developer account can see and access it
   const ADMIN_EMAIL = 'eldermoses89@gmail.com';
-  const isAuthorized = Boolean(user && (user.email?.toLowerCase().trim() === ADMIN_EMAIL || user.role === 'admin' || (user as User & {isAdmin?:boolean}).isAdmin));
+  const isAuthorized = Boolean(user && (user.email?.toLowerCase().trim() === ADMIN_EMAIL || user.role === 'admin' || user.role === 'super_admin' || (user as User & {isAdmin?:boolean}).isAdmin));
 
   if (!isAuthorized) {
     return (
@@ -295,7 +298,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
             ['announce', 'Announcements', <Megaphone key="a" size={14} />],
             ['activity', 'Activity log', <Terminal key="l" size={14} />],
             ['profile', 'My controls', <Shield key="p" size={14} />],
-            ['welcome', 'Welcome page', <Edit3 key="w" size={14} />]
+            ['welcome', 'Welcome page', <Edit3 key="w" size={14} />],
+            ['liveAccess', 'Live Access', <Radio key="live" size={14} />]
           ] as const).map(([id, label, icon]) => (
             <button
               key={id}
@@ -309,6 +313,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
               {id === 'reports' && reportedPosts.length > 0 && (
                 <span className="bg-red-500 text-white px-1.5 rounded-full text-[10px] font-extrabold">{reportedPosts.length}</span>
               )}
+              {id === 'liveAccess' && pendingLiveRequests > 0 && <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-extrabold text-white">{pendingLiveRequests}</span>}
             </button>
           ))}
         </div>
@@ -598,6 +603,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
       {activeTab === 'announce' && <AdminAnnouncements />}
 
       {activeTab === 'activity' && <AdminActivity />}
+      {activeTab === 'liveAccess' && <LiveAccessAdmin onPendingCount={setPendingLiveRequests} />}
     </div>
   );
 };

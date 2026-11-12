@@ -74,6 +74,12 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [liveCaption, setLiveCaption] = useState('');
   const [sourceError, setSourceError] = useState('');
   const [cameraRetry, setCameraRetry] = useState(0);
+  const [accessInfo, setAccessInfo] = useState<Awaited<ReturnType<typeof api.getLiveAccess>> | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [accessReason, setAccessReason] = useState('');
+  const [accessBusy, setAccessBusy] = useState(false);
+  const [accessError, setAccessError] = useState('');
+  const [accessNotice, setAccessNotice] = useState('');
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -135,15 +141,42 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     }
   };
 
-  // Calculate account age in days
-  const userCreatedAt = user?.createdAt || Date.now();
-  const accountAgeDays = Math.floor((Date.now() - userCreatedAt) / (1000 * 60 * 60 * 24));
-  const daysRemaining = Math.max(0, 60 - accountAgeDays);
-  const isEligible = isDeveloper || accountAgeDays >= 60;
+  const hasLivePermission = Boolean(accessInfo?.canGoLive);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    setAccessLoading(true);
+    setAccessError('');
+    setAccessNotice('');
+    void api.getLiveAccess().then(info => { if (active) setAccessInfo(info); }).catch(error => {
+      if (active) setAccessError(error instanceof Error ? error.message : 'Could not check Go Live access.');
+    }).finally(() => { if (active) setAccessLoading(false); });
+    return () => { active = false; };
+  }, [isOpen, user?.id]);
+
+  const sendAccessRequest = async () => {
+    setAccessBusy(true); setAccessError('');
+    try {
+      await api.requestLiveAccess(accessReason);
+      setAccessReason('');
+      setAccessNotice('Request sent to Admin');
+      const updated = await api.getLiveAccess();
+      setAccessInfo(updated);
+    } catch (error) { setAccessError(error instanceof Error ? error.message : 'Could not send your request.'); }
+    finally { setAccessBusy(false); }
+  };
+
+  const cancelAccessRequest = async () => {
+    setAccessBusy(true); setAccessError('');
+    try { await api.cancelLiveAccessRequest(); setAccessInfo(await api.getLiveAccess()); }
+    catch (error) { setAccessError(error instanceof Error ? error.message : 'Could not cancel your request.'); }
+    finally { setAccessBusy(false); }
+  };
 
   // Initialize camera preview if eligible and open
   useEffect(() => {
-    if (!isOpen || !isEligible) return;
+    if (!isOpen || !hasLivePermission) return;
 
     let isMounted = true;
     async function startCamera() {
@@ -198,7 +231,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         mediaStreamRef.current = null;
       }
     };
-  }, [isOpen, isEligible, videoQuality, selectedCameraId, selectedMicrophoneId, cameraRetry]);
+  }, [isOpen, hasLivePermission, videoQuality, selectedCameraId, selectedMicrophoneId, cameraRetry]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -399,80 +432,26 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       
-      {/* CASE A: User is GATED (< 60 days and not Developer) */}
-      {!isEligible ? (
-        <div className="bg-white w-full max-w-md rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-200 text-center relative overflow-hidden">
-          {/* Decorative Background Glow */}
-          <div className="absolute -top-16 -right-16 w-40 h-40 bg-amber-400/20 rounded-full blur-3xl pointer-events-none" />
-          <div className="absolute -bottom-16 -left-16 w-40 h-40 bg-rose-400/20 rounded-full blur-3xl pointer-events-none" />
-
-          <button
-            onClick={onClose}
-            className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition"
-          >
-            <X size={18} />
-          </button>
-
-          <div className="w-18 h-18 rounded-3xl bg-amber-50 text-amber-500 border border-amber-200/80 flex items-center justify-center mx-auto mb-4 shadow-sm">
-            <Lock size={32} />
-          </div>
-
-          <span className="text-[11px] font-extrabold uppercase tracking-wider bg-amber-100 text-amber-800 px-3 py-1 rounded-full">
-            Feature Locked (60-Day Policy)
-          </span>
-
-          <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-3">
-            Go Live Unlocks After 60 Days
-          </h2>
-
-          <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">
-            Go Live unlocks after <strong>60 days</strong> on EChat. Keep posting, engaging, and sharing stories to unlock!
-          </p>
-
-          {/* Account Age Progress Bar */}
-          <div className="my-5 p-4 bg-slate-50 border border-slate-200/90 rounded-2xl text-left space-y-2">
-            <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-              <span className="flex items-center gap-1.5">
-                <Clock size={14} className="text-amber-500" />
-                Account Age:
-              </span>
-              <span className="text-blue-600">{accountAgeDays} / 60 days</span>
-            </div>
-
-            <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
-              <div
-                className="bg-gradient-to-r from-amber-500 to-blue-600 h-full rounded-full transition-all duration-500"
-                style={{ width: `${Math.min(100, Math.max(5, (accountAgeDays / 60) * 100))}%` }}
-              />
-            </div>
-
-            <p className="text-[11px] text-slate-400">
-              {daysRemaining > 0
-                ? `${daysRemaining} more days remaining until live video broadcasts unlock.`
-                : 'Unlocked! Processing verification status...'}
-            </p>
-          </div>
-
-          <div className="space-y-2 text-left bg-blue-50/60 border border-blue-100 rounded-xl p-3 text-[11px] text-blue-900 font-medium">
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={14} className="text-blue-600 shrink-0" />
-              <span>Protects the community against impersonation and spam</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Sparkles size={14} className="text-amber-500 shrink-0" />
-              <span>Developer accounts bypass this rule for official live streams</span>
-            </div>
-          </div>
-
-          <button
-            onClick={onClose}
-            className="w-full mt-5 py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-sm shadow-md transition cursor-pointer"
-          >
-            I Understand
-          </button>
+      {!hasLivePermission ? (
+        <div className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 text-center shadow-2xl sm:p-8">
+          <button onClick={onClose} aria-label="Close Go Live access" className="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-full text-slate-500 hover:bg-slate-100"><X size={19}/></button>
+          <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-rose-50 text-rose-600"><Radio size={30}/></div>
+          <h2 className="text-2xl font-black text-slate-900">Go Live on Echat</h2>
+          {accessNotice && <p role="status" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{accessNotice}</p>}
+          {accessLoading ? <p className="mt-4 text-sm text-slate-500">Checking Go Live access…</p> : accessInfo?.liveAccess === 'pending' ? <>
+            <p className="mt-3 text-sm leading-6 text-slate-600">Your request is pending. Admin will review soon.</p>
+            <button disabled={accessBusy} onClick={() => void cancelAccessRequest()} className="mt-5 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700 disabled:opacity-60">{accessBusy ? 'Please wait…' : 'Cancel Request'}</button>
+          </> : accessInfo?.liveAccess === 'blocked' ? <>
+            <p className="mt-3 text-sm leading-6 text-rose-700">Your Go Live access has been blocked. Contact an administrator if you think this is a mistake.</p>
+          </> : <>
+            <p className="mt-3 text-sm leading-6 text-slate-600">Tell us why you want to go live.</p>
+            <textarea value={accessReason} onChange={event => setAccessReason(event.target.value)} maxLength={500} rows={4} placeholder="Why do you want to go live?" className="mt-4 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:ring-2 focus:ring-rose-300" />
+            <p className="mt-2 text-left text-xs text-slate-500">Admin usually reviews within 24h.</p>
+            <button disabled={accessBusy || !accessInfo || accessReason.trim().length < 3} onClick={() => void sendAccessRequest()} className="mt-4 min-h-12 w-full rounded-xl bg-rose-600 px-4 font-extrabold text-white shadow disabled:opacity-50">{accessBusy ? 'Sending…' : 'Request Go Live Access'}</button>
+          </>}
+          {accessError && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-left text-sm text-rose-700">{accessError}</p>}
         </div>
       ) : (
-        /* CASE B: User is ELIGIBLE (Developer or >= 60 days) */
         <div className="bg-slate-950 w-full max-w-4xl h-[90dvh] max-h-[90vh] rounded-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col">
           
           {/* Top Bar */}

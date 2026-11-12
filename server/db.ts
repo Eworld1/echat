@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { WriteThroughSync, type PersistenceDriver, type Snapshot } from './persistence.js';
-import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem, SiteConfig } from './types.js';
+import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem, SiteConfig, LiveAccessRequest, LiveAccessMode } from './types.js';
 
 // FIX: Try multiple locations because AI Studio wipes process.cwd()/data on Republish
 const POSSIBLE_DATA_DIRS = [
@@ -26,6 +26,7 @@ export interface DatabaseSchema {
   events: EventItem[];
   siteConfig: (SiteConfig & { id: string })[];
   auditLogs: AuditLog[];
+  liveRequests: LiveAccessRequest[];
 }
 
 export function hashPassword(password: string): string {
@@ -117,10 +118,11 @@ class Database {
               notifications: parsed.notifications || [],
               passwordResetTokens: parsed.passwordResetTokens || [],
               auditLogs: parsed.auditLogs || [],
+              liveRequests: Array.isArray(parsed.liveRequests) ? parsed.liveRequests : [],
               pages: (Array.isArray(parsed.pages) && parsed.pages.length > 0) ? parsed.pages : SEED_PAGES,
               groups: (Array.isArray(parsed.groups) && parsed.groups.length > 0) ? parsed.groups : SEED_GROUPS,
               events: (Array.isArray(parsed.events) && parsed.events.length > 0) ? parsed.events : SEED_EVENTS,
-              siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.' }]
+              siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.', liveAccessMode: 'approved_only' }]
             },
             path: found.path
           };
@@ -145,10 +147,11 @@ class Database {
       notifications: [],
       passwordResetTokens: [],
       auditLogs: [],
+      liveRequests: [],
       pages: SEED_PAGES,
       groups: SEED_GROUPS,
       events: SEED_EVENTS,
-      siteConfig: [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.' }]
+      siteConfig: [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.', liveAccessMode: 'approved_only' }]
     };
     this.saveToAll(initial);
     return { data: initial, path: defaultPath };
@@ -242,10 +245,11 @@ class Database {
       notifications: parsed.notifications || [],
       passwordResetTokens: parsed.passwordResetTokens || [],
       auditLogs: parsed.auditLogs || [],
+      liveRequests: Array.isArray(parsed.liveRequests) ? parsed.liveRequests : [],
       pages: Array.isArray(parsed.pages) && parsed.pages.length > 0 ? parsed.pages : SEED_PAGES,
       groups: Array.isArray(parsed.groups) && parsed.groups.length > 0 ? parsed.groups : SEED_GROUPS,
       events: Array.isArray(parsed.events) && parsed.events.length > 0 ? parsed.events : SEED_EVENTS,
-      siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.' }]
+      siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.', liveAccessMode: 'approved_only' }]
     };
   }
 
@@ -260,6 +264,63 @@ class Database {
     this.data.siteConfig = [updated];
     this.save();
     return updated;
+  }
+
+  getLiveAccessMode(): LiveAccessMode {
+    return this.getSiteConfig().liveAccessMode || 'approved_only';
+  }
+
+  setLiveAccessMode(mode: LiveAccessMode): SiteConfig {
+    return this.updateSiteConfig({ liveAccessMode: mode });
+  }
+
+  getLiveRequests(): LiveAccessRequest[] {
+    this.data.liveRequests ||= [];
+    return [...this.data.liveRequests].sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  createLiveRequest(userId: string, reason: string): LiveAccessRequest | null {
+    this.data.liveRequests ||= [];
+    const user = this.getUserById(userId);
+    if (!user || user.liveAccess === 'blocked') return null;
+    const pending = this.data.liveRequests.find(request => request.userId === userId && request.status === 'pending');
+    if (pending) return pending;
+    const request: LiveAccessRequest = {
+      id: `live_request_${crypto.randomBytes(8).toString('hex')}`,
+      userId,
+      name: user.name,
+      avatar: user.avatar,
+      reason,
+      status: 'pending',
+      createdAt: Date.now()
+    };
+    this.data.liveRequests.unshift(request);
+    user.liveAccess = 'pending';
+    this.save();
+    return request;
+  }
+
+  cancelLiveRequest(userId: string): boolean {
+    this.data.liveRequests ||= [];
+    const request = this.data.liveRequests.find(item => item.userId === userId && item.status === 'pending');
+    if (!request) return false;
+    request.status = 'cancelled';
+    const user = this.getUserById(userId);
+    if (user?.liveAccess === 'pending') user.liveAccess = 'none';
+    this.save();
+    return true;
+  }
+
+  reviewLiveRequest(requestId: string, decision: 'approved' | 'rejected' | 'blocked', reviewerId: string): LiveAccessRequest | null {
+    this.data.liveRequests ||= [];
+    const request = this.data.liveRequests.find(item => item.id === requestId);
+    if (!request || request.status !== 'pending') return null;
+    request.status = decision;
+    request.reviewedBy = reviewerId;
+    const user = this.getUserById(request.userId);
+    if (user) user.liveAccess = decision === 'approved' ? 'approved' : decision === 'blocked' ? 'blocked' : 'none';
+    this.save();
+    return request;
   }
 
   /**
@@ -372,6 +433,8 @@ class Database {
       work: user.work || '',
       education: user.education || '',
       role: isDev ? 'developer' : (user.role || 'user'),
+      liveAccess: isDev ? 'approved' : (user.liveAccess || 'none'),
+      liveAuthSecret: crypto.randomBytes(32).toString('hex'),
       isVerified: isDev,
       isOfficialDeveloper: isDev,
       boostsCount: isDev ? 420 : 0,
@@ -424,7 +487,7 @@ class Database {
   }
 
   sanitizeUser(user: User, viewerId?: string): Omit<User, 'passwordHash'> & { dobMonthDay?: string } {
-    const { passwordHash, dob, dobVisibility = 'public', ...safe } = user;
+    const { passwordHash, liveAuthSecret, dob, dobVisibility = 'public', ...safe } = user;
     const isOwner = viewerId === user.id;
     const viewer = viewerId ? this.getUserById(viewerId) : undefined;
     const isFriend = Boolean(viewer && user.friends.includes(viewer.id) && viewer.friends.includes(user.id));
