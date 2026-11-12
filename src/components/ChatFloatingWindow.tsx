@@ -9,6 +9,7 @@ import { VideoLinkCard } from './VideoLinkCard';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import {
   Phone,
+  PhoneMissed,
   Video,
   X,
   Minus,
@@ -346,34 +347,36 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
           </div>
         </div>
 
-        <div className="flex items-center gap-1 text-blue-600">
-          <button type="button" onClick={() => { const enabled = !soundEnabled; setSoundEnabled(enabled); localStorage.setItem('echat_chat_sound', String(enabled)); }} aria-label={soundEnabled ? 'Turn chat sounds off' : 'Turn chat sounds on'} title={soundEnabled ? 'Chat sounds on' : 'Chat sounds off'} className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100">
+        <div className="flex shrink-0 items-center gap-0.5 text-blue-600">
+          <button type="button" onClick={() => { const enabled = !soundEnabled; setSoundEnabled(enabled); localStorage.setItem('echat_chat_sound', String(enabled)); }} aria-label={soundEnabled ? 'Turn chat sounds off' : 'Turn chat sounds on'} title={soundEnabled ? 'Chat sounds on' : 'Chat sounds off'} className="grid h-9 w-8 place-items-center rounded-full text-slate-500 hover:bg-slate-100">
             {soundEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
           </button>
           <button
             onClick={() => startCall(partner.id, partner.name, partner.avatar, 'audio')}
-            className="p-1.5 hover:bg-blue-50 rounded-full transition cursor-pointer"
-            title="Start Audio Call"
+            className="inline-flex h-9 items-center gap-1 rounded-full px-2 text-blue-700 hover:bg-blue-50 transition cursor-pointer"
+            title="Voice call"
+            aria-label="Voice call"
           >
-            <Phone size={17} />
+            <Phone size={17} /><span className="text-[11px] font-bold">Voice</span>
           </button>
           <button
             onClick={() => startCall(partner.id, partner.name, partner.avatar, 'video')}
-            className="p-1.5 hover:bg-blue-50 rounded-full transition cursor-pointer"
-            title="Start Video Call"
+            className="inline-flex h-9 items-center gap-1 rounded-full px-2 text-blue-700 hover:bg-blue-50 transition cursor-pointer"
+            title="Video call"
+            aria-label="Video call"
           >
-            <Video size={17} />
+            <Video size={17} /><span className="text-[11px] font-bold">Video</span>
           </button>
           <button
             onClick={() => setIsMinimized(true)}
-            className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-full transition"
+            className="grid h-9 w-8 place-items-center text-slate-500 hover:bg-slate-100 rounded-full transition"
             title="Minimize"
           >
             <Minus size={16} />
           </button>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-full transition"
+            className="grid h-9 w-8 place-items-center text-slate-500 hover:bg-slate-100 rounded-full transition"
             title="Close"
           >
             <X size={16} />
@@ -462,7 +465,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
                     <textarea autoFocus value={editingMessageText} onChange={event => setEditingMessageText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleEditMessage(msg.id); } if (event.key === 'Escape') setEditingMessageId(null); }} maxLength={4000} rows={3} className="w-full rounded-lg border border-white/30 bg-white/10 p-2 text-sm text-current outline-none" />
                     <div className="flex justify-end gap-2"><button onClick={() => setEditingMessageId(null)} className="rounded-lg px-2 py-1 text-xs">Cancel</button><button onClick={() => void handleEditMessage(msg.id)} disabled={!editingMessageText.trim()} className="rounded-lg bg-white/20 px-2 py-1 text-xs font-bold disabled:opacity-50">Save</button></div>
                   </div>
-                ) : msg.text && <><p className="leading-relaxed break-words">{msg.text}</p>{msg.editedAt && <span className="mt-1 block text-[10px] opacity-70">Edited · {new Date(msg.editedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}<VideoLinkCard text={msg.text} /><LinkPreviewCard text={msg.text} compact /></>}
+                ) : msg.text?.match(/^__echat_missed_call__:(audio|video)$/) ? <div className="flex min-w-44 items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-rose-100 text-rose-700"><PhoneMissed size={18}/></span><span className="min-w-0 flex-1"><b className="block text-xs">Missed {msg.text.endsWith(':video')?'video':'voice'} call</b><button type="button" onClick={()=>startCall(partner.id,partner.name,partner.avatar,msg.text?.endsWith(':video')?'video':'audio')} className="mt-1 text-xs font-bold underline">Call back</button></span></div> : msg.text && <><p className="leading-relaxed break-words">{msg.text}</p>{msg.editedAt && <span className="mt-1 block text-[10px] opacity-70">Edited · {new Date(msg.editedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}<VideoLinkCard text={msg.text} /><LinkPreviewCard text={msg.text} compact /></>}
               </div>
 
               {/* Status and Timestamp */}
@@ -488,7 +491,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
                 <div className="relative ml-1">
                   <button type="button" onClick={() => setMessageMenuId(current => current === msg.id ? null : msg.id)} className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-full hover:bg-slate-200" aria-label="Message options"><MoreVertical size={15} /></button>
                   {messageMenuId === msg.id && <div className={`absolute bottom-full z-20 mb-1 min-w-36 rounded-xl border border-slate-200 bg-white p-1 text-slate-800 shadow-xl ${isMe ? 'right-0' : 'left-0'}`}>
-                    {isMe && msg.text && <button type="button" onClick={() => startEditing(msg)} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold hover:bg-slate-100"><Pencil size={14} />Edit message</button>}
+                    {isMe && msg.text && !msg.text.startsWith('__echat_missed_call__:') && <button type="button" onClick={() => startEditing(msg)} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold hover:bg-slate-100"><Pencil size={14} />Edit message</button>}
                     <button type="button" onClick={() => { if (msg.text) void navigator.clipboard?.writeText(msg.text); setMessageMenuId(null); }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold hover:bg-slate-100"><Copy size={14} />Copy text</button>
                     <button type="button" onClick={() => { setInputText(value => `${value}${value ? '\n' : ''}> ${msg.text || 'Message'}\n`); setMessageMenuId(null); }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold hover:bg-slate-100"><CornerUpLeft size={14} />Reply</button>
                     <button type="button" onClick={() => void deleteMessageForMe(msg.id)} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50"><Trash2 size={14} />Delete for me</button>

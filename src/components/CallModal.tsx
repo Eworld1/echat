@@ -11,7 +11,9 @@ import {
   VideoOff,
   Maximize2,
   Minimize2,
-  SwitchCamera
+  SwitchCamera,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 
 const CallModalView: React.FC = () => {
@@ -23,8 +25,10 @@ const CallModalView: React.FC = () => {
     endCall,
     localStreamRef,
     remoteStream,
-    peerConnectionRef
-    , switchCallType
+    peerConnectionRef,
+    switchCallType,
+    speakerEnabled,
+    setSpeakerEnabled
   } = useSocket();
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -432,7 +436,7 @@ const CallModalView: React.FC = () => {
           </div>
 
           {/* Controls Bar: Mute, Video Off, Switch Camera, End Call */}
-          <div className="p-5 bg-slate-950/95 border-t border-slate-800 flex items-center justify-center gap-4 z-30">
+          <div className="p-3 sm:p-5 bg-slate-950/95 border-t border-slate-800 flex flex-wrap items-center justify-center gap-2 sm:gap-4 z-30">
             <div className="absolute left-4 right-4 -mt-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-[10px] text-white"><Mic size={12} /><span>Test Mic</span><span className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-700"><span className="block h-full bg-emerald-400 transition-all" style={{ width: `${micLevel}%` }} /></span></div>
             <button
               onClick={toggleMic}
@@ -443,6 +447,8 @@ const CallModalView: React.FC = () => {
             >
               {isMicMuted ? <MicOff size={20} /> : <Mic size={20} />}
             </button>
+
+            <button type="button" onClick={()=>setSpeakerEnabled(!speakerEnabled)} className={`p-4 rounded-full transition shadow-md active:scale-95 ${speakerEnabled?'bg-slate-800 text-white hover:bg-slate-700':'bg-amber-500/20 text-amber-300 border border-amber-500/40'}`} title={speakerEnabled?'Turn speaker off':'Turn speaker on'} aria-label={speakerEnabled?'Turn speaker off':'Turn speaker on'}>{speakerEnabled?<Volume2 size={20}/>:<VolumeX size={20}/>}</button>
 
             {activeCall.callType === 'video' && (
               <>
@@ -518,14 +524,14 @@ export const CallModal: React.FC = () => {
     }
     remoteStream.getAudioTracks().forEach((t: MediaStreamTrack) => { t.enabled = true; });
     if (el.srcObject !== remoteStream) el.srcObject = remoteStream;
-    el.muted = false;
-    el.volume = 1;
+    el.muted = !speakerEnabled;
+    el.volume = speakerEnabled ? 1 : 0;
     el.play().catch(() => {
       // Autoplay blocked: retry on the next user gesture (tap/click anywhere).
       const resume = () => { el.play().catch(() => {}); };
       window.addEventListener('pointerdown', resume, { once: true });
     });
-  }, [remoteStream, activeCall?.status]);
+  }, [remoteStream, activeCall?.status, speakerEnabled]);
 
   return (
     <>

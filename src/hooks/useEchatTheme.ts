@@ -17,10 +17,16 @@ export function useEchatTheme() {
   const manuallyChanged = useRef(false);
 
   useEffect(() => {
-    try { document.documentElement.classList.toggle('echat-v2-dark', localStorage.getItem('echat_v2_dark') === 'true'); } catch { /* Storage can be unavailable in private browsing. */ }
+    const applyV2Theme=()=>{
+      let dark=false;try{dark=localStorage.getItem('echat_v2_dark')==='true';}catch{/* Keep the default light V2 theme. */}
+      document.documentElement.classList.toggle('echat-v2-dark',window.location.pathname.startsWith('/v2/')&&dark);
+    };
+    applyV2Theme();
+    window.addEventListener('echat:navigate',applyV2Theme);
+    window.addEventListener('popstate',applyV2Theme);
     const sync = (event: Event) => { const next = (event as CustomEvent<EchatTheme>).detail; if (next === 'classic' || next === 'v2') setThemeState(next); };
     window.addEventListener('echat:theme-changed', sync);
-    return () => window.removeEventListener('echat:theme-changed', sync);
+    return () => {window.removeEventListener('echat:navigate',applyV2Theme);window.removeEventListener('popstate',applyV2Theme);window.removeEventListener('echat:theme-changed', sync);};
   }, []);
 
   useEffect(() => {

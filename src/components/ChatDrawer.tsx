@@ -169,7 +169,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose, onSelec
                   </div>
 
                   {/* Quick call buttons */}
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <div className="flex items-center gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

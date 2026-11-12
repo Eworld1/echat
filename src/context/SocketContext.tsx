@@ -27,6 +27,7 @@ export interface IncomingCall {
 
 export interface ActiveCall {
   id?: string; // Firestore document ID
+  startedAt?: number;
   partnerId: string;
   partnerName: string;
   partnerAvatar: string;
@@ -50,6 +51,8 @@ interface SocketContextType {
   peerConnectionRef: React.MutableRefObject<RTCPeerConnection | null>;
   localStreamRef: React.MutableRefObject<MediaStream | null>;
   remoteStream: MediaStream | null;
+  speakerEnabled: boolean;
+  setSpeakerEnabled: (enabled: boolean) => void;
   registerCallAudioElement: (element: HTMLAudioElement | null) => void;
   socket: any;
   onNewMessage: (cb: (msg: Message) => void) => () => void;
@@ -164,21 +167,28 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [speakerEnabled, setSpeakerEnabledState] = useState(true);
   const remoteTracksRef = useRef<Map<string, MediaStreamTrack>>(new Map());
   const callAudioElementRef = useRef<HTMLAudioElement | null>(null);
   const registerCallAudioElement = useCallback((element: HTMLAudioElement | null) => {
     callAudioElementRef.current = element;
     if (element && remoteStream) {
       element.srcObject = remoteStream;
-      element.muted = false;
-      element.volume = 1;
+      element.muted = !speakerEnabled;
+      element.volume = speakerEnabled ? 1 : 0;
       void element.play().catch(() => {});
     }
-  }, [remoteStream]);
+  }, [remoteStream, speakerEnabled]);
+  const setSpeakerEnabled = useCallback((enabled:boolean) => {
+    setSpeakerEnabledState(enabled);
+    const element=callAudioElementRef.current;
+    if(element){element.muted=!enabled;element.volume=enabled?1:0;if(enabled)void element.play().catch(()=>{});}
+  },[]);
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const activeCallRef = useRef<ActiveCall | null>(null);
+  const loggedMissedCallIdsRef = useRef<Set<string>>(new Set());
   const currentCallDocIdRef = useRef<string | null>(null);
   const callUnsubscribeRef = useRef<(() => void) | null>(null);
   const stopRingtoneRef = useRef<(() => void) | null>(null);
@@ -200,11 +210,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const audio = callAudioElementRef.current;
     if (audio && stream.getAudioTracks().length) {
       audio.srcObject = stream;
-      audio.muted = false;
-      audio.volume = 1;
+      audio.muted = !speakerEnabled;
+      audio.volume = speakerEnabled ? 1 : 0;
       void audio.play().catch(() => {});
     }
-  }, []);
+  }, [speakerEnabled]);
 
   const prepareIncomingCall = useCallback((call: IncomingCall) => {
     if (preparedIncomingRef.current?.id === call.id) return;
@@ -265,6 +275,14 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const postDeleteListeners = useRef<Set<(postId: string) => void>>(new Set());
   const notificationListeners = useRef<Set<(n: AppNotification) => void>>(new Set());
   const [callNotice, setCallNotice] = useState<string | null>(null);
+  const logMissedCall = useCallback((call: ActiveCall) => {
+    if (!user || !call.isCaller) return;
+    const key = call.id || `${call.partnerId}:${call.callType}:${call.startedAt ?? 'unknown'}`;
+    if (loggedMissedCallIdsRef.current.has(key)) return;
+    loggedMissedCallIdsRef.current.add(key);
+    void api.sendMessage({ receiverId: call.partnerId, text: `__echat_missed_call__:${call.callType}` })
+      .catch(error => console.warn('Could not save missed-call chat item:', error));
+  }, [user?.id]);
   const newPostListeners = useRef<Set<(post: Post) => void>>(new Set());
   const storyListeners = useRef<Set<(story: Story) => void>>(new Set());
   const liveStartedListeners = useRef<Set<(stream: LiveStream) => void>>(new Set());
@@ -607,6 +625,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               setCallNotice('This person does not accept calls from you.');
             } else if (data.type === 'call:rejected' || data.type === 'call_rejected') {
               setCallNotice('Call declined.');
+              if (activeCallRef.current) logMissedCall(activeCallRef.current);
             }
             cleanUpCallMedia();
             break;
@@ -672,7 +691,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setIsConnected(false);
       cleanUpCallMedia();
     };
-  }, [user?.id, cleanUpCallMedia, prepareIncomingCall]);
+  }, [user?.id, cleanUpCallMedia, prepareIncomingCall, logMissedCall]);
 
   // Start outgoing call
   const startCall = async (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => {
@@ -684,6 +703,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // 1. Show Calling popup immediately
     const newCall: ActiveCall = {
+      startedAt: Date.now(),
       partnerId: targetUserId,
       partnerName: targetName,
       partnerAvatar: targetAvatar,
@@ -797,7 +817,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         callDocId = callDoc.id;
         currentCallDocIdRef.current = callDocId;
-        setActiveCall(prev => prev ? { ...prev, id: callDocId } : null);
+        setActiveCall(prev => { const updated=prev?{...prev,id:callDocId}:null;if(updated)activeCallRef.current=updated;return updated; });
 
         // Publish the candidates gathered while the call document was being created
         iceDocId = callDocId;
@@ -841,6 +861,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           }
 
           if (data.status === 'declined' || data.status === 'ended') {
+            if (data.status === 'declined' && activeCallRef.current) logMissedCall(activeCallRef.current);
             cleanUpCallMedia();
           }
         });
@@ -1066,8 +1087,24 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }));
     }
 
+    if (activeCall && activeCall.isCaller && activeCall.status !== 'connected') logMissedCall(activeCall);
+
     cleanUpCallMedia();
   };
+
+  useEffect(() => {
+    if (!activeCall || !activeCall.isCaller || activeCall.status === 'connected') return;
+    const callKey=activeCall.id;
+    const timer=window.setTimeout(()=>{
+      const current=activeCallRef.current;
+      if(current&&current.isCaller&&current.status!=='connected'&&current.id===callKey){
+        logMissedCall(current);
+        void endCall();
+        setCallNotice('No answer. A missed call was added to your chat.');
+      }
+    },45000);
+    return()=>window.clearTimeout(timer);
+  },[activeCall?.id,activeCall?.status,activeCall?.isCaller,logMissedCall]);
 
   const sendTyping = (receiverId: string, isTyping: boolean) => {
     if (!socketRef.current || !user || socketRef.current.readyState !== WebSocket.OPEN) return;
@@ -1203,6 +1240,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         peerConnectionRef,
         localStreamRef,
         remoteStream,
+        speakerEnabled,
+        setSpeakerEnabled,
         registerCallAudioElement,
         socket: mockSocket,
         onNewMessage,

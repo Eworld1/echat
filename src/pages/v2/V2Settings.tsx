@@ -7,7 +7,7 @@ export const V2Settings:React.FC<{onWatchIntro?:()=>void}>=({onWatchIntro})=>{
   const {user,updateUser}=useAuth();
   const [dark,setDark]=useState(()=>typeof window!=='undefined'&&localStorage.getItem('echat_v2_dark')==='true');
   const [error,setError]=useState('');
-  const toggleDark=()=>{const next=!dark;setDark(next);localStorage.setItem('echat_v2_dark',String(next));document.documentElement.classList.toggle('echat-v2-dark',next);};
+  const toggleDark=()=>{const next=!dark;setDark(next);localStorage.setItem('echat_v2_dark',String(next));document.documentElement.classList.toggle('echat-v2-dark',location.pathname.startsWith('/v2/')&&next);};
   const visibility=user?.privacySettings?.postVisibility||'public';
   const changeVisibility=async(value:'public'|'friends'|'only_me')=>{if(!user)return;setError('');try{updateUser(await api.updateProfile(user.id,{privacySettings:{...user.privacySettings,postVisibility:value}}));}catch(e){setError(e instanceof Error?e.message:'Could not update privacy settings.');}};
   const unblock=async(id:string)=>{if(!user)return;setError('');try{updateUser(await api.updateProfile(user.id,{blockedUsers:(user.blockedUsers||[]).filter(item=>item!==id)}));}catch(e){setError(e instanceof Error?e.message:'Could not unblock this account.');}};
