@@ -1,0 +1,9 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+.echat-v2 { --v2-gold:#F5B301; --v2-gold-light:#FFC107; --v2-midnight:#0F1B2D; --v2-teal:#00C2A8; --v2-cream:#FFF8E7; font-family:'Plus Jakarta Sans',ui-sans-serif,system-ui,sans-serif; color:#122033; background:#fff8e7; min-height:100dvh; }
+.echat-v2 * { box-sizing:border-box; }
+.echat-v2 button,.echat-v2 input,.echat-v2 textarea,.echat-v2 select { font:inherit; }
+.echat-v2 button { touch-action:manipulation; }
+.echat-v2-card { border:1px solid rgba(15,27,45,.08); border-radius:20px; background:#fff; box-shadow:0 8px 28px rgba(15,27,45,.06); }
+.echat-v2-pill { border-radius:999px; }
+@media(max-width:767px) { .echat-v2 { padding-bottom:calc(76px + env(safe-area-inset-bottom)); } }
