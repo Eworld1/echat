@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { liveRtcConfig } from '../utils/liveRtc';
 import { api } from '../services/api';
+import { auth } from '../services/firebase';
 import { LiveStream, LiveComment } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import {
@@ -47,7 +48,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   onStreamEnded
 }) => {
   useBackButton(isOpen, onClose, 'go-live-studio');
-  const { user, isDeveloper, isLoading: authLoading } = useAuth();
+  const { user, isDeveloper, isLoading: authLoading, logout } = useAuth();
   const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveSignal, sendLiveCaption, socket } = useSocket();
 
   const [streamTitle, setStreamTitle] = useState(`${user?.name || 'User'} is Live on EChat! 🔥`);
@@ -80,6 +81,19 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [accessBusy, setAccessBusy] = useState(false);
   const [accessError, setAccessError] = useState('');
   const [accessNotice, setAccessNotice] = useState('');
+  const [accessErrorCode, setAccessErrorCode] = useState('');
+  const [accessCheckAttempts, setAccessCheckAttempts] = useState(0);
+  const [authWaitExpired, setAuthWaitExpired] = useState(false);
+
+  const firebaseUser = auth.currentUser;
+  const developerUid = String(import.meta.env.VITE_SUPER_ADMIN_UID || '').trim();
+  const developerEmail = String(import.meta.env.VITE_SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  const configuredDeveloper = Boolean(firebaseUser && (
+    (developerUid && firebaseUser.uid === developerUid) ||
+    (developerEmail && firebaseUser.email?.toLowerCase() === developerEmail && firebaseUser.emailVerified)
+  ));
+  const developerIdentity = Boolean(isDeveloper || configuredDeveloper);
+  const signedIn = Boolean(user || firebaseUser);
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -144,19 +158,38 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const hasLivePermission = Boolean(accessInfo?.canGoLive);
 
   const checkLiveAccess = async () => {
-    if (authLoading || !user) return;
+    if (authLoading || !signedIn) return;
     setAccessLoading(true);
     setAccessError('');
+    setAccessErrorCode('');
     try {
-      const info = await api.getLiveAccess();
+      if (developerIdentity) {
+        const info = { liveAccess: 'approved' as const, mode: 'approved_only' as const, canGoLive: true, request: null, accountAgeDays: 0, daysUntilEligible: 0, autoApproved: false };
+        setAccessInfo(info);
+        console.info('[Go Live] Access check', { uid: firebaseUser?.uid || user?.id, liveAccess: info.liveAccess, role: user?.role || 'super_admin', accountAgeDays: info.accountAgeDays });
+        return;
+      }
+      const info = await api.getLiveAccess(true);
       setAccessInfo(info);
+      setAccessCheckAttempts(0);
       if (info.autoApproved) setAccessNotice('You are now eligible! Your account has been approved for Go Live.');
+      console.info('[Go Live] Access check', { uid: firebaseUser?.uid || user?.id, liveAccess: info.liveAccess, role: user?.role || 'user', accountAgeDays: info.accountAgeDays });
     } catch (error) {
+      const liveError = error as Error & { code?: string };
       setAccessError(error instanceof Error ? error.message : 'Could not check Go Live access.');
+      setAccessErrorCode(liveError.code || 'unknown');
+      setAccessCheckAttempts(count => count + 1);
+      console.error('[Go Live] Access check failed', { uid: firebaseUser?.uid || user?.id, code: liveError.code || 'unknown', error });
     } finally {
       setAccessLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!isOpen || !authLoading) { setAuthWaitExpired(false); return; }
+    const timeout = window.setTimeout(() => setAuthWaitExpired(true), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [isOpen, authLoading]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -165,16 +198,31 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     setAccessError('');
     setAccessNotice('');
     if (authLoading) return () => { active = false; };
-    if (!user) { setAccessInfo(null); setAccessLoading(false); return () => { active = false; }; }
+    if (!signedIn) { setAccessInfo(null); setAccessLoading(false); return () => { active = false; }; }
+    if (developerIdentity) {
+      const info = { liveAccess: 'approved' as const, mode: 'approved_only' as const, canGoLive: true, request: null, accountAgeDays: 0, daysUntilEligible: 0, autoApproved: false };
+      setAccessInfo(info);
+      setAccessLoading(false);
+      console.info('[Go Live] Developer bypass', { uid: firebaseUser?.uid || user?.id, liveAccess: info.liveAccess, role: user?.role || 'super_admin', accountAgeDays: info.accountAgeDays });
+      return () => { active = false; };
+    }
     void api.getLiveAccess().then(info => {
       if (!active) return;
       setAccessInfo(info);
+      setAccessCheckAttempts(0);
+      console.info('[Go Live] Access check', { uid: firebaseUser?.uid || user?.id, liveAccess: info.liveAccess, role: user?.role || 'user', accountAgeDays: info.accountAgeDays });
       if (info.autoApproved) setAccessNotice('You are now eligible! Your account has been approved for Go Live.');
     }).catch(error => {
-      if (active) setAccessError(error instanceof Error ? error.message : 'Could not check Go Live access.');
+      if (active) {
+        const liveError = error as Error & { code?: string };
+        setAccessError(error instanceof Error ? error.message : 'Could not check Go Live access.');
+        setAccessErrorCode(liveError.code || 'unknown');
+        setAccessCheckAttempts(count => count + 1);
+        console.error('[Go Live] Access check failed', { uid: firebaseUser?.uid || user?.id, code: liveError.code || 'unknown', error });
+      }
     }).finally(() => { if (active) setAccessLoading(false); });
     return () => { active = false; };
-  }, [isOpen, user?.id, authLoading]);
+  }, [isOpen, user?.id, authLoading, developerIdentity, signedIn]);
 
   const sendAccessRequest = async () => {
     setAccessBusy(true); setAccessError('');
@@ -459,12 +507,17 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-rose-50 text-rose-600"><Radio size={30}/></div>
           <h2 className="text-2xl font-black text-slate-900">Go Live on Echat</h2>
           {accessNotice && <p role="status" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{accessNotice}</p>}
-          {accessLoading || authLoading ? <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-600"><span className="h-5 w-5 animate-spin rounded-full border-2 border-rose-600 border-t-transparent"/>Checking login…</div> : !user ? <>
+          {authLoading ? (authWaitExpired ? <>
+            <p role="status" className="mt-5 rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">Sign-in is taking longer than expected. Please reopen Go Live after your account finishes loading.</p>
+            <button onClick={onClose} className="mt-4 min-h-12 w-full rounded-xl bg-blue-600 px-4 font-extrabold text-white">Continue to Echat</button>
+          </> : <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-600"><span className="h-5 w-5 animate-spin rounded-full border-2 border-rose-600 border-t-transparent"/>Checking login…</div>) : !signedIn ? <>
             <p className="mt-3 text-sm leading-6 text-slate-600">Log in to check your Go Live eligibility.</p>
             <button onClick={onClose} className="mt-5 min-h-12 w-full rounded-xl bg-blue-600 px-4 font-extrabold text-white">Log In to Go Live</button>
-          </> : accessError && !accessInfo ? <>
+          </> : accessLoading ? <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-600"><span className="h-5 w-5 animate-spin rounded-full border-2 border-rose-600 border-t-transparent"/>Checking Go Live access…</div> : accessError && !accessInfo ? <>
             <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-left text-sm text-rose-700">{accessError}</p>
-            <button onClick={() => void checkLiveAccess()} className="mt-4 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700">Retry access check</button>
+            {developerIdentity && <p className="mt-2 text-left text-xs text-slate-500">UID: {firebaseUser?.uid || user?.id} · Error: {accessErrorCode}</p>}
+            <button onClick={() => { setAccessLoading(true); if (auth.currentUser) void auth.currentUser.getIdToken(true).then(() => checkLiveAccess()).catch(error => { const e = error as Error & { code?: string }; setAccessError(e.message); setAccessErrorCode(e.code || 'unknown'); setAccessCheckAttempts(count => count + 1); setAccessLoading(false); }); else void checkLiveAccess(); }} className="mt-4 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700">Retry access check</button>
+            {accessCheckAttempts >= 2 && <button onClick={() => void logout().finally(onClose)} className="mt-2 min-h-12 w-full rounded-xl bg-blue-600 px-4 font-bold text-white">Still failing? Log Out and Log In Again</button>}
           </> : accessInfo?.liveAccess === 'pending' ? <>
             <p className="mt-3 text-sm leading-6 text-slate-600">Pending - Waiting for Moses to approve.</p>
             <button disabled={accessBusy} onClick={() => void cancelAccessRequest()} className="mt-5 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700 disabled:opacity-60">{accessBusy ? 'Please wait…' : 'Cancel Request'}</button>

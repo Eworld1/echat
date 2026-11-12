@@ -401,6 +401,8 @@ app.post('/api/reels/upload/:uploadId/complete', async (req: Request, res: Respo
 });
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'eldermoses89@gmail.com').toLowerCase().trim();
+const SUPER_ADMIN_UID = (process.env.SUPER_ADMIN_UID || process.env.VITE_SUPER_ADMIN_UID || '').trim();
+const SUPER_ADMIN_EMAIL = (process.env.SUPER_ADMIN_EMAIL || process.env.VITE_SUPER_ADMIN_EMAIL || ADMIN_EMAIL).toLowerCase().trim();
 
 function isDeveloperUser(user: any): boolean {
   return Boolean(user && (user.role === 'developer' || user.role === 'super_admin'));
@@ -1880,8 +1882,44 @@ app.post('/api/live/auth', async (req: Request, res: Response) => {
     const decoded = await firebaseAuth.verifyIdToken(firebaseIdToken);
     const email = String(decoded.email || '').toLowerCase().trim();
     if (!email) return res.status(403).json({ error: 'The Firebase account has no email associated with it.' });
+
+    // The configured developer identity is trusted from the verified Firebase ID token and
+    // deliberately bypasses local mirror / Firestore reads, which may be unavailable or denied.
+    const developerByUid = Boolean(SUPER_ADMIN_UID && decoded.uid === SUPER_ADMIN_UID);
+    const developerByEmail = Boolean(SUPER_ADMIN_EMAIL && email === SUPER_ADMIN_EMAIL && decoded.email_verified === true);
+    if (developerByUid || developerByEmail) {
+      let developer = db.getUserById(decoded.uid);
+      if (!developer) {
+        developer = db.createUser({
+          id: decoded.uid,
+          name: String(decoded.name || 'Echat Developer'),
+          email,
+          dob: '2000-01-01',
+          avatar: initialsAvatar(String(decoded.name || 'Echat Developer')),
+          coverPhoto: gradientCover('Echat Developer'),
+          bio: 'Echat developer',
+          location: 'Global',
+          work: '',
+          education: '',
+          role: 'developer',
+          liveAccess: 'approved'
+        });
+      }
+      developer = db.updateUser(decoded.uid, {
+        email,
+        role: 'super_admin',
+        isOfficialDeveloper: true,
+        isVerified: true,
+        isBlocked: false,
+        liveAccess: 'approved'
+      }) || developer;
+      res.json({ liveAuthToken: createLiveAuthToken(developer), userId: developer.id });
+      return;
+    }
+
     let user = db.getUserById(decoded.uid);
-    if (!user || user.isBlocked) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.' });
+    if (!user) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.', code: 'profile-not-found' });
+    if (user.isBlocked) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.', code: 'account-blocked' });
 
     // Keep the server-side age record tied to the Firebase account creation time. Prefer the
     // Firestore createdAt value when it agrees with Firebase Auth; otherwise use Auth metadata,
@@ -1914,8 +1952,9 @@ app.post('/api/live/auth', async (req: Request, res: Response) => {
 
     res.json({ liveAuthToken: createLiveAuthToken(user), userId: user.id });
   } catch (error) {
-    console.warn('[Echat] Firebase live-auth verification failed:', error instanceof Error ? error.message : error);
-    res.status(401).json({ error: 'Could not verify your sign-in. Please try again.' });
+    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || 'verification-failed') : 'verification-failed';
+    console.error('[Echat] Firebase live-auth verification failed:', code, error instanceof Error ? error.message : error);
+    res.status(401).json({ error: 'Could not verify your sign-in. Please try again.', code });
   }
 });
 

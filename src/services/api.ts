@@ -43,7 +43,13 @@ async function readResponse<T>(res: Response, fallbackMessage = 'Request failed'
       payload && typeof payload === 'object' && 'error' in payload
         ? String((payload as { error?: unknown }).error || fallbackMessage)
         : (typeof payload === 'string' && payload.length < 200 && payload ? payload : fallbackMessage);
-    throw new Error(message + detailText);
+    const error = new Error(message + detailText) as Error & { code?: string; status?: number };
+    if (payload && typeof payload === 'object') {
+      const serverCode = (payload as { code?: unknown }).code;
+      if (typeof serverCode === 'string') error.code = serverCode;
+    }
+    error.status = res.status;
+    throw error;
   }
 
   if (!isJson && typeof payload === 'string') {
@@ -69,12 +75,12 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
   };
 }
 
-async function getLiveHeaders(): Promise<Record<string, string>> {
+async function getLiveHeaders(forceRefresh = false): Promise<Record<string, string>> {
   const proof = typeof window !== 'undefined' ? window.localStorage.getItem('echat_live_auth') || '' : '';
   const currentUserId = typeof window !== 'undefined' ? window.localStorage.getItem('echat_user_id') || '' : '';
   if (auth.currentUser && (!currentUserId || currentUserId === auth.currentUser.uid)) {
     try {
-      const firebaseIdToken = await auth.currentUser.getIdToken();
+      const firebaseIdToken = await auth.currentUser.getIdToken(forceRefresh);
       const response = await fetch(apiUrl('/api/live/auth'), { method: 'POST', headers: getHeaders({ 'x-firebase-id-token': firebaseIdToken }), body: '{}' });
       const session = await readResponse<{ liveAuthToken: string; userId: string }>(response, 'Could not refresh live sign-in');
       if (currentUserId && session.userId !== currentUserId) throw new Error('The signed-in account changed. Refresh and try again.');
@@ -83,7 +89,7 @@ async function getLiveHeaders(): Promise<Record<string, string>> {
       }
       return getHeaders({ 'x-user-id': session.userId, 'x-live-auth-token': session.liveAuthToken });
     } catch (error) {
-      if (!proof) throw error;
+      if (!proof || forceRefresh) throw error;
     }
   }
   return getHeaders(proof ? { 'x-live-auth-token': proof } : {});
@@ -766,8 +772,8 @@ export const api = {
   },
 
   // Admin-controlled Go-Live access
-  async getLiveAccess(): Promise<{ liveAccess: NonNullable<User['liveAccess']>; mode: LiveAccessMode; canGoLive: boolean; request: LiveAccessRequest | null; accountAgeDays: number; daysUntilEligible: number; autoApproved: boolean }> {
-    const res = await fetch(apiUrl('/api/live/access'), { headers: await getLiveHeaders() });
+  async getLiveAccess(forceRefresh = false): Promise<{ liveAccess: NonNullable<User['liveAccess']>; mode: LiveAccessMode; canGoLive: boolean; request: LiveAccessRequest | null; accountAgeDays: number; daysUntilEligible: number; autoApproved: boolean }> {
+    const res = await fetch(apiUrl('/api/live/access'), { headers: await getLiveHeaders(forceRefresh) });
     return readResponse(res, 'Could not check Go Live access');
   },
 

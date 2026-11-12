@@ -1,13 +1,29 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function canCreateLiveStream(uid) {
-      let profilePath = /databases/$(database)/documents/users/$(uid);
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      let profilePath = /databases/$(database)/documents/users/$(request.auth.uid);
       let profile = exists(profilePath) ? get(profilePath).data : {};
-      return exists(profilePath) &&
+      return signedIn() &&
+        (profile.get('role', '') == 'super_admin' ||
+          (profile.get('role', '') == 'developer' && profile.get('isOfficialDeveloper', false) == true));
+    }
+
+    function liveProfile(uid) {
+      let profilePath = /databases/$(database)/documents/users/$(uid);
+      return exists(profilePath) ? get(profilePath).data : {};
+    }
+
+    function canCreateLiveStream(uid) {
+      let profile = liveProfile(uid);
+      return exists(/databases/$(database)/documents/users/$(uid)) &&
         (profile.get('role', '') == 'super_admin' ||
           (profile.get('role', '') == 'developer' && profile.get('isOfficialDeveloper', false) == true) ||
-          (profile.get('isBlocked', false) == false &&
+          (profile.get('isBlocked', false) != true &&
             (profile.get('liveAccess', 'none') == 'approved' ||
               (profile.get('createdAt', 0) is int &&
                 profile.get('createdAt', 0) <= request.time.toMillis() - 5184000000))));
@@ -16,11 +32,12 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests';
     }
 
     match /users/{userId} {
-      allow read, delete: if true;
+      allow read: if signedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow delete: if false;
       allow create: if request.auth != null && request.auth.uid == userId &&
         request.resource.data.get('role', 'user') == 'user' &&
         request.resource.data.get('liveAccess', 'none') == 'none' &&
@@ -36,6 +53,13 @@ service cloud.firestore {
       match /settings/{settingId} {
         allow read, write: if true;
       }
+    }
+
+    match /liveRequests/{requestId} {
+      allow create: if signedIn() && request.resource.data.get('userId', '') == request.auth.uid;
+      allow read: if signedIn() &&
+        (resource.data.get('userId', '') == request.auth.uid || isSuperAdmin());
+      allow update, delete: if isSuperAdmin();
     }
 
     match /liveStreams/{streamId} {
