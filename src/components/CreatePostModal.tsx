@@ -76,6 +76,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [previewUnavailable, setPreviewUnavailable] = useState(false);
   const [previewReady, setPreviewReady] = useState(false);
   const previewUrlsRef = useRef<string[]>([]);
+  const draggedMediaIndex = useRef<number | null>(null);
 
   const createPreviewUrl = (file: Blob) => {
     const url = URL.createObjectURL(file);
@@ -127,7 +128,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setError('Please select a video file - MP4, MOV, or WebM.');
       return;
     }
-    if (pickedFiles.length > 10) {
+    const existingFiles = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
+    const appendImages = !videoOnly && !hasVideo && mediaType === 'image' && existingFiles.length > 0;
+    if ((appendImages ? existingFiles.length : 0) + pickedFiles.length > 10) {
       setError('You can add up to 10 images to a post.');
       return;
     }
@@ -144,12 +147,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setError('Video format not supported - use MP4 / MOV.');
       return;
     }
-    const files = await Promise.all(pickedFiles.map(file => isVideo(file) ? file : compressImage(file)));
-    [mediaUrl, ...additionalMediaUrls].forEach(revokePreviewUrl);
+    const newFiles = await Promise.all(pickedFiles.map(file => isVideo(file) ? file : compressImage(file)));
+    const files = appendImages ? [...existingFiles, ...newFiles] : newFiles;
+    if (!appendImages) [mediaUrl, ...additionalMediaUrls].forEach(revokePreviewUrl);
     revokePreviewUrl(thumbnailPreviewUrl);
     setThumbnailPreviewUrl('');
-    const urls = files.map(createPreviewUrl);
-    setMediaType(hasVideo ? 'video' : 'image');
+    const urls = appendImages ? [...[mediaUrl, ...additionalMediaUrls], ...newFiles.map(createPreviewUrl)] : files.map(createPreviewUrl);
+    setMediaType(appendImages ? 'image' : hasVideo ? 'video' : 'image');
     setMediaFile(files[0]);
     setMediaUrl(urls[0]);
     setAdditionalMediaFiles(files.slice(1));
@@ -207,6 +211,17 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     updateMediaOrder(files, urls);
   };
 
+  const reorderMedia = (from: number, to: number) => {
+    const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
+    const urls = [mediaUrl, ...additionalMediaUrls];
+    if (from === to || from < 0 || to < 0 || from >= files.length || to >= files.length) return;
+    const [file] = files.splice(from, 1);
+    const [url] = urls.splice(from, 1);
+    files.splice(to, 0, file);
+    urls.splice(to, 0, url);
+    updateMediaOrder(files, urls);
+  };
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (videoOnly && (!mediaFile || mediaType !== 'video')) {
@@ -248,6 +263,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         content: content.trim(),
         mediaUrl: uploadedUrls[0],
         mediaUrls: uploadedUrls,
+        images: mediaType === 'image' ? uploadedUrls : undefined,
+        imagesCount: mediaType === 'image' ? uploadedUrls.length : undefined,
         mediaType: uploadedUrls.length ? mediaType : undefined,
         type: videoOnly ? 'reel' : 'post',
         thumbnailUrl: uploadedThumbnail,
@@ -387,8 +404,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           {successMessage && <p role="status" className="mx-4 mb-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">{successMessage}</p>}
 
           {mediaUrl && (
-            <div className={`mt-3 grid gap-2 ${mediaType === 'image' && additionalMediaUrls.length ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              {[mediaUrl, ...additionalMediaUrls].map((url, index) => <div key={url} className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
+            <div className={`mt-3 grid overflow-hidden rounded-xl bg-white ${mediaType==='image'?'gap-[2px]': 'gap-2'} ${mediaType==='image'?(additionalMediaUrls.length===2?'grid-cols-3 grid-rows-2 aspect-square md:aspect-[4/3]':additionalMediaUrls.length===0?'grid-cols-1 aspect-square md:aspect-[4/3]':additionalMediaUrls.length===1?'grid-cols-2 aspect-square md:aspect-[4/3]':'grid-cols-2 grid-rows-2 aspect-square'): 'grid-cols-1'}`}>
+              {[mediaUrl, ...additionalMediaUrls].slice(0,mediaType==='image'&&additionalMediaUrls.length>3?4:10).map((url, index) => <div key={url} draggable={mediaType==='image'} onDragStart={()=>{draggedMediaIndex.current=index;}} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.preventDefault();if(draggedMediaIndex.current!==null)reorderMedia(draggedMediaIndex.current,index);draggedMediaIndex.current=null;}} className={`group relative min-h-0 min-w-0 overflow-hidden bg-slate-900 ${mediaType==='image'?'aspect-square':''} ${mediaType==='image'&&additionalMediaUrls.length===2&&index===0?'col-span-2 row-span-2':''}`}>
                 {mediaType === 'video' ? videoOnly && !previewReady && !previewUnavailable ? <div className="flex min-h-48 flex-col items-center justify-center gap-2 bg-slate-900 p-5 text-center text-white">
                   {thumbnailPreviewUrl && <img src={thumbnailPreviewUrl} alt="Video thumbnail" className="mb-1 max-h-40 max-w-full rounded-lg object-contain" />}
                   <p className="text-sm font-semibold">Loading video preview…</p>
@@ -403,11 +420,12 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                   if (video.videoWidth && video.videoHeight) setVideoResolution(`${video.videoWidth} × ${video.videoHeight}`);
                   setPreviewUnavailable(false);
                   setPreviewReady(true);
-                }} onError={() => { if (videoOnly) setPreviewUnavailable(true); }} /> : <img src={url} alt={`Post image ${index + 1}`} className="h-40 w-full object-cover" />}
+                }} onError={() => { if (videoOnly) setPreviewUnavailable(true); }} /> : <img src={url} alt={`Post image ${index + 1}`} className="h-full w-full object-cover" />}
                 <div className="absolute right-1 top-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
                   {mediaType === 'image' && <><button type="button" disabled={index === 0} onClick={() => moveMedia(index, -1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image earlier">←</button><button type="button" disabled={index === additionalMediaUrls.length} onClick={() => moveMedia(index, 1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image later">→</button></>}
                   <button type="button" onClick={() => removeMediaAt(index)} className="rounded-full bg-black/65 p-1.5 text-white" aria-label="Remove attachment"><X size={14} /></button>
                 </div>
+                {mediaType==='image'&&additionalMediaUrls.length>3&&index===3&&<div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/55 text-2xl font-extrabold text-white">+{additionalMediaUrls.length-3}</div>}
               </div>)}
             </div>
           )}
@@ -434,7 +452,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           <div className="p-3 border border-slate-200 rounded-2xl flex items-center justify-between mb-4">
             <span className="text-xs font-bold text-slate-700">{t('add_to_post')}</span>
             <div className="flex items-center gap-1">
-              <label className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-full cursor-pointer transition" title="Photo/Video">
+              <label className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-full cursor-pointer transition" title={mediaFile && mediaType==='image' ? 'Add more photos' : 'Photo/Video'}>
                 <Image size={20} />
                 <input
                   type="file"

@@ -29,7 +29,7 @@ export interface Post {
   id: string; authorId: string; author?: User; // FIX: optional
   type?: 'post' | 'reel' | 'story';
   isReel?: boolean; videoType?: string; aspectRatio?: number | string;
-  content: string; mediaUrl?: string; mediaUrls?: string[]; images?: string[]; v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown }; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
+  content: string; mediaUrl?: string; mediaUrls?: string[]; image?: string; images?: string[] | string | { url: string; id?: string; order?: number }[]; imagesCount?: number; v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown }; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
   viewsCount?: number; views?: string[]; isReported: boolean;

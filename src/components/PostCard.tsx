@@ -11,6 +11,9 @@ import { VideoLinkCard } from './VideoLinkCard';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
+import { PhotoViewer } from './PhotoViewer';
+import { getPostImageUrls } from '../utils/postImages';
+import { saveImageToDevice } from '../utils/saveImage';
 import {
   ThumbsUp,
   MessageCircle,
@@ -79,6 +82,9 @@ export const PostCard: React.FC<PostCardProps> = ({
   const cardRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [photoIndex, setPhotoIndex] = useState<number | null>(null);
+  const [imageMenuIndex, setImageMenuIndex] = useState<number | null>(null);
+  const [imageToast, setImageToast] = useState('');
   const [showViewersModal, setShowViewersModal] = useState(false);
   const [postViewers, setPostViewers] = useState<{ id: string; name: string; avatar: string; viewedAt: number }[]>([]);
   const [loadingViewers, setLoadingViewers] = useState(false);
@@ -111,6 +117,13 @@ export const PostCard: React.FC<PostCardProps> = ({
     setShowDetailModal(false);
   };
   useBackButton(showDetailModal, closePostDetail, `post-detail-${post.id}`);
+  useEffect(() => {
+    if (detailMode) return;
+    const match = window.location.pathname.match(/^\/photo\/([^/]+)\/(\d+)$/);
+    if (!match) return;
+    try { if (decodeURIComponent(match[1]) === post.id) setPhotoIndex(Number(match[2])); } catch { /* Ignore malformed photo links. */ }
+  }, [post.id, detailMode]);
+  useEffect(() => { if (!imageToast) return; const timer = window.setTimeout(() => setImageToast(''), 2200); return () => window.clearTimeout(timer); }, [imageToast]);
 
   useEffect(() => {
     const node = cardRef.current;
@@ -222,7 +235,17 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   const isSaved = Boolean(user?.savedPosts?.includes(post.id));
-  const postMediaUrls = post.mediaUrls?.length ? post.mediaUrls : (post.mediaUrl ? [post.mediaUrl] : []);
+  const postMediaUrls = getPostImageUrls(post);
+  const openPhoto = (index: number) => {
+    if (!window.location.pathname.startsWith('/photo/')) window.history.pushState({ ...window.history.state, echatPhotoViewer: true }, '', `/photo/${encodeURIComponent(post.id)}/${index}`);
+    setPhotoIndex(index);
+    setImageMenuIndex(null);
+  };
+  const saveTileImage = async (index: number) => {
+    try { await saveImageToDevice(assetUrl(postMediaUrls[index]), `echat-${post.id}-${index + 1}.jpg`); setImageToast('Image saved to your device'); }
+    catch (error) { setImageToast(error instanceof Error ? error.message : 'Image download failed.'); }
+    finally { setImageMenuIndex(null); }
+  };
   const network = typeof navigator !== 'undefined' ? (navigator as Navigator & { connection?: { type?: string; effectiveType?: string } }).connection : undefined;
   const autoplayBlockedByDataSaver = wifiOnlyAutoplay && (network?.type === 'cellular' || ['slow-2g', '2g', '3g'].includes(network?.effectiveType || ''));
 
@@ -558,9 +581,18 @@ export const PostCard: React.FC<PostCardProps> = ({
           {post.mediaType === 'video' ? (
             <video data-echat-reel-video={reelMode ? 'true' : undefined} ref={videoRef} src={assetUrl(postMediaUrls[0])} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls={!reelMode} playsInline loop={reelMode} preload={reelMode ? reelPreload : 'none'} muted={reelMode ? isReelMuted : false} onClick={reelMode ? toggleReelPlayback : undefined} onPlay={() => { setIsReelPlaying(true); setIsReelBuffering(false); }} onPause={() => setIsReelPlaying(false)} onLoadStart={() => { if (reelMode) { setIsReelBuffering(true); setReelPlaybackError(false); } }} onWaiting={() => reelMode && setIsReelBuffering(true)} onCanPlay={() => setIsReelBuffering(false)} onError={() => { if (reelMode) { setIsReelBuffering(false); setReelPlaybackError(true); } }} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
           ) : (
-            <div className={`grid w-full gap-0.5 ${postMediaUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              {postMediaUrls.slice(0, 10).map((mediaUrl, index) => <img key={`${post.id}-${index}`} src={assetUrl(mediaUrl)} alt={`Post attachment ${index + 1}`} loading="lazy" className={`w-full object-cover cursor-pointer hover:opacity-95 transition ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'} ${postMediaUrls.length > 4 && index > 3 ? 'hidden' : ''}`} />)}
-            </div>
+            <>
+              <div className={`post-images grid w-full gap-[2px] overflow-hidden bg-white ${postMediaUrls.length===1?'aspect-square md:aspect-[4/3]':postMediaUrls.length===2?'aspect-square md:aspect-[4/3]':postMediaUrls.length===3?'aspect-square md:aspect-[4/3]':'aspect-square'} ${reelMode?'hidden':''}`}>
+                {postMediaUrls.slice(0,postMediaUrls.length>4?4:postMediaUrls.length).map((mediaUrl,index)=><div key={`${post.id}-${index}`} className={`group relative min-h-0 min-w-0 overflow-hidden ${postMediaUrls.length===3&&index===0?'col-span-2 row-span-2':''}`}>
+                  <button type="button" onClick={event=>{event.stopPropagation();openPhoto(index);}} aria-label={`View photo ${index+1}`} className="absolute inset-0 z-0 block h-full w-full cursor-zoom-in bg-slate-100"><img src={assetUrl(mediaUrl)} alt={`Post photo ${index+1}`} loading="lazy" className="h-full w-full object-cover transition group-hover:brightness-95"/></button>
+                  <button type="button" onClick={event=>{event.stopPropagation();setImageMenuIndex(value=>value===index?null:index);}} aria-label={`Options for photo ${index+1}`} className="absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center rounded-full bg-black/65 text-white shadow sm:opacity-0 sm:group-hover:opacity-100"><MoreHorizontal size={19}/></button>
+                  {imageMenuIndex===index&&<div className="absolute right-2 top-12 z-20 w-44 rounded-xl bg-white p-1 text-left text-xs font-semibold text-slate-800 shadow-xl"><button type="button" onClick={event=>{event.stopPropagation();void saveTileImage(index);}} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 hover:bg-slate-100"><Download size={15}/>Save This Image</button><button type="button" onClick={event=>{event.stopPropagation();openPhoto(index);}} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 hover:bg-slate-100">View Full Screen</button></div>}
+                  {postMediaUrls.length>4&&index===3&&<button type="button" onClick={event=>{event.stopPropagation();openPhoto(index);}} aria-label={`View ${postMediaUrls.length-4} more photos`} className="absolute inset-0 z-[5] grid place-items-center bg-black/55 text-3xl font-extrabold text-white">+{postMediaUrls.length-4}</button>}
+                </div>)}
+              </div>
+              {reelMode&&<img src={assetUrl(postMediaUrls[0])} alt="Post image" className="max-h-[78vh] w-full object-contain"/>}
+              {imageToast&&<p role="status" className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/80 px-4 py-2 text-xs font-semibold text-white">{imageToast}</p>}
+            </>
           )}
           {reelMode && !isReelPlaying && (autoplayBlockedByDataSaver || !reelsAutoplay || manualPauseRef.current) && <button type="button" onClick={event => { event.stopPropagation(); toggleReelPlayback(); }} aria-label="Play Reel" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/25 text-white"><span className="grid h-14 w-14 place-items-center rounded-full bg-black/60"><Play size={24} fill="currentColor" /></span>{autoplayBlockedByDataSaver && <span className="rounded-full bg-black/60 px-3 py-1 text-xs">Tap to play — you’re on mobile data</span>}</button>}
           {reelMode && isReelBuffering && !isReelPlaying && !reelPlaybackError && ((reelsAutoplay && !autoplayBlockedByDataSaver) || manualPlayRef.current) && <div aria-label="Loading Reel" className="pointer-events-none absolute inset-0 grid place-items-center bg-black/10 text-white"><Loader2 size={32} className="animate-spin" /></div>}
@@ -794,6 +826,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           </section>
         </div>
       )}
+      {photoIndex !== null && post.mediaType !== 'video' && <PhotoViewer post={post} images={postMediaUrls} initialIndex={photoIndex} onClose={() => setPhotoIndex(null)} onPostUpdated={onPostUpdated} />}
     </div>
   );
 };

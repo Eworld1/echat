@@ -1088,7 +1088,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
     mediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds, mediaUrls, images: mediaUrls, v2: v2 ? { feeling: typeof v2.feeling === 'string' ? v2.feeling.slice(0, 80) : undefined, privacy: safePrivacy } : undefined, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', isReel: type === 'reel' && mediaType === 'video', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
+    { taggedUserIds: cleanTaggedIds, mediaUrls, images: mediaType === 'image' ? mediaUrls : undefined, imagesCount: mediaType === 'image' ? mediaUrls.length || (primaryMediaUrl ? 1 : 0) : undefined, v2: v2 ? { feeling: typeof v2.feeling === 'string' ? v2.feeling.slice(0, 80) : undefined, privacy: safePrivacy } : undefined, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', isReel: type === 'reel' && mediaType === 'video', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
   );
   if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 

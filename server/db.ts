@@ -596,7 +596,7 @@ class Database {
     mediaType?: 'image' | 'video',
     feeling?: string,
     privacy: 'public' | 'friends' | 'only_me' = 'public',
-    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; images?: string[]; v2?: Post['v2']; type?: 'post' | 'reel' | 'story'; isReel?: boolean; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number } = {}
+    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; images?: string[]; imagesCount?: number; v2?: Post['v2']; type?: 'post' | 'reel' | 'story'; isReel?: boolean; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number } = {}
   ): Post {
     const newPost: Post = {
       id: 'post_' + crypto.randomBytes(6).toString('hex'),
@@ -607,6 +607,7 @@ class Database {
       mediaUrl,
       ...(extras.mediaUrls?.length ? { mediaUrls: extras.mediaUrls.slice(0, 10) } : {}),
       ...(extras.images?.length ? { images: extras.images.slice(0, 10) } : {}),
+      ...(Number.isFinite(extras.imagesCount) ? { imagesCount: Math.max(0, Math.min(10, Number(extras.imagesCount))) } : {}),
       ...(extras.v2 ? { v2: extras.v2 } : {}),
       mediaType,
       ...(extras.thumbnailUrl ? { thumbnailUrl: extras.thumbnailUrl } : {}),

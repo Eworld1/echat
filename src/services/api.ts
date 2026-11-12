@@ -438,6 +438,7 @@ export const api = {
     mediaUrl?: string;
     mediaUrls?: string[];
     images?: string[];
+    imagesCount?: number;
     v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown };
     mediaType?: 'image' | 'video';
     type?: 'post' | 'reel';
