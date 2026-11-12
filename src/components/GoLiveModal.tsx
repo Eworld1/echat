@@ -29,6 +29,8 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
+// @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
+import { Room, Track } from 'livekit-client';
 
 interface GoLiveModalProps {
   isOpen: boolean;
@@ -104,6 +106,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const recognitionRef = useRef<any>(null);
   const lastCaptionSentRef = useRef(0);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const liveKitRoomRef = useRef<Room | null>(null);
 
   useEffect(() => {
     if (!isBroadcasting || !currentSession || !captionsEnabled) { recognitionRef.current?.stop?.(); recognitionRef.current = null; return; }
@@ -310,6 +313,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   useEffect(() => {
     if (!isBroadcasting || !currentSession) return;
+    if (currentSession.liveKitRoom) return;
     const stopSignalListener = onLiveSignal(async message => {
       if (message.streamId !== currentSession.id) return;
       const signal = message.signal;
@@ -434,6 +438,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   const handleStartBroadcast = async () => {
     setLiveStartError('');
+    let createdLiveId = '';
+    let newRoom: Room | null = null;
     try {
       if (!mediaStreamRef.current?.getVideoTracks().length) {
         alert('Allow camera access before starting a live video.');
@@ -441,6 +447,16 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       }
       const res = await api.startLive(streamTitle, taggedPageIds);
       if (res.success && res.live) {
+        const liveKitInfo = res as typeof res & { liveKitUrl?: string; liveKitToken?: string };
+        if (!liveKitInfo.liveKitUrl || !liveKitInfo.liveKitToken) throw new Error('The live server did not return a LiveKit connection token.');
+        createdLiveId = res.live.id;
+        newRoom = new Room({ adaptiveStream: true, dynacast: true });
+        await newRoom.connect(liveKitInfo.liveKitUrl, liveKitInfo.liveKitToken);
+        const localTracks = mediaStreamRef.current?.getTracks() || [];
+        for (const track of localTracks) {
+          await newRoom.localParticipant.publishTrack(track, { source: track.kind === 'audio' ? Track.Source.Microphone : Track.Source.Camera });
+        }
+        liveKitRoomRef.current = newRoom;
         setCurrentSession(res.live);
         setComments(res.live.comments || []);
         setIsBroadcasting(true);
@@ -451,6 +467,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to start live stream';
       setLiveStartError(`${message}. Check your connection and try Go Live again.`);
+      newRoom?.disconnect();
+      liveKitRoomRef.current?.disconnect();
+      liveKitRoomRef.current = null;
+      if (createdLiveId) await api.stopLive(createdLiveId).catch(() => {});
       console.error('[Go Live] Could not start broadcast', err);
     }
   };
@@ -458,7 +478,9 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const handleEndBroadcast = async () => {
     if (!confirm('Are you sure you want to end your live stream?')) return;
     try {
-      await api.stopLive();
+      await api.stopLive(currentSession?.id);
+      liveKitRoomRef.current?.disconnect();
+      liveKitRoomRef.current = null;
       setIsBroadcasting(false);
       setCurrentSession(null);
       onLiveEnded?.();

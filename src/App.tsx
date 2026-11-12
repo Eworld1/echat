@@ -129,9 +129,12 @@ export function MainApp() {
 
   // Load and listen for active live streams
   useEffect(() => {
-    api.getCurrentLive().then(res => {
+    const refreshLive = () => api.getCurrentLive().then(res => {
       setCurrentLiveStream(res.live);
+      setActiveViewerStream(current => current && res.live?.id === current.id ? res.live : current && !res.live ? null : current);
     }).catch(() => {});
+    refreshLive();
+    const refreshTimer = window.setInterval(refreshLive, 12000);
 
     const unsubStart = onLiveStarted((stream) => {
       setCurrentLiveStream(stream);
@@ -148,6 +151,7 @@ export function MainApp() {
     });
 
     return () => {
+      window.clearInterval(refreshTimer);
       unsubStart();
       unsubStop();
       unsubUpdate();

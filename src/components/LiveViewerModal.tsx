@@ -6,6 +6,8 @@ import { api } from '../services/api';
 import { LiveStream, LiveComment } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
+// @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
+import { Room, RoomEvent, Track } from 'livekit-client';
 import {
   X,
   Users,
@@ -59,7 +61,46 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
 
   useEffect(() => {
     let cancelled = false;
+    let liveKitRoom: Room | null = null;
+    const liveKitAudio: HTMLAudioElement[] = [];
     let peer: RTCPeerConnection | null = null;
+    if (currentStream.liveKitRoom) {
+      const connectLiveKit = async () => {
+        try {
+          const credentials = await api.getLiveKitViewerToken(currentStream.id);
+          if (cancelled) return;
+          liveKitRoom = new Room({ adaptiveStream: true, dynacast: true });
+          liveKitRoom.on(RoomEvent.TrackSubscribed, (track: any) => {
+            if (track.kind === Track.Kind.Video && videoRef.current) {
+              track.attach(videoRef.current);
+              setRemoteVideo(new MediaStream());
+            } else if (track.kind === Track.Kind.Audio) {
+              const audio = track.attach() as HTMLAudioElement;
+              audio.autoplay = true;
+              audio.setAttribute('playsinline', '');
+              document.body.appendChild(audio);
+              liveKitAudio.push(audio);
+              void audio.play().catch(() => {});
+            }
+          });
+          liveKitRoom.on(RoomEvent.TrackUnsubscribed, (track: any) => {
+            track.detach().forEach((element: HTMLElement) => element.remove());
+            if (track.kind === Track.Kind.Video) setRemoteVideo(null);
+          });
+          liveKitRoom.on(RoomEvent.Disconnected, () => setRemoteVideo(null));
+          await liveKitRoom.connect(credentials.url, credentials.token);
+        } catch (error) {
+          console.warn('Could not connect to the LiveKit broadcast:', error);
+        }
+      };
+      void connectLiveKit();
+      return () => {
+        cancelled = true;
+        liveKitRoom?.disconnect();
+        liveKitAudio.forEach(audio => { audio.pause(); audio.remove(); });
+        setRemoteVideo(null);
+      };
+    }
     void api.getCallIceConfig().catch(() => liveRtcConfig).then(iceConfig => {
       if (cancelled) return;
       peer = new RTCPeerConnection(iceConfig);

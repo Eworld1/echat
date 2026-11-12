@@ -1,13 +1,15 @@
 /**
- * Central place for backend URLs.
- * - VITE_API_URL empty  -> same-origin requests (server.ts serves both app and API).
- * - VITE_API_URL set    -> frontend (e.g. Vercel) talks to a separately hosted backend.
+ * Production live-control endpoints are handled same-origin by Vercel functions.
+ * The existing API and WebSocket service remains the backend for Classic features.
  */
 const rawApiUrl: string = import.meta.env.VITE_API_URL ?? '';
 
-export const API_URL: string = rawApiUrl.replace(/\/+$/, '');
+export const LEGACY_API_URL: string = rawApiUrl.replace(/\/+$/, '');
+export const API_URL: string = LEGACY_API_URL;
 
 export function apiUrl(path: string): string {
+  // These Go Live control-plane endpoints now run inside this Vercel project.
+  if (import.meta.env.PROD && /^\/api\/live\/(auth|start|end|current|watch)(?:\?|$)/.test(path)) return path;
   return `${API_URL}${path}`;
 }
 
@@ -19,7 +21,7 @@ export function assetUrl(path: string): string {
 
 /** WebSocket endpoint of the Echat server. */
 export function wsUrl(): string {
-  let base = API_URL;
+  let base = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.replace(/\/+$/, '') || LEGACY_API_URL;
   if (!base && typeof window !== 'undefined') {
     // Dev convenience: page opened on :5173 while the API/WS server lives on :3000.
     base =

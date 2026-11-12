@@ -1,4 +1,4 @@
-import { API_URL, apiUrl, assetUrl } from './apiBase';
+import { API_URL, LEGACY_API_URL, apiUrl, assetUrl } from './apiBase';
 import type { AdminAnalytics, AdminSystemInfo, AuditEntry } from '../types/admin';
 import type {
   User,
@@ -769,48 +769,48 @@ export const api = {
 
   // Admin-controlled Go-Live access
   async getLiveAccess(forceRefresh = false): Promise<{ liveAccess: NonNullable<User['liveAccess']>; mode: LiveAccessMode; canGoLive: boolean; request: LiveAccessRequest | null; accountAgeDays: number; daysUntilEligible: number; autoApproved: boolean }> {
-    const res = await fetch(apiUrl('/api/live/access'), { headers: await getLiveHeaders(forceRefresh) });
+    const res = await fetch(LEGACY_API_URL + '/api/live/access', { headers: await getLiveHeaders(forceRefresh) });
     return readResponse(res, 'Could not check Go Live access');
   },
 
   async requestLiveAccess(reason: string): Promise<{ success: boolean; liveAccess: 'pending'; request: LiveAccessRequest }> {
-    const res = await fetch(apiUrl('/api/live/request'), { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ reason }) });
+    const res = await fetch(LEGACY_API_URL + '/api/live/request', { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ reason }) });
     return readResponse(res, 'Could not send Go Live request');
   },
 
   async cancelLiveAccessRequest(): Promise<{ success: boolean; liveAccess: 'none' }> {
-    const res = await fetch(apiUrl('/api/live/request/cancel'), { method: 'POST', headers: await getLiveHeaders() });
+    const res = await fetch(LEGACY_API_URL + '/api/live/request/cancel', { method: 'POST', headers: await getLiveHeaders() });
     return readResponse(res, 'Could not cancel Go Live request');
   },
 
   async getAdminLiveAccess(): Promise<{ requests: LiveAccessRequest[]; mode: LiveAccessMode; users: User[] }> {
-    const res = await fetch(apiUrl('/api/admin/live-access'), { headers: await getLiveHeaders() });
+    const res = await fetch(LEGACY_API_URL + '/api/admin/live-access', { headers: await getLiveHeaders() });
     return readResponse(res, 'Could not load Go Live access requests');
   },
 
   async reviewLiveAccessRequest(requestId: string, decision: 'approved' | 'rejected' | 'blocked'): Promise<void> {
-    const res = await fetch(apiUrl(`/api/admin/live-access/requests/${encodeURIComponent(requestId)}/review`), { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ decision }) });
+    const res = await fetch(LEGACY_API_URL + `/api/admin/live-access/requests/${encodeURIComponent(requestId)}/review`, { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ decision }) });
     await readResponse(res, 'Could not review Go Live request');
   },
 
   async updateUserLiveAccess(userId: string, action: 'grant' | 'revoke' | 'block' | 'unblock'): Promise<User> {
-    const res = await fetch(apiUrl(`/api/admin/live-access/users/${encodeURIComponent(userId)}`), { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ action }) });
+    const res = await fetch(LEGACY_API_URL + `/api/admin/live-access/users/${encodeURIComponent(userId)}`, { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ action }) });
     return readResponse(res, 'Could not change user Go Live access');
   },
 
   async updateLiveAccessMode(mode: LiveAccessMode): Promise<void> {
-    const res = await fetch(apiUrl('/api/admin/live-access/settings'), { method: 'PUT', headers: await getLiveHeaders(), body: JSON.stringify({ mode }) });
+    const res = await fetch(LEGACY_API_URL + '/api/admin/live-access/settings', { method: 'PUT', headers: await getLiveHeaders(), body: JSON.stringify({ mode }) });
     await readResponse(res, 'Could not update Go Live settings');
   },
 
   // Live broadcast system
   async getCurrentLive(): Promise<{ live: LiveStream | null }> {
-    const res = await fetch(apiUrl('/api/live/current'), { headers: getHeaders() });
+    const res = await fetch(apiUrl('/api/live/current'), { headers: getHeaders(), cache: 'no-store' });
     if (!res.ok) return { live: null };
     return readResponse<{ live: LiveStream | null }>(res);
   },
 
-  async startLive(title?: string, taggedPageIds: string[] = []): Promise<{ success: boolean; live: LiveStream }> {
+  async startLive(title?: string, taggedPageIds: string[] = []): Promise<{ success: boolean; live: LiveStream; liveKitUrl?: string; liveKitToken?: string }> {
     const res = await fetch(apiUrl('/api/live/start'), {
       method: 'POST',
       headers: await getLiveHeaders(),
@@ -819,16 +819,27 @@ export const api = {
     return readResponse(res, 'Failed to start live stream');
   },
 
-  async stopLive(): Promise<{ success: boolean }> {
-    const res = await fetch(apiUrl('/api/live/stop'), {
+  async stopLive(streamId?: string): Promise<{ success: boolean; live?: LiveStream }> {
+    const res = await fetch(apiUrl('/api/live/end'), {
       method: 'POST',
-      headers: await getLiveHeaders()
+      headers: await getLiveHeaders(),
+      body: JSON.stringify({ streamId })
     });
     return readResponse(res);
   },
 
+  async getLiveKitViewerToken(streamId: string): Promise<{ url: string; token: string }> {
+    const res = await fetch(apiUrl(`/api/live/watch?streamId=${encodeURIComponent(streamId)}`), { headers: await getLiveHeaders(), cache: 'no-store' });
+    return readResponse(res, 'Could not join this live stream');
+  },
+
+  async getLiveKitHostToken(streamId: string): Promise<{ url: string; token: string }> {
+    const res = await fetch(apiUrl('/api/live/publish'), { method: 'POST', headers: await getLiveHeaders(), body: JSON.stringify({ streamId }), cache: 'no-store' });
+    return readResponse(res, 'Could not publish your live broadcast');
+  },
+
   async sendLiveComment(text: string): Promise<{ success: boolean; comment: LiveComment }> {
-    const res = await fetch(apiUrl('/api/live/comment'), {
+    const res = await fetch(LEGACY_API_URL + '/api/live/comment', {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ text })
@@ -837,7 +848,7 @@ export const api = {
   },
 
   async sendLiveReaction(emoji: string): Promise<{ success: boolean; reactionsCount: number }> {
-    const res = await fetch(apiUrl('/api/live/reaction'), {
+    const res = await fetch(LEGACY_API_URL + '/api/live/reaction', {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ emoji })
@@ -846,7 +857,7 @@ export const api = {
   },
 
   async joinLive(): Promise<{ success: boolean; viewersCount: number }> {
-    const res = await fetch(apiUrl('/api/live/join'), {
+    const res = await fetch(LEGACY_API_URL + '/api/live/join', {
       method: 'POST',
       headers: getHeaders()
     });
@@ -854,7 +865,7 @@ export const api = {
   },
 
   async leaveLive(): Promise<{ success: boolean; viewersCount: number }> {
-    const res = await fetch(apiUrl('/api/live/leave'), {
+    const res = await fetch(LEGACY_API_URL + '/api/live/leave', {
       method: 'POST',
       headers: getHeaders()
     });
