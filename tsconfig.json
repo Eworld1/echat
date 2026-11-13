@@ -3,7 +3,7 @@
     "target": "ES2022",
     "useDefineForClassFields": true,
     "module": "ESNext",
-    "types": ["vite/client", "node"],
+    "types": ["node"],
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
@@ -17,6 +17,6 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["src", "server", "server.ts", "vite.config.ts"],
+  "include": ["src", "server", "serverless", "api", "server.ts", "vite.config.ts"],
   "exclude": ["dist", "node_modules"]
 }

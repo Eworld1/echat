@@ -7,6 +7,31 @@ import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 export type ApiRequest = IncomingMessage & { body?: any; query?: Record<string, string | string[] | undefined> };
 export type ApiResponse = ServerResponse;
 
+const configuredOrigins = (process.env.CORS_ORIGIN || 'https://echat-ivory.vercel.app')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(origin => origin && origin !== '*');
+const vercelOrigin = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
+
+export function applyLiveCors(req: ApiRequest, res: ApiResponse): void {
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+  if (origin && (configuredOrigins.includes(origin) || origin === vercelOrigin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-firebase-id-token, x-live-auth-token, x-user-id');
+  res.setHeader('Access-Control-Max-Age', '86400');
+}
+
+export function handleLiveOptions(req: ApiRequest, res: ApiResponse): boolean {
+  if (req.method !== 'OPTIONS') return false;
+  applyLiveCors(req, res);
+  res.statusCode = 204;
+  res.end();
+  return true;
+}
+
 const projectId = (process.env.FIREBASE_PROJECT_ID || 'echat-studio-6e215').trim();
 const rawCredential = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '';
 let serviceCredential: ReturnType<typeof cert> | undefined;

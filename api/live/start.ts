@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { ApiRequest, ApiResponse } from '../../serverless/live.js';
-import { canStartLive, createRoomToken, firestore, handleError, liveKitUrl, lives, requireLiveKit, sendJson, verifyLiveUser } from '../../serverless/live.js';
+import { applyLiveCors, canStartLive, createRoomToken, handleError, handleLiveOptions, liveKitUrl, lives, requireLiveKit, sendJson, verifyLiveUser } from '../../serverless/live.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
+  console.info('[Vercel Live API] invocation', { route: '/api/live/start', method: req.method, origin: req.headers.origin || null });
+  applyLiveCors(req, res);
+  if (handleLiveOptions(req, res)) return;
   if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed', code: 'method-not-allowed' });
   try {
     const { user } = await verifyLiveUser(req);
