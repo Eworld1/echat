@@ -420,8 +420,6 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     };
   }, [isBroadcasting]);
 
-  if (!isOpen) return null;
-
   const toggleVideo = () => {
     if (mediaStreamRef.current) {
       const track = mediaStreamRef.current.getVideoTracks()[0];
@@ -519,6 +517,11 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     if (!isBroadcasting || !currentSession?.id) return;
     return listenLiveComments(currentSession.id, setComments, error => console.warn('[Go Live] Live chat updates unavailable:', error.message));
   }, [isBroadcasting, currentSession?.id]);
+
+  // Keep every hook above this visibility check. GoLiveModal stays mounted on /home
+  // while closed, so returning before the effects below used to change its hook count
+  // as soon as a user opened the studio (React error #310).
+  if (!isOpen) return null;
 
   const changeVideoQuality = async (quality: '360p' | '720p' | '1080p' | '4k') => {
     setVideoQuality(quality);

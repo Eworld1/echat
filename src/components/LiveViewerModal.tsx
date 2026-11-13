@@ -32,16 +32,15 @@ interface LiveViewerModalProps {
 }
 
 export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, stream, onClose }) => {
-  const currentStream = stream || session;
+  const currentStream = stream || session || null;
   useBackButton(Boolean(currentStream), onClose, 'live-viewer');
-  if (!currentStream) return null;
 
   const { user } = useAuth();
   const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onLiveSignal, onLiveCaption, socket } = useSocket();
 
-  const [liveData, setLiveData] = useState<LiveStream>(currentStream);
+  const [liveData, setLiveData] = useState<LiveStream | null>(currentStream);
   const [commentInput, setCommentInput] = useState('');
-  const [comments, setComments] = useState<LiveComment[]>(currentStream.comments || []);
+  const [comments, setComments] = useState<LiveComment[]>(currentStream?.comments || []);
   const [floatingReactions, setFloatingReactions] = useState<{ id: string; emoji: string; left: number }[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [remoteVideo, setRemoteVideo] = useState<MediaStream | null>(null);
@@ -64,6 +63,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   }, []);
 
   useEffect(() => {
+    if (!currentStream) return;
     let cancelled = false;
     let liveKitRoom: Room | null = null;
     const liveKitAudio: HTMLAudioElement[] = [];
@@ -154,10 +154,11 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       queuedCandidatesRef.current = [];
       setRemoteVideo(null);
     };
-  }, [currentStream.id, currentStream.hostId, onLiveSignal, socket]);
+  }, [currentStream?.id, currentStream?.hostId, onLiveSignal, socket]);
 
   // Socket listeners for real-time live events
   useEffect(() => {
+    if (!currentStream) return;
     const unsubComment = onLiveComment((comment) => {
       setComments(prev => prev.some(item => item.id === comment.id) ? prev : [...prev.slice(-50), comment]);
     });
@@ -189,16 +190,18 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       unsubViewers();
       unsubEnded();
     };
-  }, [currentStream.id, onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onClose]);
+  }, [currentStream?.id, onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onClose]);
 
-  useEffect(() => listenLiveComments(currentStream.id, setComments, error => console.warn('[Live chat] Could not load comments:', error.message)), [currentStream.id]);
+  useEffect(() => currentStream ? listenLiveComments(currentStream.id, setComments, error => console.warn('[Live chat] Could not load comments:', error.message)) : undefined, [currentStream?.id]);
 
-  useEffect(() => onLiveCaption(data => { if (data.streamId === currentStream.id) setLiveCaption(data.text); }), [onLiveCaption, currentStream.id]);
+  useEffect(() => currentStream ? onLiveCaption(data => { if (data.streamId === currentStream.id) setLiveCaption(data.text); }) : undefined, [onLiveCaption, currentStream?.id]);
 
   // Scroll to latest comment
   useEffect(() => {
     commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [comments]);
+
+  if (!currentStream) return null;
 
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
