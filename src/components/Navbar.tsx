@@ -42,12 +42,13 @@ import {
   Users2,
   Calendar,
   Settings as SettingsIcon
-  , Film, BarChart3
+  , Film, BarChart3, LayoutGrid
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
 import { EchatThemeToggle } from './EchatThemeToggle';
+import { EchatAppSwitcherTile } from './EchatAppSwitcherTile';
 
 export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
@@ -86,6 +87,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [showIosHelp, setShowIosHelp] = useState(false);
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [appMenuOpen, setAppMenuOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [showHelpInfo, setShowHelpInfo] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -124,6 +126,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     setSettingsExpanded(false);
     setShowNotifications(false);
     setShowSearchDropdown(false);
+    setAppMenuOpen(false);
   }, [currentView, onProfileMenuChange]);
 
   const closeProfileMenu = () => {
@@ -133,6 +136,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   useBackButton(showProfileMenu, closeProfileMenu, 'profile-menu');
   useBackButton(showSearchDropdown, () => setShowSearchDropdown(false), 'navbar-search');
   useBackButton(showNotifications, () => setShowNotifications(false), 'navbar-notifications');
+  useBackButton(appMenuOpen, () => setAppMenuOpen(false), 'navbar-app-menu');
 
   const toggleProfileMenu = () => {
     setShowProfileMenu(open => {
@@ -942,6 +946,19 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title="Go Live"><Radio size={17}/>Go Live</button>
           <div className="hidden min-[1440px]:block"><EchatThemeToggle compact/></div>
 
+          <div className="relative">
+            <button type="button" onClick={() => setAppMenuOpen(value => !value)} aria-label="Open Echat apps menu" aria-expanded={appMenuOpen} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10">
+              <LayoutGrid size={19} />
+            </button>
+            {appMenuOpen && <>
+              <button type="button" aria-label="Close apps menu" onClick={() => setAppMenuOpen(false)} className="fixed inset-0 z-[45] cursor-default" />
+              <div role="menu" aria-label="Echat apps" className="absolute right-0 top-12 z-[46] w-[min(340px,calc(100vw-24px))] rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+                <h2 className="mb-2 px-1 text-sm font-bold text-slate-900 dark:text-white">Echat apps</h2>
+                <EchatAppSwitcherTile variant="classic" onNavigate={() => setAppMenuOpen(false)} />
+              </div>
+            </>}
+          </div>
+
           {/* Messenger Icon */}
           <button
             onClick={onOpenMessenger}
@@ -1130,6 +1147,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <p className="text-sm text-slate-500 dark:text-slate-300">{t('see_profile')}</p>
                   </div>
                 </button>
+
+                <div className="mb-3"><EchatAppSwitcherTile variant="classic" onNavigate={closeProfileMenu} /></div>
 
                 <div className="mb-3 rounded-xl border border-slate-100 p-2 dark:border-slate-600">
                   <p className="px-2 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Switch identity</p>

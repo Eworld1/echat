@@ -32,7 +32,6 @@ import { runTopBackAction, useBackButton } from './hooks/useBackButton';
 import { EchatV2App } from './components/EchatV2App';
 import { EchatV2Boundary } from './components/EchatV2Boundary';
 import { useEchatTheme } from './hooks/useEchatTheme';
-import { TryNewEchatBanner } from './components/TryNewEchatBanner';
 
 const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard' };
 
@@ -302,7 +301,6 @@ export function MainApp() {
 
         {/* Central Stage */}
         <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
-          {currentView === 'feed' && <TryNewEchatBanner/>}
           {currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
