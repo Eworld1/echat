@@ -6,6 +6,9 @@ import { api } from '../services/api';
 import { LiveStream, LiveComment } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
+import { addLiveComment, blockLiveUser, deleteLiveComment, listenLiveComments, timeoutLiveUser } from '../services/liveDiscovery';
+import { LiveUserActions } from './LiveUserActions';
+import { Ban, MoreVertical, Trash2 } from 'lucide-react';
 // @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
 import { Room, RoomEvent, Track } from 'livekit-client';
 import {
@@ -45,6 +48,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   const [showCaptions, setShowCaptions] = useState(true);
   const [captionSize, setCaptionSize] = useState<'sm' | 'base' | 'lg'>('base');
   const [liveCaption, setLiveCaption] = useState('');
+  const [commentMenuId, setCommentMenuId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const queuedCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
@@ -155,7 +159,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   // Socket listeners for real-time live events
   useEffect(() => {
     const unsubComment = onLiveComment((comment) => {
-      setComments(prev => [...prev.slice(-50), comment]);
+      setComments(prev => prev.some(item => item.id === comment.id) ? prev : [...prev.slice(-50), comment]);
     });
 
     const unsubReaction = onLiveReaction((data) => {
@@ -187,6 +191,8 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     };
   }, [currentStream.id, onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onClose]);
 
+  useEffect(() => listenLiveComments(currentStream.id, setComments, error => console.warn('[Live chat] Could not load comments:', error.code)), [currentStream.id]);
+
   useEffect(() => onLiveCaption(data => { if (data.streamId === currentStream.id) setLiveCaption(data.text); }), [onLiveCaption, currentStream.id]);
 
   // Scroll to latest comment
@@ -196,13 +202,22 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
 
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentInput.trim()) return;
+    if (!commentInput.trim() || !user) return;
     try {
-      await api.sendLiveComment(commentInput.trim());
+      await addLiveComment(currentStream.id, { userId: user.id, userName: user.name, userAvatar: user.avatar || '', text: commentInput.trim().slice(0, 500), createdAt: Date.now() });
       setCommentInput('');
     } catch (err) {
       console.error('Failed to send comment:', err);
     }
+  };
+
+  const moderateComment = async (comment: LiveComment, action: 'delete' | 'timeout' | 'block') => {
+    try {
+      if (action === 'delete') await deleteLiveComment(currentStream.id, comment.id);
+      if (action === 'timeout' && user) await timeoutLiveUser(currentStream.id, user.id, comment.userId, 10);
+      if (action === 'block' && user) await blockLiveUser(user.id, comment.userId);
+      setCommentMenuId(null);
+    } catch (error) { alert(error instanceof Error ? error.message : 'Could not moderate this comment.'); }
   };
 
   const handleSendReaction = (emoji: string) => {
@@ -251,6 +266,8 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
           </div>
 
           <div className="flex items-center gap-2.5">
+            <span className="hidden rounded-full bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-200 sm:inline">{liveData.category || 'Just Chatting'}</span>
+            <LiveUserActions targetUserId={liveData.hostId} targetName={liveData.hostName} streamId={liveData.id} compact actionsOnly onBlocked={onClose}/>
             <div className="flex items-center gap-1 bg-slate-800/80 px-2.5 py-1 rounded-full text-xs font-semibold text-slate-200 border border-slate-700">
               <Users size={13} className="text-rose-400" />
               <span>{liveData.viewersCount || 1} watching</span>
@@ -356,12 +373,13 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
 
             <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
               {comments.map(c => (
-                <div key={c.id} className="text-xs bg-slate-800/70 p-2.5 rounded-xl border border-slate-800 flex items-start gap-2.5">
+                <div key={c.id} className="relative text-xs bg-slate-800/70 p-2.5 rounded-xl border border-slate-800 flex items-start gap-2.5">
                   <img src={c.userAvatar} alt={c.userName} className="w-6 h-6 rounded-full object-cover shrink-0" />
                   <div className="min-w-0">
                     <span className="font-bold text-rose-400 mr-1.5">{c.userName}:</span>
                     <span className="text-slate-200">{c.text}</span>
                   </div>
+                  {user?.id === liveData.hostId ? <><button type="button" aria-label="Moderate chat message" onClick={() => setCommentMenuId(id => id === c.id ? null : c.id)} className="ml-auto grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-white/10"><MoreVertical size={15}/></button>{commentMenuId === c.id && <div className="absolute right-2 top-9 z-20 w-48 rounded-xl border border-slate-700 bg-slate-950 p-1.5 shadow-xl"><button type="button" onClick={() => void moderateComment(c, 'delete')} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold text-white hover:bg-white/10"><Trash2 size={14}/>Delete message</button><button type="button" onClick={() => void moderateComment(c, 'timeout')} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold text-white hover:bg-white/10">Timeout 10 minutes</button><button type="button" onClick={() => void moderateComment(c, 'block')} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold text-rose-300 hover:bg-white/10"><Ban size={14}/>Block user</button></div>}</> : <LiveUserActions targetUserId={c.userId} targetName={c.userName} streamId={currentStream.id} compact actionsOnly onBlocked={() => setComments(items => items.filter(item => item.userId !== c.userId))}/>}
                 </div>
               ))}
               <div ref={commentsEndRef} />

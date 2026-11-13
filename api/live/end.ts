@@ -12,7 +12,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     const snapshot = streamId ? await lives.doc(streamId).get() : await lives.where('hostId', '==', user.uid).where('isActive', '==', true).limit(1).get().then(result => result.docs[0]);
     if (!snapshot?.exists) return sendJson(res, 404, { error: 'Active live stream not found.', code: 'live-not-found' });
     const data = snapshot.data() || {};
-    if (data.hostId !== user.uid && user.role !== 'super_admin') return sendJson(res, 403, { error: 'You cannot end another user’s live stream.', code: 'not-live-host' });
+    if (data.hostId !== user.uid && user.role !== 'super_admin' && user.role !== 'admin') return sendJson(res, 403, { error: 'You cannot end another user’s live stream.', code: 'not-live-host' });
     const liveKitRoom = String(data.liveKitRoom || '');
     if (liveKitRoom) {
       const liveKit = requireLiveKit();

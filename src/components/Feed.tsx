@@ -8,7 +8,7 @@ import { Post, User, LiveStream } from '../types';
 import { StoriesBar } from './StoriesBar';
 import { PostCard } from './PostCard';
 import { CreatePostModal } from './CreatePostModal';
-import { LiveFeedBanner } from './LiveFeedBanner';
+import { LiveDiscoveryFeed } from './LiveDiscoveryFeed';
 import { BirthdayCard } from './BirthdayCard';
 import { Video, Image, Smile, Sparkles } from 'lucide-react';
 
@@ -91,13 +91,7 @@ export const Feed: React.FC<FeedProps> = ({
     <div className="max-w-[620px] mx-auto pb-16 space-y-4" onTouchStart={event => { touchStartY.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={handleTouchEnd}>
       <div className="xl:hidden"><BirthdayCard onViewProfile={onViewProfile} onSendMessage={onOpenChat} /></div>
       {isRefreshing && <p className="py-1 text-center text-xs font-semibold text-blue-600">Refreshing feed…</p>}
-      {/* Active Live Stream Banner */}
-      {liveStream && (
-        <LiveFeedBanner
-          stream={liveStream}
-          onWatch={() => onWatchLive(liveStream)}
-        />
-      )}
+      <LiveDiscoveryFeed onWatchLive={onWatchLive} onOpenGoLive={onOpenGoLive} legacyStream={liveStream} />
 
       {/* 24-Hour Stories Reel */}
       <StoriesBar onOpenChatWithUser={onOpenChat} />

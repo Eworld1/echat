@@ -810,11 +810,11 @@ export const api = {
     return readResponse<{ live: LiveStream | null }>(res);
   },
 
-  async startLive(title?: string, taggedPageIds: string[] = []): Promise<{ success: boolean; live: LiveStream; liveKitUrl?: string; liveKitToken?: string }> {
+  async startLive(title?: string, taggedPageIds: string[] = [], options: { category?: string; location?: string } = {}): Promise<{ success: boolean; live: LiveStream; liveKitUrl?: string; liveKitToken?: string }> {
     const res = await fetch(apiUrl('/api/live/start'), {
       method: 'POST',
       headers: await getLiveHeaders(),
-      body: JSON.stringify({ title, taggedPageIds })
+      body: JSON.stringify({ title, taggedPageIds, ...options })
     });
     return readResponse(res, 'Failed to start live stream');
   },

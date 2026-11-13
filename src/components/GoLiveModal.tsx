@@ -4,7 +4,10 @@ import { useSocket } from '../context/SocketContext';
 import { liveRtcConfig } from '../utils/liveRtc';
 import { api } from '../services/api';
 import { auth } from '../services/firebase';
-import { LiveStream, LiveComment } from '../types';
+import { LiveStream, LiveComment, LiveCategory, LiveLocation } from '../types';
+import { addLiveComment, blockLiveUser, deleteLiveComment, listenLiveComments, LIVE_CATEGORIES, LIVE_LOCATIONS, timeoutLiveUser } from '../services/liveDiscovery';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../services/firebase';
 import { VerifiedBadge } from './VerifiedBadge';
 import {
   Video,
@@ -24,7 +27,10 @@ import {
   Flame,
   ThumbsUp,
   Smile,
-  Check
+  Check,
+  Trash2,
+  Ban,
+  MoreVertical
   , Captions
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
@@ -54,6 +60,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveSignal, sendLiveCaption, socket } = useSocket();
 
   const [streamTitle, setStreamTitle] = useState(`${user?.name || 'User'} is Live on EChat! 🔥`);
+  const [streamCategory, setStreamCategory] = useState<LiveCategory>('Just Chatting');
+  const [streamLocation, setStreamLocation] = useState<LiveLocation | ''>('');
+  const [streamUnderReview, setStreamUnderReview] = useState(false);
+  const [commentMenuId, setCommentMenuId] = useState<string | null>(null);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [currentSession, setCurrentSession] = useState<LiveStream | null>(null);
   const [streamDuration, setStreamDuration] = useState(0);
@@ -445,7 +455,11 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         alert('Allow camera access before starting a live video.');
         return;
       }
-      const res = await api.startLive(streamTitle, taggedPageIds);
+      if (!streamLocation) {
+        setLiveStartError('Choose a location before starting your live broadcast.');
+        return;
+      }
+      const res = await api.startLive(streamTitle, taggedPageIds, { category: streamCategory, location: streamLocation });
       if (res.success && res.live) {
         const liveKitInfo = res as typeof res & { liveKitUrl?: string; liveKitToken?: string };
         if (!liveKitInfo.liveKitUrl || !liveKitInfo.liveKitToken) throw new Error('The live server did not return a LiveKit connection token.');
@@ -493,6 +507,19 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (!isBroadcasting || !currentSession?.id) { setStreamUnderReview(false); return; }
+    return onSnapshot(doc(db, 'liveStreams', currentSession.id), snapshot => {
+      const underReview = snapshot.data()?.underReview === true;
+      setStreamUnderReview(underReview);
+    }, error => console.warn('[Go Live] Could not update review status:', error.code));
+  }, [isBroadcasting, currentSession?.id]);
+
+  useEffect(() => {
+    if (!isBroadcasting || !currentSession?.id) return;
+    return listenLiveComments(currentSession.id, setComments, error => console.warn('[Go Live] Live chat updates unavailable:', error.code));
+  }, [isBroadcasting, currentSession?.id]);
+
   const changeVideoQuality = async (quality: '360p' | '720p' | '1080p' | '4k') => {
     setVideoQuality(quality);
     const track = mediaStreamRef.current?.getVideoTracks()[0];
@@ -509,13 +536,23 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentInput.trim()) return;
+    if (!commentInput.trim() || !currentSession?.id || !user) return;
     try {
-      await api.sendLiveComment(commentInput.trim());
+      await addLiveComment(currentSession.id, { userId: user.id, userName: user.name, userAvatar: user.avatar || '', text: commentInput.trim().slice(0, 500), createdAt: Date.now() });
       setCommentInput('');
     } catch (err) {
       console.error('Failed to send comment:', err);
     }
+  };
+
+  const moderateLiveComment = async (comment: LiveComment, action: 'delete' | 'timeout' | 'block') => {
+    if (!currentSession?.id) return;
+    try {
+      if (action === 'delete') await deleteLiveComment(currentSession.id, comment.id);
+      if (action === 'timeout') await timeoutLiveUser(currentSession.id, user?.id || '', comment.userId, 10);
+      if (action === 'block' && user?.id) await blockLiveUser(user.id, comment.userId);
+      setCommentMenuId(null);
+    } catch (error) { alert(error instanceof Error ? error.message : 'Could not moderate this comment.'); }
   };
 
   const formatDuration = (sec: number) => {
@@ -734,11 +771,24 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                       placeholder="What is your live stream about?"
                       className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-rose-500"
                     />
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Category
+                        <select value={streamCategory} onChange={event => setStreamCategory(event.target.value as LiveCategory)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-2 text-xs normal-case text-white">
+                          {LIVE_CATEGORIES.map(item => <option key={item} value={item}>{item}</option>)}
+                        </select>
+                      </label>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Location
+                        <select value={streamLocation} onChange={event => setStreamLocation(event.target.value as LiveLocation | '')} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-2 text-xs normal-case text-white">
+                          <option value="">Choose city</option>{LIVE_LOCATIONS.map(item => <option key={item} value={item}>{item}</option>)}
+                        </select>
+                      </label>
+                    </div>
                   </div>
                 ) : (
                   <div>
                     <h4 className="text-xs font-bold text-white truncate">{streamTitle}</h4>
-                    <p className="text-[11px] text-slate-400">Live audience interaction feed</p>
+                    <p className="text-[11px] text-slate-400">{currentSession?.category || streamCategory} · {currentSession?.location || streamLocation || 'Location not set'} · Live audience interaction feed</p>
+                    {streamUnderReview && <p role="status" className="mt-2 rounded-lg bg-amber-500/15 px-2.5 py-2 text-xs font-bold text-amber-300">Your live is under review after reports from viewers.</p>}
                   </div>
                 )}
               </div>
@@ -780,12 +830,14 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                   </div>
                 ) : (
                   comments.map(c => (
-                    <div key={c.id} className="text-xs bg-slate-800/60 p-2 rounded-xl border border-slate-800 flex items-start gap-2">
+                    <div key={c.id} className="relative text-xs bg-slate-800/60 p-2 rounded-xl border border-slate-800 flex items-start gap-2">
                       <img src={c.userAvatar} alt={c.userName} className="w-6 h-6 rounded-full object-cover shrink-0" />
                       <div className="min-w-0">
                         <span className="font-bold text-rose-400 mr-1.5">{c.userName}:</span>
                         <span className="text-slate-200">{c.text}</span>
                       </div>
+                      <button type="button" aria-label={`Moderate ${c.userName}'s message`} onClick={() => setCommentMenuId(id => id === c.id ? null : c.id)} className="ml-auto grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white"><MoreVertical size={15}/></button>
+                      {commentMenuId === c.id && <div className="absolute right-2 top-9 z-20 w-48 rounded-xl border border-slate-700 bg-slate-950 p-1.5 shadow-xl"><button type="button" onClick={() => void moderateLiveComment(c, 'delete')} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold text-white hover:bg-white/10"><Trash2 size={14}/>Delete message</button><button type="button" onClick={() => void moderateLiveComment(c, 'timeout')} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold text-white hover:bg-white/10"><Clock size={14}/>Timeout 10 minutes</button><button type="button" onClick={() => void moderateLiveComment(c, 'block')} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold text-rose-300 hover:bg-white/10"><Ban size={14}/>Block user</button></div>}
                     </div>
                   ))
                 )}
