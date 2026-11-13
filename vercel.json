@@ -11,7 +11,7 @@
   ],
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "npm install --legacy-peer-deps --package-lock=false",
+  "installCommand": "npm install --legacy-peer-deps",
   "headers": [
     {
       "source": "/sw.js",
