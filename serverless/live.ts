@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import { importX509, jwtVerify, type JWTPayload } from 'jose';
 
 export type ApiRequest = IncomingMessage & { body?: any; query?: Record<string, string | string[] | undefined> };
 export type ApiResponse = ServerResponse;
@@ -46,7 +46,6 @@ if (rawCredential) {
 }
 
 const adminApp = getApps()[0] || initializeApp({ projectId, ...(serviceCredential ? { credential: serviceCredential } : {}) });
-const auth = getAuth(adminApp);
 const firestore = getFirestore(adminApp, process.env.FIREBASE_DATABASE_ID || 'ai-studio-echat-134f096e-b18d-4bb7-870d-d4f7fa96d17d');
 const lives = firestore.collection('liveStreams');
 const liveKitUrl = (process.env.LIVEKIT_URL || '').trim();
@@ -70,6 +69,50 @@ function getHeader(req: ApiRequest, key: string): string {
   return Array.isArray(value) ? value[0] || '' : value || '';
 }
 
+type FirebaseIdToken = JWTPayload & {
+  email?: string;
+  email_verified?: boolean;
+  name?: string;
+  auth_time?: number;
+};
+
+let firebaseCerts: { values: Record<string, string>; expiresAt: number } | undefined;
+
+async function getFirebaseCerts(): Promise<Record<string, string>> {
+  if (firebaseCerts && firebaseCerts.expiresAt > Date.now()) return firebaseCerts.values;
+
+  const response = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+  if (!response.ok) throw Object.assign(new Error('Could not verify the Firebase sign-in token.'), { status: 503, code: 'firebase-certificates-unavailable' });
+
+  const values = await response.json() as Record<string, string>;
+  const cacheControl = response.headers.get('cache-control') || '';
+  const maxAge = Number(cacheControl.match(/max-age=(\d+)/i)?.[1] || 3600);
+  firebaseCerts = { values, expiresAt: Date.now() + Math.max(60, maxAge) * 1000 };
+  return values;
+}
+
+async function verifyFirebaseIdToken(token: string): Promise<FirebaseIdToken & { uid: string }> {
+  const peek = JSON.parse(Buffer.from(token.split('.')[0] || '', 'base64url').toString('utf8')) as { kid?: string; alg?: string };
+  if (peek.alg !== 'RS256' || !peek.kid) throw Object.assign(new Error('The Firebase sign-in token is invalid.'), { status: 401, code: 'invalid-token' });
+  const certificates = await getFirebaseCerts();
+  const certificate = certificates[peek.kid];
+  if (!certificate) {
+    firebaseCerts = undefined;
+    throw Object.assign(new Error('The Firebase signing key is no longer valid. Please sign in again.'), { status: 401, code: 'unknown-signing-key' });
+  }
+
+  const key = await importX509(certificate, 'RS256');
+  const { payload } = await jwtVerify(token, key, {
+    algorithms: ['RS256'],
+    audience: projectId,
+    issuer: `https://securetoken.google.com/${projectId}`
+  });
+  if (typeof payload.sub !== 'string' || !payload.sub || payload.sub.length > 128) {
+    throw Object.assign(new Error('The Firebase sign-in token has no valid user.'), { status: 401, code: 'invalid-token-subject' });
+  }
+  return { ...payload, uid: payload.sub } as FirebaseIdToken & { uid: string };
+}
+
 export function sendJson(res: ApiResponse, status: number, data: unknown): void {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -77,12 +120,18 @@ export function sendJson(res: ApiResponse, status: number, data: unknown): void 
   res.end(JSON.stringify(data));
 }
 
-export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser; decoded: Awaited<ReturnType<typeof auth.verifyIdToken>> }> {
+export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser; decoded: FirebaseIdToken & { uid: string } }> {
   const authorization = getHeader(req, 'authorization').replace(/^Bearer\s+/i, '');
   const token = getHeader(req, 'x-firebase-id-token') || getHeader(req, 'x-live-auth-token') || authorization;
   if (!token) throw Object.assign(new Error('Sign in to use Go Live.'), { status: 401, code: 'missing-token' });
 
-  const decoded = await auth.verifyIdToken(token, true);
+  let decoded: FirebaseIdToken & { uid: string };
+  try {
+    decoded = await verifyFirebaseIdToken(token);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'status' in error) throw error;
+    throw Object.assign(new Error('The Firebase sign-in token is invalid or expired. Please sign in again.'), { status: 401, code: 'invalid-token' });
+  }
   const email = String(decoded.email || '').trim().toLowerCase();
   const developerUid = String(process.env.SUPER_ADMIN_UID || process.env.VITE_SUPER_ADMIN_UID || '').trim();
   const developerEmail = String(process.env.SUPER_ADMIN_EMAIL || process.env.VITE_SUPER_ADMIN_EMAIL || 'eldermoses89@gmail.com').trim().toLowerCase();
