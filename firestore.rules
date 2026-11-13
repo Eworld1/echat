@@ -13,6 +13,33 @@ service cloud.firestore {
           (profile.get('role', '') == 'developer' && profile.get('isOfficialDeveloper', false) == true));
     }
 
+    function isAdmin() {
+      return signedIn() && (request.auth.token.email == 'eldermoses89@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['admin', 'super_admin', 'developer']));
+    }
+
+    function isBlockedPair(first, second) {
+      return exists(/databases/$(database)/documents/blocks/$(first + '_' + second));
+    }
+
+    function liveHost(streamId) {
+      return get(/databases/$(database)/documents/liveStreams/$(streamId)).data.get('hostId', '');
+    }
+
+    function reportCounterUpdate(streamId) {
+      let reportPath = /databases/$(database)/documents/reports/$(streamId + '_' + request.auth.uid);
+      let nextCount = resource.data.get('reportCount', 0) + 1;
+      return signedIn() && existsAfter(reportPath) &&
+        getAfter(reportPath).data.get('reporterId', '') == request.auth.uid &&
+        getAfter(reportPath).data.get('streamId', '') == streamId &&
+        getAfter(reportPath).data.get('targetUserId', '') == resource.data.get('hostId', '') &&
+        getAfter(reportPath).data.get('status', '') == 'pending' &&
+        request.resource.data.get('reportCount', 0) == nextCount &&
+        request.resource.data.get('underReview', false) == (nextCount >= 3) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount', 'underReview']);
+    }
+
     function liveProfile(uid) {
       let profilePath = /databases/$(database)/documents/users/$(uid);
       return exists(profilePath) ? get(profilePath).data : {};
@@ -32,7 +59,7 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts';
     }
 
     match /users/{userId} {
@@ -48,7 +75,8 @@ service cloud.firestore {
         request.resource.data.get('liveAccess', null) == resource.data.get('liveAccess', null) &&
         request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null) &&
         request.resource.data.get('isOfficialDeveloper', null) == resource.data.get('isOfficialDeveloper', null) &&
-        request.resource.data.get('isBlocked', null) == resource.data.get('isBlocked', null);
+        request.resource.data.get('isBlocked', null) == resource.data.get('isBlocked', null) ||
+        (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBlocked', 'liveAccess']));
 
       match /settings/{settingId} {
         allow read, write: if true;
@@ -70,8 +98,80 @@ service cloud.firestore {
       allow update: if request.auth != null &&
         resource.data.get('hostId', '') == request.auth.uid &&
         request.resource.data.get('hostId', '') == resource.data.get('hostId', '') &&
-        canCreateLiveStream(request.auth.uid);
+        canCreateLiveStream(request.auth.uid) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['reportCount', 'underReview']) ||
+        isAdmin() || reportCounterUpdate(streamId);
       allow delete: if false;
+
+      match /comments/{commentId} {
+        function streamIsActive() {
+          return get(/databases/$(database)/documents/liveStreams/$(streamId)).data.get('isActive', false) == true;
+        }
+        function canSeeLiveChat() {
+          let host = liveHost(streamId);
+          return signedIn() && streamIsActive() && !isBlockedPair(host, request.auth.uid) && !isBlockedPair(request.auth.uid, host);
+        }
+        allow read: if canSeeLiveChat();
+        allow create: if canSeeLiveChat() && request.resource.data.get('userId', '') == request.auth.uid &&
+          request.resource.data.get('text', '') is string && request.resource.data.get('text', '').size() > 0 && request.resource.data.get('text', '').size() <= 500 &&
+          (!exists(/databases/$(database)/documents/liveTimeouts/$(streamId + '_' + request.auth.uid)) ||
+            get(/databases/$(database)/documents/liveTimeouts/$(streamId + '_' + request.auth.uid)).data.get('expiresAt', 0) <= request.time.toMillis());
+        allow update: if false;
+        allow delete: if signedIn() && (liveHost(streamId) == request.auth.uid || isAdmin());
+      }
+    }
+
+    match /followers/{followId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.get('followerId', '') == request.auth.uid &&
+        request.resource.data.get('followingId', '') != request.auth.uid &&
+        followId == request.auth.uid + '_' + request.resource.data.get('followingId', '') &&
+        request.resource.data.get('createdAt', 0) is int &&
+        !isBlockedPair(request.auth.uid, request.resource.data.get('followingId', '')) &&
+        !isBlockedPair(request.resource.data.get('followingId', ''), request.auth.uid);
+      allow delete: if signedIn() && (resource.data.get('followerId', '') == request.auth.uid || resource.data.get('followingId', '') == request.auth.uid);
+      allow update: if false;
+    }
+
+    match /reports/{reportId} {
+      allow create: if signedIn() && request.resource.data.get('reporterId', '') == request.auth.uid &&
+        request.resource.data.get('targetUserId', '') != request.auth.uid &&
+        request.resource.data.get('status', '') == 'pending' &&
+        request.resource.data.get('reason', '') in ['Spam', 'Harassment', 'Inappropriate / Sexual Content', 'Violence', 'False Information'] &&
+        ((request.resource.data.get('streamId', null) == null && reportId == 'profile_' + request.resource.data.get('targetUserId', '') + '_' + request.auth.uid) ||
+          (request.resource.data.get('streamId', '') is string &&
+            reportId == request.resource.data.get('streamId', '') + '_' + request.auth.uid &&
+            get(/databases/$(database)/documents/liveStreams/$(request.resource.data.get('streamId', ''))).data.get('hostId', '') == request.resource.data.get('targetUserId', '')));
+      allow get: if signedIn() && (!exists(/databases/$(database)/documents/reports/$(reportId)) || resource.data.get('reporterId', '') == request.auth.uid || isAdmin());
+      allow list: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /blocks/{blockId} {
+      allow get: if signedIn() && (!exists(/databases/$(database)/documents/blocks/$(blockId)) || resource.data.get('blockerId', '') == request.auth.uid || resource.data.get('blockedId', '') == request.auth.uid);
+      allow list: if signedIn() && (resource.data.get('blockerId', '') == request.auth.uid || resource.data.get('blockedId', '') == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.get('blockerId', '') == request.auth.uid &&
+        request.resource.data.get('blockedId', '') != request.auth.uid &&
+        blockId == request.auth.uid + '_' + request.resource.data.get('blockedId', '');
+      allow delete: if signedIn() && resource.data.get('blockerId', '') == request.auth.uid;
+      allow update: if false;
+    }
+
+    match /liveTimeouts/{timeoutId} {
+      allow read: if signedIn() && (resource.data.get('userId', '') == request.auth.uid || resource.data.get('hostId', '') == request.auth.uid || isAdmin());
+      allow create: if signedIn() && request.resource.data.get('userId', '') != request.auth.uid &&
+        timeoutId == request.resource.data.get('streamId', '') + '_' + request.resource.data.get('userId', '') &&
+        liveHost(request.resource.data.get('streamId', '')) == request.auth.uid &&
+        request.resource.data.get('expiresAt', 0) > request.time.toMillis() &&
+        request.resource.data.get('expiresAt', 0) <= request.time.toMillis() + 86400000;
+      allow delete: if signedIn() && resource.data.get('hostId', '') == request.auth.uid;
+      allow update: if signedIn() && resource.data.get('hostId', '') == request.auth.uid &&
+        request.resource.data.get('hostId', '') == request.auth.uid &&
+        request.resource.data.get('streamId', '') == resource.data.get('streamId', '') &&
+        request.resource.data.get('userId', '') == resource.data.get('userId', '') &&
+        request.resource.data.get('expiresAt', 0) > request.time.toMillis() &&
+        request.resource.data.get('expiresAt', 0) <= request.time.toMillis() + 86400000;
     }
   }
 }

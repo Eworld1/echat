@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { setChatSoundVolume } from '../utils/sounds';
 import { EchatThemeToggle } from '../components/EchatThemeToggle';
+import { listenBlockIds, unblockLiveUser } from '../services/liveDiscovery';
 import {
   Settings as SettingsIcon,
   Shield,
@@ -38,6 +39,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
   const [whoCanCallMe, setWhoCanCallMe] = useState<'everyone' | 'friends' | 'nobody'>('everyone');
   const [is2FAEnabled, setIs2FAEnabled] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
+  const [liveBlockedUsers, setLiveBlockedUsers] = useState<string[]>([]);
   const [privacySaved, setPrivacySaved] = useState(false);
 
   // Tab 2: General Settings State
@@ -109,6 +111,11 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
       }
     }
   }, [user]);
+
+  useEffect(() => {
+    if (!user?.id) { setLiveBlockedUsers([]); return; }
+    return listenBlockIds(user.id, setLiveBlockedUsers, error => console.warn('[Settings] Could not load live blocks:', error.message));
+  }, [user?.id]);
 
   // Save Privacy Settings
   const handleSavePrivacy = async () => {
@@ -426,6 +433,12 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                   ))}
                 </div>
               )}
+            </div>
+
+            <div className="pt-4 border-t border-slate-100">
+              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2 mb-2"><UserX size={16} className="text-rose-600"/>Live safety blocks ({liveBlockedUsers.length})</h4>
+              <p className="mb-3 text-xs text-slate-500">People you block here cannot follow you, view your live broadcasts, or chat in them.</p>
+              {liveBlockedUsers.length ? <div className="space-y-2">{liveBlockedUsers.map(id => <div key={id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-xs"><span className="truncate font-semibold text-slate-700">User ID: {id}</span><button type="button" onClick={() => user && void unblockLiveUser(user.id, id)} className="shrink-0 font-bold text-blue-700 hover:text-blue-900">Unblock</button></div>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-center text-xs text-slate-400">No live safety blocks.</p>}
             </div>
 
             <div className="pt-4 flex items-center gap-3">

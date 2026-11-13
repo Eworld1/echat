@@ -3,13 +3,17 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   runTransaction,
   setDoc,
+  updateDoc,
   where,
+  writeBatch,
   type Unsubscribe
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -24,10 +28,10 @@ const livesRef = collection(db, 'liveStreams');
 const pairId = (first: string, second: string) => `${first}_${second}`;
 
 export function listenLiveStreams(onStreams: (streams: LiveStream[]) => void, onError: (error: Error) => void): Unsubscribe {
-  return onSnapshot(livesRef, snapshot => {
+  return onSnapshot(query(livesRef, where('isActive', '==', true)), snapshot => {
     const streams = snapshot.docs
       .map(item => ({ ...item.data(), id: item.id } as LiveStream))
-      .filter(stream => stream.isActive && !stream.underReview)
+      .filter(stream => stream.isActive)
       .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
     onStreams(streams);
   }, onError);
@@ -65,8 +69,8 @@ export function listenFollowerCount(userId: string, onCount: (count: number) => 
 export async function followCreator(followerId: string, followingId: string): Promise<void> {
   if (followerId === followingId) throw new Error('You cannot follow your own account.');
   const [blockedByMe, blockedMe] = await Promise.all([
-    import('firebase/firestore').then(({ getDoc }) => getDoc(doc(db, 'blocks', pairId(followerId, followingId)))),
-    import('firebase/firestore').then(({ getDoc }) => getDoc(doc(db, 'blocks', pairId(followingId, followerId))))
+    getDoc(doc(db, 'blocks', pairId(followerId, followingId))),
+    getDoc(doc(db, 'blocks', pairId(followingId, followerId)))
   ]);
   if (blockedByMe.exists() || blockedMe.exists()) throw new Error('Following is unavailable for this account.');
   await setDoc(doc(db, 'followers', pairId(followerId, followingId)), { followerId, followingId, createdAt: Date.now() });
@@ -78,7 +82,8 @@ export async function unfollowCreator(followerId: string, followingId: string): 
 
 export async function blockLiveUser(blockerId: string, blockedId: string): Promise<void> {
   if (!blockerId || blockerId === blockedId) throw new Error('You cannot block this account.');
-  await setDoc(doc(db, 'blocks', pairId(blockerId, blockedId)), { blockerId, blockedId, createdAt: Date.now(), source: 'live' });
+  const blockRef = doc(db, 'blocks', pairId(blockerId, blockedId));
+  if (!(await getDoc(blockRef)).exists()) await setDoc(blockRef, { blockerId, blockedId, createdAt: Date.now(), source: 'live' });
   await deleteDoc(doc(db, 'followers', pairId(blockerId, blockedId))).catch(() => {});
   await deleteDoc(doc(db, 'followers', pairId(blockedId, blockerId))).catch(() => {});
 }
@@ -136,6 +141,15 @@ export function listenLiveNotifications(userId: string, onCount: (count: number)
   });
 }
 
+export async function markLiveNotificationsRead(userId: string): Promise<void> {
+  const snapshot = await getDocs(query(collection(db, 'notifications'), where('userId', '==', userId)));
+  const unread = snapshot.docs.filter(item => item.data().type === 'live_stream' && item.data().read !== true);
+  if (!unread.length) return;
+  const batch = writeBatch(db);
+  unread.slice(0, 450).forEach(item => batch.update(item.ref, { read: true }));
+  await batch.commit();
+}
+
 export function listenAdminLiveReports(onReports: (reports: Array<{ id: string; reporterId: string; targetUserId: string; streamId?: string; reason: string; createdAt: number; status: string }>) => void, onError: (error: Error) => void): Unsubscribe {
   return onSnapshot(query(collection(db, 'reports'), orderBy('createdAt', 'desc'), limit(100)), snapshot => {
     onReports(snapshot.docs.map(item => ({ id: item.id, ...item.data() } as { id: string; reporterId: string; targetUserId: string; streamId?: string; reason: string; createdAt: number; status: string })).filter(item => item.status === 'pending'));
@@ -143,11 +157,18 @@ export function listenAdminLiveReports(onReports: (reports: Array<{ id: string; 
 }
 
 export async function resolveLiveReport(reportId: string, status: 'reviewed' | 'dismissed'): Promise<void> {
-  const { updateDoc } = await import('firebase/firestore');
-  await updateDoc(doc(db, 'reports', reportId), { status, reviewedAt: Date.now() });
+  const reportRef = doc(db, 'reports', reportId);
+  const report = await getDoc(reportRef);
+  const streamId = report.data()?.streamId;
+  await updateDoc(reportRef, { status, reviewedAt: Date.now() });
+  if (status === 'dismissed' && typeof streamId === 'string' && streamId) {
+    const pending = await getDocs(query(collection(db, 'reports'), where('streamId', '==', streamId)));
+    if (!pending.docs.some(item => item.id !== reportId && item.data().status === 'pending')) {
+      await updateDoc(doc(db, 'liveStreams', streamId), { underReview: false, reviewedAt: Date.now() });
+    }
+  }
 }
 
 export async function banLiveUser(userId: string): Promise<void> {
-  const { updateDoc } = await import('firebase/firestore');
   await updateDoc(doc(db, 'users', userId), { isBlocked: true, liveAccess: 'blocked' });
 }

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, Eye, MapPin, Radio, Search, Users } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import type { LiveCategory, LiveLocation, LiveStream } from '../types';
-import { LIVE_CATEGORIES, LIVE_LOCATIONS, listenBlockedByIds, listenBlockIds, listenFollowingIds, listenLiveNotifications, listenLiveStreams } from '../services/liveDiscovery';
+import { LIVE_CATEGORIES, LIVE_LOCATIONS, listenBlockedByIds, listenBlockIds, listenFollowingIds, listenLiveNotifications, listenLiveStreams, markLiveNotificationsRead } from '../services/liveDiscovery';
 import { LiveUserActions } from './LiveUserActions';
 
 interface Props { onWatchLive: (stream: LiveStream) => void; onOpenGoLive: () => void; legacyStream?: LiveStream | null; }
@@ -40,6 +40,7 @@ export const LiveDiscoveryFeed: React.FC<Props> = ({ onWatchLive, onOpenGoLive, 
     const term = search.trim().toLowerCase();
     const allStreams = legacyStream?.isActive && !streams.some(item => item.id === legacyStream.id) ? [...streams, legacyStream] : streams;
     return allStreams.filter(stream => {
+      if (stream.underReview) return false;
       if (user?.id && (stream.hostId === user.id || blockedIds.includes(stream.hostId) || blockedByIds.includes(stream.hostId))) return false;
       if (feed === 'following' && !followingIds.includes(stream.hostId)) return false;
       if (category !== 'All' && (stream.category || 'Just Chatting') !== category) return false;
@@ -53,7 +54,7 @@ export const LiveDiscoveryFeed: React.FC<Props> = ({ onWatchLive, onOpenGoLive, 
   return <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4" aria-label="Live discovery">
     <div className="flex flex-wrap items-center gap-2">
       <h2 className="mr-auto flex items-center gap-2 text-base font-extrabold text-slate-900"><Radio size={18} className="text-rose-600"/>Live Now</h2>
-      {notificationCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700"><Bell size={13}/>{notificationCount} new</span>}
+      {notificationCount > 0 && <button type="button" onClick={() => user && void markLiveNotificationsRead(user.id)} title="Mark live notifications as read" className="inline-flex min-h-9 items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700"><Bell size={13}/>{notificationCount} new</button>}
       <button type="button" onClick={onOpenGoLive} className="min-h-10 rounded-xl bg-rose-600 px-3 text-sm font-bold text-white hover:bg-rose-700">Go Live</button>
     </div>
     <label className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3"><Search size={17} className="shrink-0 text-slate-500"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stream titles and creators" className="min-w-0 flex-1 bg-transparent text-sm outline-none" aria-label="Search live streams"/></label>

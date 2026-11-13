@@ -8,6 +8,7 @@ import { ReelsViewer } from './ReelsViewer';
 import { ReelThumbnail } from './ReelThumbnail';
 import { useBackButton } from '../hooks/useBackButton';
 import { CreatePostModal } from './CreatePostModal';
+import { LiveUserActions } from './LiveUserActions';
 import { VerifiedBadge } from './VerifiedBadge';
 import {
   Camera,
@@ -307,7 +308,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   user.role === 'developer'
                 );
                 const hasBoosted = Boolean(currentUser && user.boostedBy?.includes(currentUser.id));
-                const followerCount = (friends.length * 8 + 420).toLocaleString();
 
                 return (
                   <>
@@ -331,12 +331,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       
                       <div className="flex items-center gap-3 text-sm text-slate-500 font-medium mt-1 flex-wrap">
                         <span>{friends.length} {friends.length === 1 ? 'friend' : 'friends'}</span>
+                        <span>•</span>
+                        <LiveUserActions targetUserId={user.id} targetName={user.name} showCount countOnly compact />
                         {isDevProfile && (
                           <>
-                            <span>•</span>
-                            <span className="text-purple-700 font-semibold flex items-center gap-1">
-                              <Users size={14} /> {followerCount} Followers
-                            </span>
                             <span>•</span>
                             <span className="text-amber-600 font-semibold flex items-center gap-1">
                               <Rocket size={14} /> {user.boostsCount || 0} Boosts
@@ -381,6 +379,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                         </span>
                       </button>
                     )}
+
+                    {!isOwnProfile && <LiveUserActions targetUserId={user.id} targetName={user.name} />}
 
                     {isOwnProfile ? (
                       <button

@@ -3,6 +3,7 @@ import { AdminUsers } from './admin/AdminUsers';
 import { AdminAnnouncements } from './admin/AdminAnnouncements';
 import { AdminActivity } from './admin/AdminActivity';
 import { LiveAccessAdmin } from './admin/LiveAccessAdmin';
+import { banLiveUser, listenAdminLiveReports, resolveLiveReport } from '../services/liveDiscovery';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -41,12 +42,13 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, onOpenGoLive }) => {
   const { user, isDeveloper, updateUser } = useAuth();
-  const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
+  const canAdmin = Boolean(user && (user.email?.toLowerCase().trim() === 'eldermoses89@gmail.com' || user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const [setupPassword, setSetupPassword] = useState('');
   const [isClaiming, setIsClaiming] = useState(false);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [reportedPosts, setReportedPosts] = useState<Post[]>([]);
+  const [liveReports, setLiveReports] = useState<Array<{ id: string; reporterId: string; targetUserId: string; streamId?: string; reason: string; createdAt: number; status: string }>>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'reports' | 'announce' | 'activity' | 'profile' | 'welcome' | 'liveAccess'>('overview');
   const [pendingLiveRequests, setPendingLiveRequests] = useState(0);
   const [userSearch, setUserSearch] = useState('');
@@ -77,6 +79,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
 
   useEffect(() => {
     if (canAdmin) api.getSiteConfig().then(setWelcomeConfig).catch(err => setErrorMsg(err.message || 'Could not load welcome page settings'));
+  }, [canAdmin]);
+
+  useEffect(() => {
+    if (!canAdmin) { setLiveReports([]); return; }
+    return listenAdminLiveReports(setLiveReports, error => setErrorMsg(error.message || 'Could not load live reports'));
   }, [canAdmin]);
 
   const handleClaimAdmin = async (e: React.FormEvent) => {
@@ -176,6 +183,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
     } catch (err: any) {
       alert(err.message);
     }
+  };
+
+  const handleResolveLiveReport = async (reportId: string, status: 'reviewed' | 'dismissed') => {
+    try { await resolveLiveReport(reportId, status); }
+    catch (err) { setErrorMsg(err instanceof Error ? err.message : 'Could not update live report'); }
+  };
+
+  const handleEndReportedLive = async (report: typeof liveReports[number]) => {
+    if (!report.streamId || !confirm('End this reported live broadcast?')) return;
+    try { await api.stopLive(report.streamId); await handleResolveLiveReport(report.id, 'reviewed'); }
+    catch (err) { setErrorMsg(err instanceof Error ? err.message : 'Could not end live stream'); }
+  };
+
+  const handleBanReportedUser = async (report: typeof liveReports[number]) => {
+    if (!confirm('Block this user and remove their Go Live access?')) return;
+    try {
+      await banLiveUser(report.targetUserId);
+      if (report.streamId) await api.stopLive(report.streamId).catch(() => {});
+      await handleResolveLiveReport(report.id, 'reviewed');
+    } catch (err) { setErrorMsg(err instanceof Error ? err.message : 'Could not block user'); }
   };
 
   const handleSaveDeveloperProfile = async (e: React.FormEvent) => {
@@ -310,8 +337,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
             >
               {icon}
               {label}
-              {id === 'reports' && reportedPosts.length > 0 && (
-                <span className="bg-red-500 text-white px-1.5 rounded-full text-[10px] font-extrabold">{reportedPosts.length}</span>
+              {id === 'reports' && reportedPosts.length + liveReports.length > 0 && (
+                <span className="bg-red-500 text-white px-1.5 rounded-full text-[10px] font-extrabold">{reportedPosts.length + liveReports.length}</span>
               )}
               {id === 'liveAccess' && pendingLiveRequests > 0 && <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-extrabold text-white">{pendingLiveRequests}</span>}
             </button>
@@ -533,6 +560,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
       )}
 
       {activeTab === 'reports' && (
+        <div className="space-y-6">
         <div className="bg-white rounded-3xl p-6 shadow-xs border border-slate-200">
           <div className="mb-6">
             <h3 className="text-base font-bold text-slate-900">Content Moderation Queue</h3>
@@ -586,6 +614,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
               ))}
             </div>
           )}
+        </div>
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs sm:p-6">
+          <div className="mb-4"><h3 className="text-base font-bold text-slate-900">Live reports</h3><p className="text-xs text-slate-500">Review broadcasts and profiles reported by the community.</p></div>
+          {liveReports.length === 0 ? <p className="rounded-xl bg-slate-50 p-6 text-center text-sm text-slate-500">No pending live or profile reports.</p> : <div className="space-y-3">{liveReports.map(report => <article key={report.id} className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/50 p-4 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="text-sm font-bold text-slate-900">{report.streamId ? 'Reported live stream' : 'Reported profile'} · {report.targetUserId}</p><p className="mt-1 text-sm text-amber-800">Reason: {report.reason}</p><p className="mt-1 text-xs text-slate-500">Reported by {report.reporterId} · {new Date(report.createdAt).toLocaleString()}</p></div><div className="flex flex-wrap gap-2">{report.streamId && <button type="button" onClick={() => void handleEndReportedLive(report)} className="min-h-10 rounded-xl bg-rose-600 px-3 text-xs font-bold text-white">End Live</button>}<button type="button" onClick={() => void handleBanReportedUser(report)} className="min-h-10 rounded-xl bg-slate-900 px-3 text-xs font-bold text-white">Block User</button><button type="button" onClick={() => void handleResolveLiveReport(report.id, 'dismissed')} className="min-h-10 rounded-xl border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700">Dismiss</button></div></article>)}</div>}
+        </section>
         </div>
       )}
 

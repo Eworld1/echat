@@ -191,7 +191,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     };
   }, [currentStream.id, onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onClose]);
 
-  useEffect(() => listenLiveComments(currentStream.id, setComments, error => console.warn('[Live chat] Could not load comments:', error.code)), [currentStream.id]);
+  useEffect(() => listenLiveComments(currentStream.id, setComments, error => console.warn('[Live chat] Could not load comments:', error.message)), [currentStream.id]);
 
   useEffect(() => onLiveCaption(data => { if (data.streamId === currentStream.id) setLiveCaption(data.text); }), [onLiveCaption, currentStream.id]);
 

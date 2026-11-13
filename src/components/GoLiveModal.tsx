@@ -517,7 +517,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   useEffect(() => {
     if (!isBroadcasting || !currentSession?.id) return;
-    return listenLiveComments(currentSession.id, setComments, error => console.warn('[Go Live] Live chat updates unavailable:', error.code));
+    return listenLiveComments(currentSession.id, setComments, error => console.warn('[Go Live] Live chat updates unavailable:', error.message));
   }, [isBroadcasting, currentSession?.id]);
 
   const changeVideoQuality = async (quality: '360p' | '720p' | '1080p' | '4k') => {
