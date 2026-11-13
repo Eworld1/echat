@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import type { App } from 'firebase-admin/app';
+import type { CollectionReference, Firestore } from 'firebase-admin/firestore';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { importX509, jwtVerify, type JWTPayload } from 'jose';
 
@@ -33,21 +33,43 @@ export function handleLiveOptions(req: ApiRequest, res: ApiResponse): boolean {
 }
 
 const projectId = (process.env.FIREBASE_PROJECT_ID || 'echat-studio-6e215').trim();
-const rawCredential = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '';
-let serviceCredential: ReturnType<typeof cert> | undefined;
+const rawCredential = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim() || '';
+let adminApp: App | null = null;
+let firestoreInstance: Firestore | null = null;
 if (rawCredential) {
   try {
     const parsed = JSON.parse(rawCredential.startsWith('{') ? rawCredential : Buffer.from(rawCredential, 'base64').toString('utf8'));
     if (typeof parsed.private_key === 'string') parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
-    serviceCredential = cert(parsed);
+    const [appSdk, firestoreSdk] = await Promise.all([import('firebase-admin/app'), import('firebase-admin/firestore')]);
+    const appName = 'echat-vercel-live-service-account';
+    adminApp = appSdk.getApps().find(app => app.name === appName) || appSdk.initializeApp({ projectId, credential: appSdk.cert(parsed) }, appName);
+    firestoreInstance = firestoreSdk.getFirestore(adminApp, process.env.FIREBASE_DATABASE_ID || 'ai-studio-echat-134f096e-b18d-4bb7-870d-d4f7fa96d17d');
   } catch (error) {
-    console.error('[Vercel Live API] Invalid FIREBASE_SERVICE_ACCOUNT_JSON', error);
+    console.warn('[Vercel Live API] FIREBASE_SERVICE_ACCOUNT_JSON is invalid; Firestore live APIs will return a configuration error.', error instanceof Error ? error.message : error);
   }
+} else {
+  console.warn('[Vercel Live API] FIREBASE_SERVICE_ACCOUNT_JSON is unset; ADC is disabled and Firestore live APIs are unavailable.');
 }
 
-const adminApp = getApps()[0] || initializeApp({ projectId, ...(serviceCredential ? { credential: serviceCredential } : {}) });
-const firestore = getFirestore(adminApp, process.env.FIREBASE_DATABASE_ID || 'ai-studio-echat-134f096e-b18d-4bb7-870d-d4f7fa96d17d');
-const lives = firestore.collection('liveStreams');
+function requireFirestore(): Firestore {
+  if (!firestoreInstance) throw Object.assign(new Error('Firebase Admin is not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON for live stream storage.'), { status: 503, code: 'firebase-admin-not-configured' });
+  return firestoreInstance;
+}
+// Lazy proxies keep missing production secrets from crashing module initialization/build.
+const firestore = new Proxy({} as Firestore, {
+  get(_target, property) {
+    const target = requireFirestore();
+    const value = Reflect.get(target, property, target) as unknown;
+    return typeof value === 'function' ? value.bind(target) : value;
+  }
+});
+const lives = new Proxy({} as CollectionReference, {
+  get(_target, property) {
+    const target = requireFirestore().collection('liveStreams');
+    const value = Reflect.get(target, property, target) as unknown;
+    return typeof value === 'function' ? value.bind(target) : value;
+  }
+});
 const liveKitUrl = (process.env.LIVEKIT_URL || '').trim();
 const liveKitApiKey = (process.env.LIVEKIT_API_KEY || '').trim();
 const liveKitApiSecret = (process.env.LIVEKIT_API_SECRET || '').trim();

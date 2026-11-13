@@ -9,8 +9,8 @@ import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { db, hashPassword } from './server/db.js';
 import { SocketManager } from './server/socket.js';
-import { getAuth } from 'firebase-admin/auth';
-import { app as firebaseAdminApp, firebaseProjectId, firestore } from './server/firebase-admin.js';
+import { firebaseProjectId, firestore, getFirebaseAdminAuth } from './server/firebase-admin.js';
+import { verifyFirebaseIdToken } from './server/firebase-token.js';
 
 const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
 const PORT = Number(process.env.PORT) || 3000;
@@ -424,7 +424,7 @@ function liveAccountAgeDays(user: any): number {
 }
 
 function syncLiveProfileToFirestore(user: any): void {
-  if (!user?.id) return;
+  if (!user?.id || !firestore) return;
   const ref = firestore.collection('users').doc(user.id);
   void ref.get().then(snapshot => {
     if (!snapshot.exists) return;
@@ -1878,8 +1878,7 @@ app.post('/api/live/auth', async (req: Request, res: Response) => {
   const firebaseIdToken = req.get('x-firebase-id-token');
   if (!firebaseIdToken) return res.status(401).json({ error: 'Firebase sign-in is required.' });
   try {
-    const firebaseAuth = getAuth(firebaseAdminApp);
-    const decoded = await firebaseAuth.verifyIdToken(firebaseIdToken);
+    const decoded = await verifyFirebaseIdToken(firebaseIdToken, firebaseProjectId);
     const email = String(decoded.email || '').toLowerCase().trim();
     if (!email) return res.status(403).json({ error: 'The Firebase account has no email associated with it.' });
 
@@ -1921,10 +1920,12 @@ app.post('/api/live/auth', async (req: Request, res: Response) => {
     if (!user) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.', code: 'profile-not-found' });
     if (user.isBlocked) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.', code: 'account-blocked' });
 
-    // Keep the server-side age record tied to the Firebase account creation time. Prefer the
-    // Firestore createdAt value when it agrees with Firebase Auth; otherwise use Auth metadata,
-    // so a client-edited profile timestamp cannot grant early Go Live access.
-    const firebaseProfile = await firestore.collection('users').doc(decoded.uid).get().catch(() => null);
+    // Keep account age tied to server-verified sources. Prefer Firestore createdAt only when
+    // it agrees with Firebase Auth metadata; without the optional Admin secret, auth_time is
+    // a conservative lower bound and client-edited profile timestamps are ignored.
+    const firebaseProfile = firestore
+      ? await firestore.collection('users').doc(decoded.uid).get().catch(() => null)
+      : null;
     const profileData = firebaseProfile?.exists ? firebaseProfile.data() : undefined;
     if (user.email.endsWith('@echat.local')) {
       const isReservedDeveloper = email === ADMIN_EMAIL;
@@ -1941,8 +1942,11 @@ app.post('/api/live/auth', async (req: Request, res: Response) => {
     if (user.email.toLowerCase().trim() !== email) return res.status(403).json({ error: 'This signed-in account cannot use Go Live.' });
     const rawCreatedAt = profileData?.createdAt;
     const firestoreCreatedAt = typeof rawCreatedAt === 'number' ? rawCreatedAt : typeof rawCreatedAt?.toMillis === 'function' ? rawCreatedAt.toMillis() : Number(rawCreatedAt);
-    const firebaseUser = await firebaseAuth.getUser(decoded.uid);
-    const authCreatedAt = Date.parse(firebaseUser.metadata.creationTime || '');
+    const firebaseAuth = getFirebaseAdminAuth();
+    const firebaseUser = firebaseAuth ? await firebaseAuth.getUser(decoded.uid).catch(() => null) : null;
+    // auth_time is a safe lower bound for account age when Render has no Admin
+    // service-account secret: a Firebase account cannot authenticate before it exists.
+    const authCreatedAt = Date.parse(firebaseUser?.metadata.creationTime || '') || Number(decoded.auth_time || 0) * 1000;
     const firestoreDateIsCredible = Number.isFinite(firestoreCreatedAt) && firestoreCreatedAt > 0 && firestoreCreatedAt <= Date.now() && Number.isFinite(authCreatedAt) && Math.abs(firestoreCreatedAt - authCreatedAt) <= LIVE_DAY_MS;
     const verifiedCreatedAt = firestoreDateIsCredible ? firestoreCreatedAt : authCreatedAt;
     if (Number.isFinite(verifiedCreatedAt) && verifiedCreatedAt > 0 && user.createdAt !== verifiedCreatedAt) {
@@ -1955,7 +1959,7 @@ app.post('/api/live/auth', async (req: Request, res: Response) => {
     const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || 'verification-failed') : 'verification-failed';
     console.error('[Echat] Firebase live-auth verification failed:', {
       code,
-      configuredProject: firebaseAdminApp.options.projectId || firebaseProjectId,
+      configuredProject: firebaseProjectId,
       error: error instanceof Error ? error.message : error
     });
     res.status(401).json({ error: 'Could not verify your sign-in. Please try again.', code });
