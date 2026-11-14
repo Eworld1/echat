@@ -5,7 +5,7 @@ import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { TermsModal } from './TermsModal';
 import { api } from '../services/api';
 import type { SiteConfig } from '../types';
-import { MessageSquare, Calendar, Video, Sparkles, AlertCircle, Shield, Eye, EyeOff } from 'lucide-react';
+import { Calendar, Video, Sparkles, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -107,6 +107,153 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     }
   };
 
+  if (String(tab) === 'login') {
+    const communityImage = '/images/welcome-bg.jpg';
+    const thumbnails = [
+      { label: 'Community member one', position: '10% center' },
+      { label: 'Community member two', position: '34% center' },
+      { label: 'Community member three', position: '57% center' },
+      { label: 'Community member four', position: '88% center' }
+    ];
+
+    return (
+      <div className="fixed inset-0 z-50 grid min-h-dvh w-full grid-cols-1 overflow-y-auto bg-[#F0F2F5] lg:grid-cols-2 lg:overflow-hidden">
+        <section aria-label="Echat community" className="flex min-h-0 flex-col bg-white lg:h-dvh">
+          <div className="min-h-[34dvh] flex-1 overflow-hidden bg-slate-200 lg:min-h-0">
+            <img
+              src={communityImage}
+              alt="Smiling Echat community member wearing a black suit"
+              className="h-full min-h-[34dvh] w-full object-cover object-[58%_center] lg:min-h-0"
+            />
+          </div>
+          <div className="grid h-[104px] shrink-0 grid-cols-4 gap-2 bg-white p-2.5 sm:h-[128px] sm:gap-3 sm:p-3 lg:h-[22%] lg:min-h-[150px] lg:max-h-[230px]">
+            {thumbnails.map(item => (
+              <div key={item.label} className="min-w-0 overflow-hidden rounded-xl bg-slate-100">
+                <img
+                  src={communityImage}
+                  alt={item.label}
+                  className="h-full w-full object-cover"
+                  style={{ objectPosition: item.position }}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <main className="flex min-h-[58dvh] flex-col items-center justify-center bg-[#F0F2F5] px-4 pb-8 pt-14 sm:px-8 lg:h-dvh lg:min-h-0 lg:px-10 lg:py-12">
+          <div className="relative w-full max-w-[480px] rounded-2xl bg-white px-6 pb-6 pt-[4.5rem] shadow-[0_8px_30px_rgba(0,0,0,0.12)] sm:px-10 sm:pb-8">
+            <img
+              src="/logo.png"
+              alt="EchatSl logo"
+              className="absolute left-1/2 top-0 h-[88px] w-[88px] -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-black object-cover shadow-md"
+            />
+            <h1 className="mb-6 text-center text-2xl font-bold tracking-tight text-[#1C1E21] sm:text-[30px]">
+              Welcome back to Echat
+            </h1>
+
+            {errorMsg && (
+              <div role="alert" aria-live="polite" className="mb-4 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
+                <AlertCircle size={18} className="shrink-0 text-red-500" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleLogin} className="space-y-4">
+              <label className="sr-only" htmlFor="echat-login-email">Email address</label>
+              <input
+                id="echat-login-email"
+                type="email"
+                value={email}
+                onChange={event => setEmail(event.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                className="h-[54px] w-full rounded-xl border border-[#CCD0D5] bg-white px-4 text-base text-[#1C1E21] outline-none transition placeholder:text-[#606770] focus:border-[#1877F2] focus:ring-2 focus:ring-blue-100"
+                required
+              />
+
+              <label className="sr-only" htmlFor="echat-login-password">Password</label>
+              <div className="relative">
+                <input
+                  id="echat-login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
+                  placeholder="........"
+                  autoComplete="current-password"
+                  className="h-[54px] w-full rounded-xl border border-[#CCD0D5] bg-white py-3 pl-4 pr-14 text-base text-[#1C1E21] outline-none transition placeholder:text-[#606770] focus:border-[#1877F2] focus:ring-2 focus:ring-blue-100"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(value => !value)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className="absolute right-1 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-[#1877F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1877F2]"
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="mt-2 flex min-h-[54px] w-full items-center justify-center rounded-xl bg-[#1877F2] px-5 py-3 text-lg font-bold text-white shadow-sm transition hover:bg-[#166FE5] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 disabled:cursor-wait disabled:opacity-60"
+              >
+                {isLoading ? 'Signing in...' : 'Log in'}
+              </button>
+
+              <div className="pt-1 text-center">
+                <button
+                  type="button"
+                  onClick={() => setIsForgotModalOpen(true)}
+                  className="min-h-11 px-3 text-sm font-semibold text-[#1877F2] hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1877F2]"
+                >
+                  Forgotten password?
+                </button>
+              </div>
+
+              <div className="border-t border-[#DADDE1] pt-5">
+                <button
+                  type="button"
+                  onClick={() => { setTab('register'); setErrorMsg(''); }}
+                  className="min-h-[52px] w-full rounded-xl bg-[#42B72A] px-5 py-3 text-base font-bold text-white transition hover:bg-[#36A420] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-green-200"
+                >
+                  Create new account
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <p className="mt-5 text-center text-sm text-[#606770]">
+            Don&apos;t have an account?{' '}
+            <button
+              type="button"
+              onClick={() => { setTab('register'); setErrorMsg(''); }}
+              className="font-semibold text-[#1877F2] underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1877F2]"
+            >
+              Sign up
+            </button>
+          </p>
+
+          <ForgotPasswordModal
+            isOpen={isForgotModalOpen}
+            onClose={() => setIsForgotModalOpen(false)}
+            onSuccess={() => {
+              setIsForgotModalOpen(false);
+              setTab('login');
+            }}
+          />
+        </main>
+
+        <TermsModal
+          isOpen={isTermsModalOpen}
+          onClose={() => setIsTermsModalOpen(false)}
+          onAccept={() => setAgreeTerms(true)}
+          showAcceptButton={true}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 isolate flex min-h-[100dvh] w-full items-center justify-center overflow-y-auto bg-black p-4 sm:p-6">
