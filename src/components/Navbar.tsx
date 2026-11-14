@@ -47,6 +47,7 @@ import {
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
+import { getGoLiveEligibility } from '../config/featureFlags';
 
 export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
@@ -79,6 +80,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
   const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
+  const goLiveEligibility = getGoLiveEligibility({ role: user?.role, isAdmin: user?.isAdmin, isDeveloper, createdAt: user?.createdAt });
+  const goLiveLabel = goLiveEligibility.canGoLive ? 'Go Live' : `Locked 🔒 - Go Live in ${goLiveEligibility.daysLeft} ${goLiveEligibility.daysLeft === 1 ? 'day' : 'days'}`;
   const { t, theme, setTheme, language, setLanguage } = usePreferences();
   const { onlineUserIds, onNotification, startCall } = useSocket();
   const { canInstall, install } = useInstallPrompt();
@@ -944,7 +947,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="col-start-3 row-start-1 flex shrink-0 items-center justify-end gap-1 min-[1025px]:gap-2">
 
           <button onClick={onOpenCreate} className="hidden h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-700 min-[1025px]:flex" title="Create post"><PlusSquare size={19} /></button>
-          <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title="Go Live"><Radio size={17}/>Go Live</button>
+          <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title={goLiveLabel}><Radio size={17}/>{goLiveLabel}</button>
 
           <button type="button" onClick={toggleProfileMenu} aria-label="Open profile features menu" aria-expanded={showProfileMenu} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10">
             <LayoutGrid size={19} />
@@ -1151,7 +1154,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="mb-2 mt-3 border-y border-slate-100 py-2 dark:border-slate-600">
                   <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Your features</p>
                   <button onClick={() => navigateFeature('/v2/ai')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Sparkles size={21} className="text-blue-600"/>eChat AI</button>
-                  <button onClick={() => { onOpenGoLive?.(); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>Go Live</button>
+                  <button onClick={() => { onOpenGoLive?.(); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>{goLiveLabel}</button>
                   <button onClick={() => navigateFeature('/v2/games')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Gamepad2 size={21} className="text-blue-600"/>Games</button>
                   <button onClick={() => navigateFeature('/v2/finds')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Compass size={21} className="text-blue-600"/>Finds / Marketplace</button>
                   <button onClick={() => { onNavigate('feed'); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>Live Now</button>

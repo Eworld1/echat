@@ -493,7 +493,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const configuredDeveloperUid = String(import.meta.env.VITE_SUPER_ADMIN_UID || '').trim();
-  const configuredDeveloperEmail = String(import.meta.env.VITE_SUPER_ADMIN_EMAIL || 'eldermoses89@gmail.com').trim().toLowerCase();
+  const configuredDeveloperEmail = String(import.meta.env.VITE_SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
   const isConfiguredDeveloper = Boolean(user && ((configuredDeveloperUid && auth.currentUser?.uid === configuredDeveloperUid) || (auth.currentUser?.emailVerified && user.email?.trim().toLowerCase() === configuredDeveloperEmail)));
   const isDeveloper = Boolean(user && (user.role === 'super_admin' || user.canApproveLive === true || (user.role === 'developer' && user.isOfficialDeveloper) || isConfiguredDeveloper));
 

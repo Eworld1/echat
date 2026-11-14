@@ -1,3 +1,4 @@
+import { GO_LIVE, getGoLiveEligibility } from '../src/config/featureFlags.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import type { App } from 'firebase-admin/app';
@@ -85,6 +86,7 @@ export interface LiveUser {
   liveAccess: string;
   liveAccessMode?: string;
   isVerified: boolean;
+  isAdmin?: boolean;
   isBlocked: boolean;
   createdAt: number;
 }
@@ -255,8 +257,7 @@ export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser;
   }
   const email = String(decoded.email || '').trim().toLowerCase();
   const developerUid = String(process.env.SUPER_ADMIN_UID || process.env.VITE_SUPER_ADMIN_UID || '').trim();
-  const developerEmail = String(process.env.SUPER_ADMIN_EMAIL || process.env.VITE_SUPER_ADMIN_EMAIL || 'eldermoses89@gmail.com').trim().toLowerCase();
-  const developer = Boolean((developerUid && decoded.uid === developerUid) || (email && email === developerEmail && decoded.email_verified));
+  const developer = Boolean(developerUid && decoded.uid === developerUid);
 
   const users = firestore.collection('users');
   const searchedUid = decoded.uid;
@@ -348,6 +349,7 @@ export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser;
       liveAccess: developer ? 'approved' : String(data.liveAccess || 'none'),
       liveAccessMode: developer ? 'everyone' : liveAccessMode,
       isVerified: Boolean(data.isVerified),
+      isAdmin: Boolean(data.isAdmin || data.canApproveLive),
       isBlocked: !developer && Boolean(data.isBlocked),
       createdAt: createdAt || authCreated
     }
@@ -355,13 +357,10 @@ export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser;
 }
 
 export function canStartLive(user: LiveUser): boolean {
-  if (user.role === 'super_admin' || user.role === 'developer') return true;
+  const eligibility = getGoLiveEligibility({ role: user.role, isAdmin: user.isAdmin, createdAt: user.createdAt });
+  if (eligibility.developer) return true;
   if (user.isBlocked || user.liveAccess === 'blocked') return false;
-  if (user.liveAccessMode === 'everyone') return true;
-  if (user.liveAccessMode === 'admins_creators_only' && (user.role === 'admin' || user.role === 'creator')) return true;
-  if (user.role === 'admin') return true;
-  if (user.liveAccess === 'approved') return true;
-  return user.liveAccessMode !== 'approved_only' && user.createdAt > 0 && Date.now() - user.createdAt >= 60 * 24 * 60 * 60 * 1000;
+  return eligibility.canGoLive;
 }
 
 export function requireLiveKit(): { url: string; rooms: RoomServiceClient; apiKey: string; apiSecret: string } {

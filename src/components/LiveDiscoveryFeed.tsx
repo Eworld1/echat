@@ -4,13 +4,16 @@ import { useAuth } from '../context/AuthContext';
 import type { LiveCategory, LiveLocation, LiveStream } from '../types';
 import { LIVE_CATEGORIES, LIVE_LOCATIONS, listenBlockedByIds, listenBlockIds, listenFollowingIds, listenLiveNotifications, listenLiveStreams, markLiveNotificationsRead } from '../services/liveDiscovery';
 import { LiveUserActions } from './LiveUserActions';
+import { getGoLiveEligibility } from '../config/featureFlags';
 
 interface Props { onWatchLive: (stream: LiveStream) => void; onOpenGoLive: () => void; legacyStream?: LiveStream | null; }
 type CategoryFilter = 'All' | LiveCategory;
 type LocationFilter = 'All Locations' | 'Near Me' | LiveLocation;
 
 export const LiveDiscoveryFeed: React.FC<Props> = ({ onWatchLive, onOpenGoLive, legacyStream }) => {
-  const { user } = useAuth();
+  const { user, isDeveloper } = useAuth();
+  const goLiveEligibility = getGoLiveEligibility({ role: user?.role, isAdmin: user?.isAdmin, isDeveloper, createdAt: user?.createdAt });
+  const goLiveLabel = goLiveEligibility.canGoLive ? 'Go Live' : `Locked 🔒 - Go Live in ${goLiveEligibility.daysLeft} ${goLiveEligibility.daysLeft === 1 ? 'day' : 'days'}`;
   const [streams, setStreams] = useState<LiveStream[]>([]);
   const [followingIds, setFollowingIds] = useState<string[]>([]);
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
@@ -55,7 +58,7 @@ export const LiveDiscoveryFeed: React.FC<Props> = ({ onWatchLive, onOpenGoLive, 
     <div className="flex flex-wrap items-center gap-2">
       <h2 className="mr-auto flex items-center gap-2 text-base font-extrabold text-slate-900"><Radio size={18} className="text-rose-600"/>Live Now</h2>
       {notificationCount > 0 && <button type="button" onClick={() => user && void markLiveNotificationsRead(user.id)} title="Mark live notifications as read" className="inline-flex min-h-9 items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700"><Bell size={13}/>{notificationCount} new</button>}
-      <button type="button" onClick={onOpenGoLive} className="min-h-10 rounded-xl bg-rose-600 px-3 text-sm font-bold text-white hover:bg-rose-700">Go Live</button>
+      <button type="button" onClick={onOpenGoLive} className="min-h-10 rounded-xl bg-rose-600 px-3 text-sm font-bold text-white hover:bg-rose-700">{goLiveLabel}</button>
     </div>
     <label className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3"><Search size={17} className="shrink-0 text-slate-500"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stream titles and creators" className="min-w-0 flex-1 bg-transparent text-sm outline-none" aria-label="Search live streams"/></label>
     <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Live categories">
@@ -65,7 +68,7 @@ export const LiveDiscoveryFeed: React.FC<Props> = ({ onWatchLive, onOpenGoLive, 
       <div className="flex rounded-xl bg-slate-100 p-1"><button type="button" onClick={() => setFeed('all')} className={feed === 'all' ? 'min-h-9 rounded-lg bg-white px-4 text-sm font-bold text-slate-900 shadow-sm' : 'min-h-9 rounded-lg px-4 text-sm font-semibold text-slate-600'}>All live</button><button type="button" onClick={() => setFeed('following')} className={feed === 'following' ? 'min-h-9 rounded-lg bg-white px-4 text-sm font-bold text-slate-900 shadow-sm' : 'min-h-9 rounded-lg px-4 text-sm font-semibold text-slate-600'}>Following</button></div>
       <label className="ml-auto flex min-h-10 items-center gap-1.5 text-xs font-semibold text-slate-600"><MapPin size={15}/><span className="hidden sm:inline">Location</span><select value={location} onChange={event => setLocation(event.target.value as LocationFilter)} className="max-w-[145px] rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs"><option>All Locations</option><option>Near Me</option>{LIVE_LOCATIONS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
     </div>
-    {loading ? <div className="py-8 text-center text-sm text-slate-500">Loading live streams…</div> : error ? <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : visibleStreams.length === 0 ? <div className="rounded-xl bg-slate-50 px-4 py-8 text-center"><Users size={25} className="mx-auto text-slate-400"/><p className="mt-2 text-sm font-bold text-slate-800">{category === 'All' ? (feed === 'following' ? 'No one you follow is live right now.' : 'No one is live right now.') : `No one is live in ${category} yet — Be the first to go live`}</p>{location === 'Near Me' && !nearbyCity && <p className="mt-1 text-xs text-slate-500">Set your profile location to Freetown, Bo, Kenema, or Makeni to use Near Me.</p>}<button type="button" onClick={onOpenGoLive} className="mt-3 min-h-10 rounded-xl bg-rose-600 px-4 text-sm font-bold text-white">Be the first to go live</button></div> : <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+    {loading ? <div className="py-8 text-center text-sm text-slate-500">Loading live streams…</div> : error ? <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : visibleStreams.length === 0 ? <div className="rounded-xl bg-slate-50 px-4 py-8 text-center"><Users size={25} className="mx-auto text-slate-400"/><p className="mt-2 text-sm font-bold text-slate-800">{category === 'All' ? (feed === 'following' ? 'No one you follow is live right now.' : 'No one is live right now.') : `No one is live in ${category} yet — Be the first to go live`}</p>{location === 'Near Me' && !nearbyCity && <p className="mt-1 text-xs text-slate-500">Set your profile location to Freetown, Bo, Kenema, or Makeni to use Near Me.</p>}<button type="button" onClick={onOpenGoLive} className="mt-3 min-h-10 rounded-xl bg-rose-600 px-4 text-sm font-bold text-white">{goLiveEligibility.canGoLive ? 'Be the first to go live' : goLiveLabel}</button></div> : <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {visibleStreams.map(stream => <article key={stream.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
         <button type="button" onClick={() => onWatchLive(stream)} className="relative flex aspect-video w-full items-end bg-slate-900 p-3 text-left text-white">
           <div className="absolute inset-0 opacity-20" style={{ backgroundImage: stream.hostAvatar ? `linear-gradient(0deg, #0f172a, transparent), url("${stream.hostAvatar}")` : 'linear-gradient(135deg,#0f172a,#334155)', backgroundSize: 'cover', backgroundPosition: 'center' }}/>

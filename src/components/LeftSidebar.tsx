@@ -3,6 +3,7 @@ import type { AppView } from './Navbar';
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { TermsModal } from './TermsModal';
+import { getGoLiveEligibility } from '../config/featureFlags';
 import {
   Users,
   MessageSquare,
@@ -29,6 +30,8 @@ interface LeftSidebarProps {
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigate, onOpenGoLive }) => {
   const { user, isDeveloper, myPages, activePage, switchIdentity, createIdentityPage } = useAuth();
   const canAdmin = Boolean(user?.role === 'admin' || user?.role === 'super_admin' || isDeveloper || (user as (typeof user & {isAdmin?:boolean})|null)?.isAdmin);
+  const goLiveEligibility = getGoLiveEligibility({ role: user?.role, isAdmin: user?.isAdmin, isDeveloper, createdAt: user?.createdAt });
+  const goLiveLabel = goLiveEligibility.canGoLive ? 'Go Live' : `Locked 🔒 - Go Live in ${goLiveEligibility.daysLeft} ${goLiveEligibility.daysLeft === 1 ? 'day' : 'days'}`;
   const { t } = usePreferences();
   const [showTerms, setShowTerms] = useState(false);
   const [showIdentityPicker, setShowIdentityPicker] = useState(false);
@@ -82,7 +85,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
           <span className="truncate">Dashboard</span>
         </button>
 
-        <button onClick={onOpenGoLive} className="w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left hover:bg-rose-50 text-slate-700 font-semibold text-sm"><div className="w-9 h-9 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center"><Video size={19}/></div><span className="truncate">Go Live</span></button>
+        <button onClick={onOpenGoLive} className="w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left hover:bg-rose-50 text-slate-700 font-semibold text-sm"><div className="w-9 h-9 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center"><Video size={19}/></div><span className="truncate">{goLiveLabel}</span></button>
 
         {/* Friends */}
         <button

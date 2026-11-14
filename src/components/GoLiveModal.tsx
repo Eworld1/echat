@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
+import { GO_LIVE, getGoLiveEligibility } from '../config/featureFlags';
 // @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
 import { Room, Track } from 'livekit-client';
 
@@ -100,11 +101,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   const firebaseUser = auth.currentUser;
   const developerUid = String(import.meta.env.VITE_SUPER_ADMIN_UID || '').trim();
-  const developerEmail = String(import.meta.env.VITE_SUPER_ADMIN_EMAIL || 'eldermoses89@gmail.com').trim().toLowerCase();
-  const configuredDeveloper = Boolean(firebaseUser && (
-    (developerUid && firebaseUser.uid === developerUid) ||
-    (developerEmail && firebaseUser.email?.toLowerCase() === developerEmail && firebaseUser.emailVerified)
-  ));
+  const configuredDeveloper = Boolean(firebaseUser && developerUid && firebaseUser.uid === developerUid);
   const developerIdentity = Boolean(isDeveloper || configuredDeveloper);
   const signedIn = Boolean(user || firebaseUser);
 
@@ -169,7 +166,9 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     }
   };
 
-  const hasLivePermission = Boolean(accessInfo?.canGoLive);
+  const goLiveEligibility = getGoLiveEligibility({ role: user?.role, isAdmin: user?.isAdmin, isDeveloper: developerIdentity, createdAt: user?.createdAt || (accessInfo?.accountAgeDays ? Date.now() - accessInfo.accountAgeDays * 86400000 : 0) });
+  const isLiveBlocked = Boolean(user?.isBlocked || accessInfo?.liveAccess === 'blocked');
+  const hasLivePermission = Boolean(goLiveEligibility.developer || (!isLiveBlocked && goLiveEligibility.canGoLive));
 
   const checkLiveAccess = async () => {
     if (authLoading || !signedIn) return;
@@ -207,36 +206,27 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    let active = true;
     setAccessLoading(true);
     setAccessError('');
     setAccessNotice('');
-    if (authLoading) return () => { active = false; };
-    if (!signedIn) { setAccessInfo(null); setAccessLoading(false); return () => { active = false; }; }
-    if (developerIdentity) {
-      const info = { liveAccess: 'approved' as const, mode: 'approved_only' as const, canGoLive: true, request: null, accountAgeDays: 0, daysUntilEligible: 0, autoApproved: false };
-      setAccessInfo(info);
-      setAccessLoading(false);
-      console.info('[Go Live] Developer bypass', { uid: firebaseUser?.uid || user?.id, liveAccess: info.liveAccess, role: user?.role || 'super_admin', accountAgeDays: info.accountAgeDays });
-      return () => { active = false; };
-    }
-    void api.getLiveAccess().then(info => {
-      if (!active) return;
-      setAccessInfo(info);
-      setAccessCheckAttempts(0);
-      console.info('[Go Live] Access check', { uid: firebaseUser?.uid || user?.id, liveAccess: info.liveAccess, role: user?.role || 'user', accountAgeDays: info.accountAgeDays });
-      if (info.autoApproved) setAccessNotice('You are now eligible! Your account has been approved for Go Live.');
-    }).catch(error => {
-      if (active) {
-        const liveError = error as Error & { code?: string };
-        setAccessError(error instanceof Error ? error.message : 'Could not check Go Live access.');
-        setAccessErrorCode(liveError.code || 'unknown');
-        setAccessCheckAttempts(count => count + 1);
-        console.error('[Go Live] Access check failed', { uid: firebaseUser?.uid || user?.id, code: liveError.code || 'unknown', error });
-      }
-    }).finally(() => { if (active) setAccessLoading(false); });
-    return () => { active = false; };
-  }, [isOpen, user?.id, authLoading, developerIdentity, signedIn]);
+    if (authLoading) return;
+    if (!signedIn) { setAccessInfo(null); setAccessLoading(false); return; }
+
+    const blocked = Boolean(user?.isBlocked);
+    const permitted = goLiveEligibility.developer || (!blocked && goLiveEligibility.canGoLive);
+    const info = {
+      liveAccess: blocked ? 'blocked' as const : permitted ? 'approved' as const : 'none' as const,
+      mode: 'approved_only' as const,
+      canGoLive: permitted,
+      request: null,
+      accountAgeDays: goLiveEligibility.ageDaysExact,
+      daysUntilEligible: goLiveEligibility.daysLeft,
+      autoApproved: false
+    };
+    setAccessInfo(info);
+    setAccessLoading(false);
+    console.info('[Go Live] Local eligibility check', { uid: firebaseUser?.uid || user?.id, role: user?.role || 'user', accountAgeDays: info.accountAgeDays, canGoLive: info.canGoLive });
+  }, [isOpen, user?.id, user?.role, user?.isAdmin, user?.isBlocked, user?.createdAt, authLoading, developerIdentity, signedIn, goLiveEligibility.ageDaysExact, goLiveEligibility.daysLeft, goLiveEligibility.developer, goLiveEligibility.canGoLive]);
 
   const sendAccessRequest = async () => {
     setAccessBusy(true); setAccessError('');
@@ -579,23 +569,14 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           </> : <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-600"><span className="h-5 w-5 animate-spin rounded-full border-2 border-rose-600 border-t-transparent"/>Checking login…</div>) : !signedIn ? <>
             <p className="mt-3 text-sm leading-6 text-slate-600">Log in to check your Go Live eligibility.</p>
             <button onClick={onClose} className="mt-5 min-h-12 w-full rounded-xl bg-blue-600 px-4 font-extrabold text-white">Log In to Go Live</button>
-          </> : accessLoading ? <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-600"><span className="h-5 w-5 animate-spin rounded-full border-2 border-rose-600 border-t-transparent"/>Checking Go Live access…</div> : accessError && !accessInfo ? <>
-            <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-left text-sm text-rose-700">{accessError}</p>
-            {developerIdentity && <p className="mt-2 text-left text-xs text-slate-500">UID: {firebaseUser?.uid || user?.id} · Error: {accessErrorCode}</p>}
-            <button onClick={() => { setAccessLoading(true); if (auth.currentUser) void auth.currentUser.getIdToken(true).then(() => checkLiveAccess()).catch(error => { const e = error as Error & { code?: string }; setAccessError(e.message); setAccessErrorCode(e.code || 'unknown'); setAccessCheckAttempts(count => count + 1); setAccessLoading(false); }); else void checkLiveAccess(); }} className="mt-4 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700">Retry access check</button>
-            {accessCheckAttempts >= 2 && <button onClick={() => void logout().finally(onClose)} className="mt-2 min-h-12 w-full rounded-xl bg-blue-600 px-4 font-bold text-white">Still failing? Log Out and Log In Again</button>}
-          </> : accessInfo?.liveAccess === 'pending' ? <>
-            <p className="mt-3 text-sm leading-6 text-slate-600">Pending - Waiting for Moses to approve.</p>
-            <button disabled={accessBusy} onClick={() => void cancelAccessRequest()} className="mt-5 min-h-12 w-full rounded-xl bg-slate-100 px-4 font-bold text-slate-700 disabled:opacity-60">{accessBusy ? 'Please wait…' : 'Cancel Request'}</button>
-          </> : accessInfo?.liveAccess === 'blocked' ? <>
+          </> : accessLoading && !accessInfo ? <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-600"><span className="h-5 w-5 animate-spin rounded-full border-2 border-rose-600 border-t-transparent"/>Checking Go Live access…</div> : isLiveBlocked ? <>
             <p className="mt-3 text-sm leading-6 text-rose-700">Your Go Live access has been blocked. Contact an administrator if you think this is a mistake.</p>
           </> : <>
-            <p className="mt-3 text-sm leading-6 text-slate-600">You need approval OR your account must be 60 days old.</p>
-            <p className="mt-2 text-sm font-bold text-slate-700">Your account is {Math.floor(accessInfo?.accountAgeDays || 0)} days old - {accessInfo?.daysUntilEligible ?? 60} days left for auto-approval.</p>
-            <p className="mt-3 text-sm leading-6 text-slate-600">Tell us why you want to go live.</p>
-            <textarea value={accessReason} onChange={event => setAccessReason(event.target.value)} maxLength={500} rows={4} placeholder="Why do you want to go live?" className="mt-4 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:ring-2 focus:ring-rose-300" />
-            <p className="mt-2 text-left text-xs text-slate-500">Admin usually reviews within 24h.</p>
-            <button disabled={accessBusy || !accessInfo || accessReason.trim().length < 3} onClick={() => void sendAccessRequest()} className="mt-4 min-h-12 w-full rounded-xl bg-rose-600 px-4 font-extrabold text-white shadow disabled:opacity-50">{accessBusy ? 'Sending…' : 'Request Go Live Access'}</button>
+            <p className="mt-3 text-sm leading-6 text-slate-700">{GO_LIVE.message}</p>
+            <p className="mt-2 text-sm font-bold text-slate-800">Your account is {goLiveEligibility.accountAgeDays} days old.</p>
+            <p className="mt-1 text-sm font-bold text-slate-800">You can Go Live in {goLiveEligibility.daysLeft} {goLiveEligibility.daysLeft === 1 ? 'day' : 'days'} (after 60 days).</p>
+            <p className="mt-3 text-sm leading-6 text-slate-600">Keep chatting, posting and growing your account!</p>
+            {accessError && <p role="alert" className="mt-3 rounded-xl bg-amber-50 p-3 text-left text-sm text-amber-800">We could not refresh your live-access status, but your account-age restriction is still active.</p>}
           </>}
           {accessError && accessInfo && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-left text-sm text-rose-700">{accessError}</p>}
         </div>
