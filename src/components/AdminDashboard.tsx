@@ -3,6 +3,7 @@ import { AdminUsers } from './admin/AdminUsers';
 import { AdminAnnouncements } from './admin/AdminAnnouncements';
 import { AdminActivity } from './admin/AdminActivity';
 import { LiveAccessAdmin } from './admin/LiveAccessAdmin';
+import { EchatAISettings } from './admin/EchatAISettings';
 import { banLiveUser, listenAdminLiveReports, resolveLiveReport } from '../services/liveDiscovery';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
@@ -28,6 +29,7 @@ import {
   Camera,
   Check,
   Sparkles,
+  Bot,
   Radio,
   BadgeCheck,
   BarChart3,
@@ -43,13 +45,14 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, onOpenGoLive }) => {
   const { user, isDeveloper, updateUser } = useAuth();
   const canAdmin = Boolean(user && (user.email?.toLowerCase().trim() === 'eldermoses89@gmail.com' || user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
+  const canSuperAdmin = Boolean(user && (user.role === 'super_admin' || isDeveloper));
   const [setupPassword, setSetupPassword] = useState('');
   const [isClaiming, setIsClaiming] = useState(false);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [reportedPosts, setReportedPosts] = useState<Post[]>([]);
   const [liveReports, setLiveReports] = useState<Array<{ id: string; reporterId: string; targetUserId: string; streamId?: string; reason: string; createdAt: number; status: string }>>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'reports' | 'announce' | 'activity' | 'profile' | 'welcome' | 'liveAccess'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'reports' | 'announce' | 'activity' | 'profile' | 'welcome' | 'liveAccess' | 'ai'>('overview');
   const [pendingLiveRequests, setPendingLiveRequests] = useState(0);
   const [userSearch, setUserSearch] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -326,8 +329,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
             ['activity', 'Activity log', <Terminal key="l" size={14} />],
             ['profile', 'My controls', <Shield key="p" size={14} />],
             ['welcome', 'Welcome page', <Edit3 key="w" size={14} />],
-            ['liveAccess', 'Live Access', <Radio key="live" size={14} />]
-          ] as const).filter(([id]) => id !== 'liveAccess' || isDeveloper).map(([id, label, icon]) => (
+            ['liveAccess', 'Live Access', <Radio key="live" size={14} />],
+            ['ai', 'eChat AI', <Bot key="ai" size={14} />]
+          ] as const).filter(([id]) => (id !== 'liveAccess' && id !== 'ai') || (id === 'ai' ? canSuperAdmin : isDeveloper)).map(([id, label, icon]) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
@@ -637,6 +641,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
 
       {activeTab === 'activity' && <AdminActivity />}
       {activeTab === 'liveAccess' && isDeveloper && <LiveAccessAdmin onPendingCount={setPendingLiveRequests} />}
+      {activeTab === 'ai' && canSuperAdmin && <EchatAISettings />}
     </div>
   );
 };

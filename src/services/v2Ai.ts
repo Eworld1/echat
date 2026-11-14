@@ -22,11 +22,14 @@ export const v2Ai = {
   async feedback(chatId: string, messageId: string, feedback: 'like' | 'dislike') {
     return request(`/api/v2/ai/chats/${encodeURIComponent(chatId)}`, { method: 'PATCH', body: JSON.stringify({ messageId, feedback }) });
   },
-  async stream(chatId: string, message: string, signal: AbortSignal, onToken: (token: string) => void) {
+  async fallback(chatId: string, message: string, clientMessageId: string) {
+    return request<{ answer: string; title: string }>('/api/v2/ai/fallback', { method: 'POST', body: JSON.stringify({ chatId, message, clientMessageId }) });
+  },
+  async stream(chatId: string, message: string, clientMessageId: string, signal: AbortSignal, onToken: (token: string) => void, onReplace?: () => void) {
     const user = auth.currentUser;
     if (!user) throw new Error('Sign in to use eChat AI.');
     const token = await user.getIdToken();
-    const response = await fetch('/api/v2/ai/chat', { method: 'POST', signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId, message }) });
+    const response = await fetch('/api/v2/ai/chat', { method: 'POST', signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId, message, clientMessageId }) });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(typeof payload.error === 'string' ? payload.error : 'eChat AI could not answer.');
@@ -48,6 +51,7 @@ export const v2Ai = {
         if (!data) continue;
         const payload = JSON.parse(data) as { error?: string } | string;
         if (event === 'token' && typeof payload === 'string') onToken(payload);
+        if (event === 'replace') onReplace?.();
         if (event === 'error' && typeof payload === 'object') throw new Error(payload.error || 'eChat AI failed.');
       }
     }
