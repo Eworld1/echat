@@ -78,6 +78,22 @@ service cloud.firestore {
         request.resource.data.get('isBlocked', null) == resource.data.get('isBlocked', null) ||
         (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBlocked', 'liveAccess']));
 
+      match /marketplaceSellerProfile/{profileId} {
+        allow read: if profileId == 'public';
+        allow create, update: if request.auth != null && request.auth.uid == userId && profileId == 'public';
+        allow delete: if false;
+      }
+
+      match /marketplaceSellerPrivate/{contactId} {
+        function sellerShowsContacts() {
+          return get(/databases/$(database)/documents/users/$(userId)/marketplaceSellerProfile/public).data.get('showContactInfo', false) == true;
+        }
+        allow read: if contactId == 'contact' && request.auth != null &&
+          (request.auth.uid == userId || sellerShowsContacts());
+        allow create, update: if request.auth != null && request.auth.uid == userId && contactId == 'contact';
+        allow delete: if false;
+      }
+
       match /settings/{settingId} {
         allow read, write: if true;
       }

@@ -78,9 +78,9 @@ export function MainApp() {
         setCurrentView('feed');
         return;
       }
-      const route = path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : path.startsWith('/marketplace/listing/') ? 'marketplace' : classicRoutes[path];
+      const route = path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : path.startsWith('/marketplace/') ? 'marketplace' : classicRoutes[path];
       if (route) {
-        if (route === 'marketplace' && path.startsWith('/marketplace/listing/')) setMarketRoute(path);
+        if (route === 'marketplace') setMarketRoute(path);
         if (route === 'admin' && !isLoading && !canAdmin) {
           window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
           setCurrentView('feed');
@@ -196,10 +196,6 @@ export function MainApp() {
   const navigateMarket = (route: string) => {
     if (route === '/orders' || route === '/my-orders' || route === '/marketplace/orders') {
       handleNavigate('orders');
-      return;
-    }
-    if (route === '/settings') {
-      handleNavigate('settings');
       return;
     }
     handleNavigate('marketplace', undefined, undefined, route);
