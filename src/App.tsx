@@ -7,6 +7,7 @@ import { Navbar } from './components/Navbar';
 import { LeftSidebar } from './components/LeftSidebar';
 import { RightSidebar } from './components/RightSidebar';
 import { Feed } from './components/Feed';
+import { LiveDiscoveryFeed } from './components/LiveDiscoveryFeed';
 import { Reels } from './pages/Reels';
 import { FriendsView } from './components/FriendsView';
 import { ProfileView } from './components/ProfileView';
@@ -35,7 +36,7 @@ import { V2Market } from './pages/v2/V2Market';
 import { V2MarketOrders } from './pages/v2/V2MarketOrders';
 import type { V2MarketListing } from './services/v2Market';
 
-const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders' };
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -69,6 +70,9 @@ export function MainApp() {
         setCurrentView('feed');
         return;
       }
+      if (path === '/go-live') {
+        window.history.replaceState({ echatApp: true, tab: 'live' }, '', `/live${window.location.search}`);
+      }
       if (path === '/' || path.startsWith('/classic')) {
         window.history.replaceState({ echatApp: true, tab: 'feed' }, '', `/home${window.location.search}`);
         setCurrentView('feed');
@@ -85,7 +89,6 @@ export function MainApp() {
         setCurrentView(route);
         if (route === 'profile') setProfileUserId(user?.id || null);
         if (path === '/messages') setIsMessengerDrawerOpen(true);
-        if (path === '/live' || path === '/go-live') setIsGoLiveOpen(true);
         if (path.startsWith('/live/')) {
           const streamId = decodeURIComponent(path.slice('/live/'.length));
           void api.getCurrentLive().then(result => {
@@ -162,7 +165,7 @@ export function MainApp() {
   ) => {
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Record<AppView,string>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders'};
+    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders'};
     const routePath=view==='marketplace' ? (targetRoute?.startsWith('/marketplace/') ? targetRoute : '/marketplace') : routeByView[view];
     if(view==='marketplace')setMarketRoute(routePath);
     window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${window.location.search}`);
@@ -258,10 +261,6 @@ export function MainApp() {
   };
   const closeGoLive = () => {
     setIsGoLiveOpen(false);
-    if (window.location.pathname === '/live' || window.location.pathname.startsWith('/live/') || window.location.pathname === '/go-live') {
-      window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
-      window.dispatchEvent(new Event('echat:navigate'));
-    }
   };
 
   if (!splashHidden) return <SplashScreen leaving={splashElapsed && !isLoading} />;
@@ -278,7 +277,6 @@ export function MainApp() {
   }
 
   if (!user) {
-    if (['/live', '/go-live'].includes(window.location.pathname)) return <GoLiveModal isOpen onClose={closeGoLive} />;
     return <AuthModal isOpen={true} />;
   }
 
@@ -307,17 +305,17 @@ export function MainApp() {
         />
 
         {/* Central Stage */}
-        <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
+        <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'live' ? 'max-w-6xl' : currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
           {/* TEMP DISABLED FOR V2 ROLLBACK: V2 route renderer remains in EchatV2App.tsx for reactivation. */}
           {currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
               onViewProfile={(uid) => handleNavigate('profile', uid)}
-              onOpenGoLive={() => setIsGoLiveOpen(true)}
-              onWatchLive={(stream) => setActiveViewerStream(stream)}
-              liveStream={currentLiveStream}
+              onOpenGoLive={() => handleNavigate('live')}
             />
           )}
+
+          {currentView === 'live' && <LiveDiscoveryFeed onBack={() => handleNavigate('feed')} onOpenGoLive={() => setIsGoLiveOpen(true)} onWatchLive={stream => setActiveViewerStream(stream)} legacyStream={currentLiveStream} />}
 
           {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} />}
 
@@ -365,7 +363,7 @@ export function MainApp() {
         </main>
 
         {/* Right Contacts Sidebar (Desktop XL) */}
-        {currentView !== 'dashboard' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
+        {currentView !== 'dashboard' && currentView !== 'live' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
       </div>
 
       {/* Floating Messenger Window */}

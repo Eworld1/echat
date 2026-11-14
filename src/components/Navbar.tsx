@@ -42,7 +42,7 @@ import {
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
 
-export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders';
+export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders';
 
 interface NavbarProps {
   currentView: AppView;
