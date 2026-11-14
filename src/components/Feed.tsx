@@ -4,28 +4,22 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
-import { Post, User, LiveStream } from '../types';
+import { Post, User } from '../types';
 import { StoriesBar } from './StoriesBar';
 import { PostCard } from './PostCard';
 import { CreatePostModal } from './CreatePostModal';
-import { LiveDiscoveryFeed } from './LiveDiscoveryFeed';
-import { BirthdayCard } from './BirthdayCard';
 import { Video, Image, Smile, Sparkles } from 'lucide-react';
 
 interface FeedProps {
   onOpenChat: (user: User) => void;
   onViewProfile: (userId: string) => void;
   onOpenGoLive: () => void;
-  onWatchLive: (stream: LiveStream) => void;
-  liveStream: LiveStream | null;
 }
 
 export const Feed: React.FC<FeedProps> = ({
   onOpenChat,
   onViewProfile,
   onOpenGoLive,
-  onWatchLive,
-  liveStream
 }) => {
   const { user } = useAuth();
   const { t } = usePreferences();
@@ -89,12 +83,7 @@ export const Feed: React.FC<FeedProps> = ({
 
   return (
     <div className="max-w-[620px] mx-auto pb-16 space-y-4" onTouchStart={event => { touchStartY.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={handleTouchEnd}>
-      <div className="xl:hidden"><BirthdayCard onViewProfile={onViewProfile} onSendMessage={onOpenChat} /></div>
       {isRefreshing && <p className="py-1 text-center text-xs font-semibold text-blue-600">Refreshing feed…</p>}
-      <LiveDiscoveryFeed onWatchLive={onWatchLive} onOpenGoLive={onOpenGoLive} legacyStream={liveStream} />
-
-      {/* 24-Hour Stories Reel */}
-      <StoriesBar onOpenChatWithUser={onOpenChat} />
 
       {/* Post Composer Card */}
       <div className="bg-white rounded-2xl p-4 shadow-xs border border-slate-200">
@@ -139,6 +128,9 @@ export const Feed: React.FC<FeedProps> = ({
           </button>
         </div>
       </div>
+
+      {/* 24-Hour Stories Reel */}
+      <StoriesBar onOpenChatWithUser={onOpenChat} />
 
       {/* Posts Stream */}
       {isLoading ? (
