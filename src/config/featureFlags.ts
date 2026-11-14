@@ -1,4 +1,5 @@
-export const ECHAT_V2_ENABLED = true;
+// TEMP DISABLED FOR V2 ROLLBACK: set true to restore the existing V2 route entry.
+export const ECHAT_V2_ENABLED = false;
 export const ECHAT_V2_DEFAULT = 'classic' as const;
 export const ECHAT_CLASSIC_ENABLED = true;
 

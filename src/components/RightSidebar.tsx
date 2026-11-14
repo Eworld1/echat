@@ -53,8 +53,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ onOpenChat, onViewPr
 
       <BirthdayCard onViewProfile={onViewProfile} onSendMessage={onOpenChat} />
       
-      {/* Sponsored / Featured Box */}
-      <div className="mb-6 pb-4 border-b border-slate-200/80">
+      {/* Target Classic layout keeps Birthdays and Contacts in the right rail. */}
+      {false && <div className="mb-6 pb-4 border-b border-slate-200/80">
         <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
           Sponsored
         </h4>
@@ -73,10 +73,10 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ onOpenChat, onViewPr
             </p>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Trending topics (hashtags used in the last 7 days) */}
-      {trending.length > 0 && (
+      {false && trending.length > 0 && (
         <div className="mb-6 pb-4 border-b border-slate-200/80">
           <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
             {t('trending')}

@@ -25,14 +25,17 @@ import { Events } from './pages/Events';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import { SplashScreen } from './components/SplashScreen';
-import { UpgradePrompt } from './components/UpgradePrompt';
-import { CreatePostModal } from './components/CreatePostModal';
+// TEMP DISABLED FOR V2 ROLLBACK: import { UpgradePrompt } from './components/UpgradePrompt';
 import type { AppView } from './components/Navbar';
 import { runTopBackAction, useBackButton } from './hooks/useBackButton';
-import { EchatV2App } from './components/EchatV2App';
-import { EchatV2Boundary } from './components/EchatV2Boundary';
+import { ECHAT_V2_ENABLED } from './config/featureFlags';
+// TEMP DISABLED FOR V2 ROLLBACK: import { EchatV2App } from './components/EchatV2App';
+// TEMP DISABLED FOR V2 ROLLBACK: import { EchatV2Boundary } from './components/EchatV2Boundary';
+import { V2Market } from './pages/v2/V2Market';
+import { V2MarketOrders } from './pages/v2/V2MarketOrders';
+import type { V2MarketListing } from './services/v2Market';
 
-const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard' };
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -43,13 +46,11 @@ export function MainApp() {
   useEffect(() => { const timer = window.setTimeout(() => setSplashElapsed(true), 2000); return () => window.clearTimeout(timer); }, []);
   useEffect(() => { if (!splashElapsed || isLoading) return; const timer = window.setTimeout(() => setSplashHidden(true), 500); return () => window.clearTimeout(timer); }, [splashElapsed, isLoading]);
 
-  const initialPath = window.location.pathname;
-  const [currentView, setCurrentView] = useState<AppView>(() => initialPath.startsWith('/v2/') ? initialPath as AppView : 'feed');
-  const isV2Route = typeof currentView === 'string' && currentView.startsWith('/v2/');
+  const [currentView, setCurrentView] = useState<AppView>('feed');
+  const [marketRoute, setMarketRoute] = useState<string>('/marketplace');
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
-  const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [showBackToast, setShowBackToast] = useState(false);
   const currentViewRef = useRef(currentView);
   const previousViewRef = useRef<AppView>('feed');
@@ -62,10 +63,10 @@ export function MainApp() {
   useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname;
-      if (path.startsWith('/v2/')) { setCurrentView(path as AppView); return; }
-      if (path === '/market') {
-        window.history.replaceState({ echatV2: true }, '', `/v2/market${window.location.search}`);
-        setCurrentView('/v2/market');
+      if ((path.startsWith('/v2/') || path === '/v2') && !ECHAT_V2_ENABLED) {
+        // TEMP DISABLED FOR V2 ROLLBACK: restore V2 paths here when ECHAT_V2_ENABLED is turned back on.
+        window.history.replaceState({ echatApp: true, tab: 'feed' }, '', `/home${window.location.search}`);
+        setCurrentView('feed');
         return;
       }
       if (path === '/' || path.startsWith('/classic')) {
@@ -73,8 +74,9 @@ export function MainApp() {
         setCurrentView('feed');
         return;
       }
-      const route = path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : classicRoutes[path];
+      const route = path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : path.startsWith('/marketplace/listing/') ? 'marketplace' : classicRoutes[path];
       if (route) {
+        if (route === 'marketplace' && path.startsWith('/marketplace/listing/')) setMarketRoute(path);
         if (route === 'admin' && !isLoading && !canAdmin) {
           window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
           setCurrentView('feed');
@@ -100,11 +102,9 @@ export function MainApp() {
   useBackButton(Boolean(activeChatPartner), () => setActiveChatPartner(null), 'chat-conversation');
   useEffect(() => {
     if (isLoading) return;
-    if (initialAuthResolved.current && user && !previousLoggedIn.current && (window.location.pathname === '/' || window.location.pathname === '/v2/home')) {
-      const target = window.location.pathname === '/v2/home' ? '/v2/home' : '/home';
-      const goV2 = target === '/v2/home';
-      window.history.replaceState({ [goV2 ? 'echatV2' : 'echatApp']: true }, '', target);
-      setCurrentView(goV2 ? '/v2/home' : 'feed');
+    if (initialAuthResolved.current && user && !previousLoggedIn.current && (window.location.pathname === '/' || window.location.pathname.startsWith('/v2/'))) {
+      window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
+      setCurrentView('feed');
     }
     previousLoggedIn.current = Boolean(user);
     initialAuthResolved.current = true;
@@ -157,23 +157,14 @@ export function MainApp() {
   const handleNavigate = (
     view: AppView,
     targetProfileId?: string,
-    targetPostId?: string
+    targetPostId?: string,
+    targetRoute?: string
   ) => {
-    if (typeof view === 'string' && view.startsWith('/v2/')) {
-      window.history.pushState({ echatV2: true }, '', `${view}${window.location.search}`);
-      setActiveChatPartner(null);
-      setIsMessengerDrawerOpen(false);
-      setIsGoLiveOpen(false);
-      setActiveViewerStream(null);
-      setCurrentView(view);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Partial<Record<AppView,string>>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard'};
-    const routePath=routeByView[view];
-    if(!routePath)return;
+    const routeByView:Record<AppView,string>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders'};
+    const routePath=view==='marketplace' ? (targetRoute?.startsWith('/marketplace/') ? targetRoute : '/marketplace') : routeByView[view];
+    if(view==='marketplace')setMarketRoute(routePath);
     window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${window.location.search}`);
     setActiveChatPartner(null);
     setIsMessengerDrawerOpen(false);
@@ -199,10 +190,21 @@ export function MainApp() {
     }
   };
 
+  const navigateMarket = (route: string) => {
+    if (route === '/orders' || route === '/my-orders' || route === '/marketplace/orders') {
+      handleNavigate('orders');
+      return;
+    }
+    if (route === '/settings') {
+      handleNavigate('settings');
+      return;
+    }
+    handleNavigate('marketplace', undefined, undefined, route);
+  };
+
   useEffect(() => {
     if (!window.history.state?.echatApp) window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);
     const handlePopState = () => {
-      if (window.location.pathname.startsWith('/v2')) return;
       if (runTopBackAction()) {
         window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);
         return;
@@ -281,17 +283,15 @@ export function MainApp() {
   }
 
   return (
-    <div className="echat-classic min-h-screen bg-[#F0F2F5] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
+    <div className="echat-classic min-h-screen bg-[#F2F4F7] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
       <InstallAppBanner />
-      {splashHidden && <UpgradePrompt />}
+      {/* TEMP DISABLED FOR V2 ROLLBACK: {splashHidden && <UpgradePrompt />} */}
 
       <Navbar
         currentView={currentView}
         onNavigate={handleNavigate}
         onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
-        onOpenCreate={() => setIsCreatePostOpen(true)}
-        onOpenGoLive={() => setIsGoLiveOpen(true)}
         onProfileMenuChange={handleProfileMenuChange}
       />
 
@@ -303,12 +303,13 @@ export function MainApp() {
         <LeftSidebar
           currentView={currentView}
           onNavigate={handleNavigate}
-          onOpenGoLive={() => setIsGoLiveOpen(true)}
+          onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
         />
 
         {/* Central Stage */}
         <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
-          {isV2Route ? <EchatV2Boundary><EchatV2App embedded route={currentView as `/v2/${string}`} onNavigate={route => handleNavigate(route as AppView)} /></EchatV2Boundary> : currentView === 'feed' && (
+          {/* TEMP DISABLED FOR V2 ROLLBACK: V2 route renderer remains in EchatV2App.tsx for reactivation. */}
+          {currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
               onViewProfile={(uid) => handleNavigate('profile', uid)}
@@ -318,7 +319,6 @@ export function MainApp() {
             />
           )}
 
-          {!isV2Route && <>
           {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} />}
 
           {currentView === 'friends' && (
@@ -354,12 +354,14 @@ export function MainApp() {
             <SavedPosts onViewProfile={(uid) => handleNavigate('profile', uid)} />
           )}
 
+          {currentView === 'marketplace' && <V2Market route={marketRoute} onNavigate={navigateMarket} onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} />}
+          {currentView === 'orders' && <V2MarketOrders onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} onShop={() => handleNavigate('marketplace')} />}
+
           {currentView === 'admin' && canAdmin && (
             <AdminDashboard
               onViewProfile={(uid) => handleNavigate('profile', uid)}
             />
           )}
-          </>}
         </main>
 
         {/* Right Contacts Sidebar (Desktop XL) */}
@@ -380,7 +382,6 @@ export function MainApp() {
         onClose={() => setIsMessengerDrawerOpen(false)}
         onSelectUser={handleOpenChat}
       />
-      <CreatePostModal isOpen={isCreatePostOpen} onClose={() => setIsCreatePostOpen(false)} onPostCreated={() => { setIsCreatePostOpen(false); handleNavigate('feed'); }} />
 
       {showBackToast && <div role="status" className="fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">Press back again to exit</div>}
 
