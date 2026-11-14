@@ -24,7 +24,18 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
   const loadStories = async () => {
     try {
       const list = await api.getStories();
-      setStories(list);
+      const allowedAuthors = new Set([user?.id, ...(user?.friends || [])].filter(Boolean));
+      const now = Date.now();
+      const visible = list.filter(story => story.expiresAt > now && allowedAuthors.has(story.authorId));
+      visible.sort((a, b) => {
+        const aOwn = a.authorId === user?.id ? 0 : 1;
+        const bOwn = b.authorId === user?.id ? 0 : 1;
+        if (aOwn !== bOwn) return aOwn - bOwn;
+        const aSeen = user && a.viewers.some(viewer => viewer.userId === user.id) ? 1 : 0;
+        const bSeen = user && b.viewers.some(viewer => viewer.userId === user.id) ? 1 : 0;
+        return aSeen - bSeen || b.createdAt - a.createdAt;
+      });
+      setStories(visible);
     } catch (err) {
       console.error('Failed to load stories:', err);
     }
@@ -36,7 +47,10 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
       setStories(prev => [newStory, ...prev.filter(s => s.id !== newStory.id)]);
     });
     return () => unsub();
-  }, []);
+  }, [user?.id, user?.friends]);
+
+  const storyGroups = Array.from(new Map(stories.map(story => [story.authorId, stories.filter(item => item.authorId === story.authorId)])).values());
+  const orderedStories = storyGroups.flat();
 
   const handleStoryReply = async (author: User, text: string) => {
     try {
@@ -52,81 +66,30 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
 
   return (
     <>
-      <div className="flex items-center gap-2.5 overflow-x-auto pb-2 scrollbar-none select-none">
+      <div className="flex items-start justify-start gap-4 overflow-x-auto pb-3 scrollbar-none select-none sm:justify-center">
         {/* Create Story Card */}
         <div
           onClick={() => setIsCreateOpen(true)}
-          className="relative flex-shrink-0 w-28 sm:w-32 h-48 sm:h-52 bg-white rounded-2xl overflow-hidden shadow-xs border border-slate-200/80 cursor-pointer group hover:shadow-md transition"
+          className="flex w-[68px] shrink-0 flex-col items-center gap-1.5 border-0 bg-transparent p-0 text-center cursor-pointer group sm:w-[76px]"
         >
-          <div className="h-32 sm:h-36 overflow-hidden">
-            <img
-              src={user?.avatar || initialsAvatar(user?.name || '')}
-              alt="You"
-              className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-            />
-          </div>
-          <div className="absolute top-28 sm:top-32 left-1/2 -translate-x-1/2">
-            <div className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center ring-4 ring-white shadow-sm group-hover:bg-blue-700 transition">
-              <Plus size={20} strokeWidth={2.5} />
-            </div>
-          </div>
-          <div className="pt-4 text-center">
-            <span className="text-xs font-bold text-slate-800">{t('create_story')}</span>
-          </div>
+          <div className="relative h-[68px] w-[68px] rounded-full border-2 border-slate-200 p-1 sm:h-[76px] sm:w-[76px]"><img src={user?.avatar || initialsAvatar(user?.name || '')} alt="You" className="h-full w-full rounded-full object-cover"/><span className="absolute bottom-0 right-0 grid h-7 w-7 place-items-center rounded-full border-2 border-white bg-blue-600 text-white shadow"><Plus size={17}/></span></div>
+          <span className="w-full truncate text-xs font-semibold text-slate-800">Your Story</span>
         </div>
 
         {/* Story Items */}
-        {stories.map((story, idx) => {
-          const isViewed = Boolean(user && story.viewers.some(v => v.userId === user.id));
+        {storyGroups.map((group) => {
+          const story = group[0];
+          const idx = orderedStories.findIndex(item => item.id === story.id);
+          const isViewed = Boolean(user && group.every(item => item.viewers.some(v => v.userId === user.id)));
+          const isOwn = story.authorId === user?.id;
           return (
             <div
-              key={story.id}
+              key={story.authorId}
               onClick={() => setActiveStoryIndex(idx)}
-              className="relative flex-shrink-0 w-28 sm:w-32 h-48 sm:h-52 rounded-2xl overflow-hidden shadow-xs cursor-pointer group hover:shadow-lg hover:scale-[1.02] transition duration-200"
-              style={{
-                background: story.backgroundGradient || '#1E293B'
-              }}
+              className="flex w-[68px] shrink-0 cursor-pointer flex-col items-center gap-1.5 text-center sm:w-[76px]"
             >
-              {story.type === 'image' && story.mediaUrl ? (
-                <img
-                  src={story.mediaUrl}
-                  alt={story.author?.name || 'Story'}
-                  className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                />
-              ) : (
-                <div className="absolute inset-0 p-3 flex items-center justify-center text-center">
-                  <p className="text-white text-xs font-bold line-clamp-4 drop-shadow">
-                    {story.text}
-                  </p>
-                </div>
-              )}
-
-              {/* Gradient tint */}
-              <div className="absolute inset-0 bg-black/50" />
-
-              {/* Author Avatar with Ring */}
-              <div className="absolute top-2.5 left-2.5 z-10">
-                <div
-                  className={`w-9 h-9 rounded-full p-0.5 ${
-                    isViewed
-                      ? 'bg-slate-300 ring-1 ring-slate-400'
-                      : 'bg-[#1877F2] ring-2 ring-[#0A2A6B]'
-                  }`}
-                >
-                  <img
-                    src={story.author?.avatar || initialsAvatar(story.author?.name || '')}
-                    alt={story.author?.name || 'User'}
-                    className="w-full h-full rounded-full object-cover border-2 border-white"
-                  />
-                </div>
-              </div>
-
-              {/* Author Name */}
-              <div className="absolute bottom-2.5 left-2.5 right-2.5 z-10">
-                <p className="text-xs font-bold text-white truncate drop-shadow-md">
-                  {story.author?.name || 'User'}
-                </p>
-              </div>
+              <div className={`h-[68px] w-[68px] rounded-full p-[3px] sm:h-[76px] sm:w-[76px] ${isViewed ? 'bg-slate-300' : 'bg-emerald-500'}`}><img src={story.author?.avatar || initialsAvatar(story.author?.name || 'Echat User')} alt={story.author?.name || 'User'} className="h-full w-full rounded-full border-2 border-white object-cover"/></div>
+              <span className="w-full truncate text-xs font-semibold text-slate-800">{isOwn ? 'Your Story' : story.author?.name || 'User'}</span>
             </div>
           );
         })}
@@ -135,9 +98,9 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
       {/* Story Viewer Modal */}
       {activeStoryIndex !== null && (
         <StoryViewerModal
-          stories={stories}
+          stories={orderedStories}
           initialIndex={activeStoryIndex}
-          onClose={() => setActiveStoryIndex(null)}
+          onClose={() => { setActiveStoryIndex(null); void loadStories(); }}
           onReply={handleStoryReply}
         />
       )}

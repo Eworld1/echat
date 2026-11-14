@@ -1,5 +1,5 @@
 import { initialsAvatar } from '../utils/avatar';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Story, User } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -25,20 +25,23 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [replyText, setReplyText] = useState('');
+  const [viewersOpen, setViewersOpen] = useState(false);
+  const touchStartY = useRef<number | null>(null);
   const currentStory = stories[currentIndex];
   const [storyViewers, setStoryViewers] = useState(currentStory?.viewers || []);
 
   useEffect(() => {
     if (!currentStory) return;
     setStoryViewers(currentStory.viewers || []);
-    api.viewStory(currentStory.id).then(result => {
+    const timer = window.setTimeout(() => { void api.viewStory(currentStory.id).then(result => {
       if (result.story?.id === currentStory.id) setStoryViewers(result.story.viewers || []);
-    }).catch(() => {});
+    }).catch(() => {}); }, 1000);
+    return () => window.clearTimeout(timer);
   }, [currentIndex, currentStory]);
 
   // Story autoplay timer
   useEffect(() => {
-    if (isPaused) return;
+    if (isPaused || currentStory?.type === 'video') return;
 
     const interval = setInterval(() => {
       setProgress((prev) => {
@@ -56,7 +59,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     }, 100);
 
     return () => clearInterval(interval);
-  }, [currentIndex, stories.length, isPaused, onClose]);
+  }, [currentIndex, stories.length, isPaused, onClose, currentStory?.type]);
 
   const goToNext = () => {
     if (currentIndex < stories.length - 1) {
@@ -138,11 +141,26 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         className="relative w-full max-w-md h-[90vh] sm:h-[85vh] rounded-3xl overflow-hidden shadow-2xl flex flex-col justify-between border border-white/10"
         onMouseDown={() => setIsPaused(true)}
         onMouseUp={() => setIsPaused(false)}
-        onTouchStart={() => setIsPaused(true)}
-        onTouchEnd={() => setIsPaused(false)}
+        onTouchStart={event => { setIsPaused(true); touchStartY.current = event.touches[0]?.clientY ?? null; }}
+        onTouchEnd={event => {
+          setIsPaused(false);
+          const start = touchStartY.current;
+          touchStartY.current = null;
+          const end = event.changedTouches[0]?.clientY;
+          if (start !== null && end !== undefined && end - start > 80) onClose();
+        }}
+        onTouchMove={() => {}}
+        onClick={event => {
+          const target = event.target as HTMLElement;
+          if (target.closest('button, input, textarea, form, video')) return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          if (event.clientX < bounds.left + bounds.width / 2) goToPrev(); else goToNext();
+        }}
       >
         {/* Background Visual */}
-        {currentStory.type === 'image' && currentStory.mediaUrl ? (
+        {currentStory.type === 'video' && currentStory.mediaUrl ? (
+          <video key={currentStory.id} src={currentStory.mediaUrl} autoPlay playsInline controls muted className="absolute inset-0 h-full w-full object-contain" onTimeUpdate={event => { const video = event.currentTarget; if (video.duration > 0) setProgress(video.currentTime / video.duration * 100); }} onEnded={goToNext} />
+        ) : currentStory.type === 'image' && currentStory.mediaUrl ? (
           <img
             src={currentStory.mediaUrl}
             alt="story"
@@ -195,7 +213,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             {isMyStory && (
               <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full text-white text-xs font-semibold">
                 <Eye size={14} />
-                <span>{currentStory.viewers.length} views</span>
+                <button type="button" onClick={() => setViewersOpen(true)} className="min-h-8 rounded-full px-1 text-white hover:underline">{storyViewers.length} views</button>
               </div>
             )}
           </div>
@@ -220,21 +238,10 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
                   Viewers ({currentStory.viewers.length})
                 </span>
               </div>
-              {currentStory.viewers.length === 0 ? (
+              {storyViewers.length === 0 ? (
                 <p className="text-xs text-white/80">No views yet. Friends will see your story.</p>
               ) : (
-                <div className="mt-2 max-h-32 overflow-y-auto space-y-2">
-                  {storyViewers.map(view => {
-                    const viewer = view.user;
-                    return (
-                      <div key={view.userId} className="flex items-center gap-2 text-xs text-white/90">
-                        <img src={viewer?.avatar || initialsAvatar(viewer?.name || 'Echat User')} alt="" className="w-7 h-7 rounded-full object-cover" />
-                        <span className="font-semibold truncate">{viewer?.name || 'Echat user'}</span>
-                        <span className="ml-auto text-white/60">{new Date(view.viewedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                    );
-                  })}
-                </div>
+                <button type="button" onClick={() => setViewersOpen(true)} className="mt-1 text-xs font-semibold text-blue-200">Tap to see who viewed</button>
               )}
             </div>
           ) : (
@@ -266,6 +273,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             </form>
           )}
         </div>
+        {viewersOpen && isMyStory && <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 sm:items-center" onClick={() => setViewersOpen(false)}><section role="dialog" aria-modal="true" aria-label="Story viewers" onClick={event => event.stopPropagation()} className="max-h-[75dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 text-slate-900 sm:rounded-2xl"><div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300 sm:hidden"/><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Viewers ({storyViewers.length})</h2><button type="button" onClick={() => setViewersOpen(false)} aria-label="Close viewers" className="grid h-10 w-10 place-items-center rounded-full hover:bg-slate-100"><X size={20}/></button></div>{storyViewers.length ? <div className="mt-3 divide-y divide-slate-100">{storyViewers.map(view => <div key={view.userId} className="flex items-center gap-3 py-3"><img src={view.user?.avatar || initialsAvatar(view.user?.name || 'Echat User')} alt="" className="h-10 w-10 rounded-full object-cover"/><span className="min-w-0 flex-1 truncate text-sm font-semibold">{view.user?.name || 'Echat user'}</span><time className="text-xs text-slate-500">{new Date(view.viewedAt).toLocaleString()}</time></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No views yet.</p>}</section></div>}
       </div>
     </div>
   );
