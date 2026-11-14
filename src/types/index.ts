@@ -7,7 +7,7 @@ export interface User {
   avatar: string; coverPhoto: string; bio: string; location: string;
   dob?: string; dobMonthDay?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
-  v2?: { whatsapp?: string; whatsappEnabled?: boolean; whatsappDisplay?: boolean; whatsappAutoReplyTemplate?: string; [key:string]: unknown };
+  v2?: { whatsapp?: string; whatsappEnabled?: boolean; whatsappDisplay?: boolean; whatsappAutoReplyTemplate?: string; avatarMode?: 'photo' | 'avatar'; realAvatar?: string; avatarConfig?: Record<string, string>; profileTheme?: string; profileBanner?: string; profileMusic?: string; topFriends?: string[]; mood?: string; [key:string]: unknown };
   role: 'user' | 'creator' | 'admin' | 'developer' | 'super_admin';
   canApproveLive?: boolean;
   liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';

@@ -7,6 +7,7 @@ export interface User {
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
   role: 'user' | 'creator' | 'admin' | 'developer' | 'super_admin';
   canApproveLive?: boolean;
+  v2?: Record<string, unknown>;
   liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';
   liveAuthSecret?: string;
   isVerified?: boolean; isOfficialDeveloper?: boolean;

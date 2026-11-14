@@ -800,7 +800,7 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     return res.status(403).json({ error: 'Unauthorized to update this profile' });
   }
 
-  const { name, bio, location, work, education, avatar, coverPhoto, dob, dobVisibility, birthdayReminderEnabled, reelsAutoplay, reelsWifiOnly, privacySettings, blockedUsers } = req.body;
+  const { name, bio, location, work, education, avatar, coverPhoto, dob, dobVisibility, birthdayReminderEnabled, reelsAutoplay, reelsWifiOnly, privacySettings, blockedUsers, v2 } = req.body;
 
   if (dob !== undefined && dob !== '') {
     if (typeof dob !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) return res.status(400).json({ error: 'Please enter a valid date of birth' });
@@ -823,6 +823,22 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
       : undefined;
   const cleanBlocked: string[] | undefined = Array.isArray(blockedUsers)
     ? blockedUsers.filter((id: unknown): id is string => typeof id === 'string').slice(0, 500)
+    : undefined;
+  const cleanV2: Record<string, unknown> | undefined = v2 && typeof v2 === 'object' && !Array.isArray(v2)
+    ? {
+        ...(typeof v2.avatarMode === 'string' && ['photo', 'avatar'].includes(v2.avatarMode) && { avatarMode: v2.avatarMode }),
+        ...(typeof v2.realAvatar === 'string' && v2.realAvatar.length <= 1_000_000 && { realAvatar: v2.realAvatar }),
+        ...(v2.avatarConfig && typeof v2.avatarConfig === 'object' && { avatarConfig: v2.avatarConfig }),
+        ...(typeof v2.profileTheme === 'string' && /^#[0-9a-f]{6}$/i.test(v2.profileTheme) && { profileTheme: v2.profileTheme }),
+        ...(typeof v2.profileBanner === 'string' && v2.profileBanner.length <= 1_000_000 && { profileBanner: v2.profileBanner }),
+        ...(typeof v2.profileMusic === 'string' && { profileMusic: String(v2.profileMusic).slice(0, 120) }),
+        ...(typeof v2.mood === 'string' && { mood: String(v2.mood).slice(0, 60) }),
+        ...(Array.isArray(v2.topFriends) && { topFriends: v2.topFriends.filter((id: unknown): id is string => typeof id === 'string').slice(0, 8) }),
+        ...(['whatsapp', 'whatsappEnabled', 'whatsappDisplay', 'whatsappAutoReplyTemplate'].reduce((out, key) => {
+          if (key in v2) out[key] = v2[key];
+          return out;
+        }, {} as Record<string, unknown>))
+      }
     : undefined;
 
   // Task 4: Anti-impersonation protection for normal users updating profile
@@ -848,7 +864,8 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     ...(avatar && { avatar }),
     ...(coverPhoto && { coverPhoto }),
     ...(cleanPrivacy && { privacySettings: { ...(db.getUserById(req.params.id)?.privacySettings || {}), ...cleanPrivacy } }),
-    ...(cleanBlocked && { blockedUsers: cleanBlocked })
+    ...(cleanBlocked && { blockedUsers: cleanBlocked }),
+    ...(cleanV2 && { v2: { ...(db.getUserById(req.params.id)?.v2 || {}), ...cleanV2 } })
   });
 
   if (!updated) return res.status(404).json({ error: 'User not found' });

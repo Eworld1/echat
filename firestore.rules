@@ -173,5 +173,32 @@ service cloud.firestore {
         request.resource.data.get('expiresAt', 0) > request.time.toMillis() &&
         request.resource.data.get('expiresAt', 0) <= request.time.toMillis() + 86400000;
     }
+
+    // V2 online Ludo rooms: room participants can read live board state. A new
+    // player may join only a waiting room, and no more than four players may join.
+    match /v2LudoGames/{roomId} {
+      allow read: if signedIn();
+      allow create: if signedIn() &&
+        request.resource.data.get('hostId', '') == request.auth.uid &&
+        request.resource.data.get('playerIds', []).size() == 1 &&
+        request.resource.data.get('playerIds', []).hasAll([request.auth.uid]) &&
+        request.resource.data.get('status', '') == 'waiting';
+      allow update: if signedIn() && (
+        (request.auth.uid in resource.data.get('playerIds', []) &&
+          request.resource.data.get('playerIds', []) == resource.data.get('playerIds', []) &&
+          request.resource.data.get('hostId', '') == resource.data.get('hostId', '') &&
+          request.resource.data.get('players', []).size() == resource.data.get('players', []).size() &&
+          request.resource.data.get('players', []).size() <= 4 &&
+          request.resource.data.get('turn', 0) >= 0 &&
+          request.resource.data.get('turn', 0) < request.resource.data.get('players', []).size()) ||
+        (resource.data.get('status', '') == 'waiting' &&
+          request.resource.data.get('playerIds', []).size() == resource.data.get('playerIds', []).size() + 1 &&
+          request.resource.data.get('playerIds', []).size() <= 4 &&
+          request.resource.data.get('playerIds', []).hasAll(resource.data.get('playerIds', [])) &&
+          request.resource.data.get('playerIds', []).hasAll([request.auth.uid]) &&
+          request.resource.data.get('hostId', '') == resource.data.get('hostId', '') &&
+          request.resource.data.get('players', []).size() == request.resource.data.get('playerIds', []).size()));
+      allow delete: if signedIn() && resource.data.get('hostId', '') == request.auth.uid;
+    }
   }
 }

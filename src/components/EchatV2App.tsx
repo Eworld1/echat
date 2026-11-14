@@ -20,7 +20,10 @@ import { MarketChatBox } from './v2/chat/MarketChatBox';
 import { getV2Listing, type V2MarketListing } from '../services/v2Market';
 import { openWhatsAppOrder } from '../utils/whatsappOrder';
 import { EchatV2IntroVideo } from './EchatV2IntroVideo';
-import { V2AI, V2Ads, V2Avatars, V2Dashboard, V2Feeds, V2Finds, V2Games, V2Kids, V2Memories, V2PagesRoute } from '../pages/v2/V2AddOnPages';
+import { V2Ads, V2Dashboard, V2Feeds, V2Finds, V2Kids, V2Memories, V2PagesRoute } from '../pages/v2/V2AddOnPages';
+import { V2AI } from '../pages/v2/V2AI';
+import { V2Avatars } from '../pages/v2/V2Avatars';
+import { V2Games } from '../pages/v2/V2Games';
 
 interface MarketChat { listing:V2MarketListing; partner:User; whatsappEnabled:boolean; minimized:boolean; }
 const routeFromPath=(path:string):V2Route=>path.startsWith('/v2/market/listing/')?path as V2Route:(['/v2/home','/v2/moments','/v2/vibes','/v2/circle','/v2/chat','/v2/communities','/v2/groups','/v2/market','/v2/events','/v2/saved','/v2/market/orders','/v2/settings','/v2/profile','/v2/dashboard','/v2/finds','/v2/ai','/v2/ads','/v2/avatar','/v2/feeds','/v2/games','/v2/memories','/v2/kids','/v2/pages','/v2/intro'].includes(path)?path as V2Route:'/v2/home');

@@ -22,7 +22,7 @@ const classicLinks: { route: V2Route; title: string; icon: React.ReactNode; clas
 const links: { route: V2Route; title: string; icon: React.ReactNode; classic?:string }[] = [
   ...classicLinks,
   { route:'/v2/finds', title:'Finds', icon:<Compass size={19}/> },
-  { route:'/v2/ai', title:'Meta AI', icon:<Bot size={19}/> },
+  { route:'/v2/ai', title:'eChat AI', icon:<Bot size={19}/> },
   { route:'/v2/saved', title:'Saved', icon:<Bookmark size={19}/> },
   { route:'/v2/ads', title:'Ad Center', icon:<Megaphone size={19}/> },
   { route:'/v2/avatar', title:'Avatars', icon:<Smile size={19}/> },
@@ -37,7 +37,7 @@ const links: { route: V2Route; title: string; icon: React.ReactNode; classic?:st
 ];
 const v2MenuLinks: {route:V2Route;title:string;icon:React.ReactNode}[]=[
   {route:'/v2/finds',title:'Finds',icon:<Compass size={19}/>},
-  {route:'/v2/ai',title:'Meta AI',icon:<Bot size={19}/>},
+  {route:'/v2/ai',title:'eChat AI',icon:<Bot size={19}/>},
   {route:'/v2/saved',title:'Saved',icon:<Bookmark size={19}/>},
   {route:'/v2/ads',title:'Ad Center',icon:<Megaphone size={19}/>},
   {route:'/v2/avatar',title:'Avatars',icon:<Smile size={19}/>},
