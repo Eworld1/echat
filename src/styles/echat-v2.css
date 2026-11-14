@@ -69,3 +69,11 @@ html.echat-v2-dark .echat-v2-games-mode .echat-v2-desktop-navigation button[clas
 .games-confetti { position: fixed; inset: 0; z-index: 1001; overflow: hidden; pointer-events: none; }
 .games-confetti span { position: absolute; top: -48px; font-size: 26px; animation: games-confetti-fall 2.5s ease-in forwards; }
 @keyframes games-confetti-fall { to { transform: translateY(110dvh) rotate(540deg); opacity: .1; } }
+
+/* Add-on feature pages inherit the single Professional shell and palette. */
+.echat-professional-features { color:#111827; }
+.echat-professional-features .echat-v2-page header[class*="bg-[#0F1B2D]"] { background:#FFFFFF!important; border:1px solid #D9DDE5; color:#111827!important; }
+.echat-professional-features .echat-v2-page header[class*="bg-[#0F1B2D]"] .text-white { color:#111827!important; }
+.echat-professional-features .echat-v2-page [class*="text-[#FFC107]"],.echat-professional-features .echat-v2-page [class*="text-[#F5B301]"],.echat-professional-features .echat-v2-page [class*="text-[#0F1B2D]"] { color:#0A2A6B!important; }
+.echat-professional-features .echat-v2-page [class*="bg-[#F5B301]"],.echat-professional-features .echat-v2-page [class*="bg-[#FFC107]"] { background:#1877F2!important; color:#FFFFFF!important; }
+.echat-professional-features .echat-v2-page [class*="bg-gradient"] { background-image:none!important; background-color:#E8EEF7!important; }

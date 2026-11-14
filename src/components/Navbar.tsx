@@ -42,12 +42,11 @@ import {
   Users2,
   Calendar,
   Settings as SettingsIcon
-  , Film, BarChart3, LayoutGrid, Bot, Gamepad2
+  , Film, BarChart3, LayoutGrid, Gamepad2
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
-import { EchatThemeToggle } from './EchatThemeToggle';
 
 export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
@@ -946,7 +945,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button onClick={onOpenCreate} className="hidden h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-700 min-[1025px]:flex" title="Create post"><PlusSquare size={19} /></button>
           <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title="Go Live"><Radio size={17}/>Go Live</button>
-          <div className="hidden min-[1440px]:block"><EchatThemeToggle compact/></div>
 
           <button type="button" onClick={toggleProfileMenu} aria-label="Open profile features menu" aria-expanded={showProfileMenu} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10">
             <LayoutGrid size={19} />

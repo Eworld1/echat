@@ -64,7 +64,7 @@ export const EchatV2Layout:React.FC<Props>=({route,onNavigate,onCreate,children,
   useEffect(()=>{if(embedded||!user)return;let alive=true;const load=()=>void api.getNotifications().then(items=>{if(alive)setNotifications(items);}).catch(()=>{});load();const timer=window.setInterval(load,30000);return()=>{alive=false;window.clearInterval(timer);};},[user?.id,embedded]);
   const openNotifications=async()=>{const opening=!notificationsOpen;setNotificationsOpen(opening);if(opening){try{await api.markNotificationsRead();setNotifications(current=>current.map(item=>({...item,read:true})));}catch{/* Keep notification links usable if sync is unavailable. */}}};
   const unread=notifications.some(item=>!item.read);
-  if(embedded)return <>{children}</>;
+  if(embedded)return <div className={`echat-professional-features ${route==='/v2/games'?'echat-v2-games-mode':''}`}>{children}</div>;
   return <div className={`echat-v2 min-h-dvh pb-[calc(68px+env(safe-area-inset-bottom))] lg:pb-0 ${route==='/v2/games'?'echat-v2-games-mode':''}`}>
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white px-3 py-2 text-slate-900 sm:px-5">
       <div className="mx-auto flex h-12 max-w-7xl items-center gap-2 sm:gap-3">

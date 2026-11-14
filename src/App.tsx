@@ -31,13 +31,11 @@ import type { AppView } from './components/Navbar';
 import { runTopBackAction, useBackButton } from './hooks/useBackButton';
 import { EchatV2App } from './components/EchatV2App';
 import { EchatV2Boundary } from './components/EchatV2Boundary';
-import { useEchatTheme } from './hooks/useEchatTheme';
 
 const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
-  useEchatTheme();
   const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const { onLiveStarted, onLiveStopped, onLiveStreamUpdated } = useSocket();
   const [splashElapsed, setSplashElapsed] = useState(false);
@@ -309,6 +307,7 @@ export function MainApp() {
             />
           )}
 
+          {!isV2Route && <>
           {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} />}
 
           {currentView === 'friends' && (
@@ -349,6 +348,7 @@ export function MainApp() {
               onViewProfile={(uid) => handleNavigate('profile', uid)}
             />
           )}
+          </>}
         </main>
 
         {/* Right Contacts Sidebar (Desktop XL) */}
