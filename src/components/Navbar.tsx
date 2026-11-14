@@ -42,14 +42,14 @@ import {
   Users2,
   Calendar,
   Settings as SettingsIcon
-  , Film, BarChart3
+  , Film, BarChart3, Menu
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
 import { EchatThemeToggle } from './EchatThemeToggle';
 
-export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
+export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders';
 
 interface NavbarProps {
   currentView: AppView;
@@ -57,6 +57,7 @@ interface NavbarProps {
   onOpenMessenger: () => void;
   onOpenCreate: () => void;
   onOpenGoLive?: () => void;
+  onOpenMenu?: () => void;
   onProfileMenuChange: (open: boolean) => void;
 }
 
@@ -76,6 +77,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenMessenger,
   onOpenCreate,
   onOpenGoLive,
+  onOpenMenu,
   onProfileMenuChange
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
@@ -460,16 +462,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className={`sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} bg-white border-b border-slate-200/90 shadow-2xs`}>
-      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px_48px]">
+      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[72px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 max-[768px]:grid-rows-[56px] min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px_48px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
         <div className="contents">
-          <div
-            onClick={() => onNavigate('feed')}
-            className="col-start-1 row-start-1 flex min-w-0 shrink-0 cursor-pointer items-center gap-2 group min-[1025px]:w-[280px]"
-          >
+          <div className="col-start-1 row-start-1 flex min-w-0 shrink-0 items-center gap-1.5 group min-[1025px]:w-[280px]">
+            <button type="button" onClick={onOpenMenu} aria-label="Open navigation menu" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-700 hover:bg-slate-100 min-[1024px]:hidden"><Menu size={22}/></button>
+            <button type="button" onClick={() => onNavigate('feed')} aria-label="Go to Echat home" className="flex min-w-0 shrink-0 cursor-pointer items-center gap-2">
             <img src="/logo-mark-blue.svg" alt="" className="h-10 w-10 shrink-0 object-contain transition group-hover:scale-105 min-[1025px]:hidden" />
             <img src="/logo-blue.svg" alt="Echat" className="hidden h-10 w-[190px] shrink-0 object-contain object-left min-[1025px]:block" />
+            </button>
           </div>
 
           {/* Global Search Bar */}
@@ -870,7 +872,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Center: Main Navigation Icons (Facebook style) */}
 
-        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-1 min-[1025px]:col-span-3 min-[1025px]:row-start-2 min-[1025px]:overflow-visible">
+        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none max-[768px]:hidden min-[1025px]:col-start-1 min-[1025px]:col-span-3 min-[1025px]:row-start-2 min-[1025px]:overflow-visible">
           <button
             onClick={() => onNavigate('feed')}
             className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex flex-col items-center justify-center gap-0 transition cursor-pointer ${

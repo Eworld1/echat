@@ -33,8 +33,12 @@ import { EchatV2App } from './components/EchatV2App';
 import { EchatV2Boundary } from './components/EchatV2Boundary';
 import { useEchatTheme } from './hooks/useEchatTheme';
 import { TryNewEchatBanner } from './components/TryNewEchatBanner';
+import { Film, Home, Menu, MessageSquare, ShoppingBag } from 'lucide-react';
+import { V2Market } from './pages/v2/V2Market';
+import { V2MarketOrders } from './pages/v2/V2MarketOrders';
+import type { V2MarketListing } from './services/v2Market';
 
-const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard' };
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'feed','/go-live':'feed','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -47,6 +51,8 @@ export function MainApp() {
   useEffect(() => { if (!splashElapsed || isLoading) return; const timer = window.setTimeout(() => setSplashHidden(true), 500); return () => window.clearTimeout(timer); }, [splashElapsed, isLoading]);
 
   const [currentView, setCurrentView] = useState<AppView>('feed');
+  const [marketRoute, setMarketRoute] = useState('/v2/market');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isV2Route, setIsV2Route] = useState(() => window.location.pathname.startsWith('/v2/'));
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
@@ -76,8 +82,9 @@ export function MainApp() {
         setCurrentView('feed');
         return;
       }
-      const route = path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : classicRoutes[path];
+      const route = path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : path.startsWith('/marketplace/') ? 'marketplace' : classicRoutes[path];
       if (route) {
+        if (route === 'marketplace') setMarketRoute(path === '/marketplace' ? '/v2/market' : path.replace(/^\/marketplace/, '/v2/market'));
         if (route === 'admin' && !isLoading && !canAdmin) {
           window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
           setCurrentView('feed');
@@ -165,7 +172,8 @@ export function MainApp() {
   ) => {
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Record<AppView,string>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard'};
+    const routeByView:Record<AppView,string>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders'};
+    if(view==='marketplace')setMarketRoute('/v2/market');
     window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routeByView[view]}${window.location.search}`);
     setActiveChatPartner(null);
     setIsMessengerDrawerOpen(false);
@@ -189,6 +197,30 @@ export function MainApp() {
     } else {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
+  };
+
+  const navigateMarketplace = (route: string) => {
+    if (route === '/v2/market/orders') {
+      handleNavigate('orders');
+      return;
+    }
+    if (route === '/v2/settings') {
+      handleNavigate('settings');
+      return;
+    }
+    const marketPath = route.startsWith('/v2/market') ? route : '/v2/market';
+    setMarketRoute(marketPath);
+    if (currentView !== 'marketplace') previousViewRef.current = currentView;
+    window.history.pushState({ echatApp: true, tab: 'marketplace' }, '', marketPath.replace(/^\/v2\/market/, '/marketplace'));
+    setActiveChatPartner(null);
+    setIsMessengerDrawerOpen(false);
+    setCurrentView('marketplace');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const handleSidebarNavigate = (view: AppView, targetProfileId?: string) => {
+    setMobileMenuOpen(false);
+    if (view === 'marketplace') navigateMarketplace('/v2/market');
+    else handleNavigate(view, targetProfileId);
   };
 
   useEffect(() => {
@@ -286,8 +318,14 @@ export function MainApp() {
         onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
         onOpenCreate={() => setIsCreatePostOpen(true)}
         onOpenGoLive={() => setIsGoLiveOpen(true)}
+        onOpenMenu={() => setMobileMenuOpen(true)}
         onProfileMenuChange={handleProfileMenuChange}
       />
+
+      {mobileMenuOpen && <>
+        <button type="button" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} className="fixed inset-0 z-[80] bg-black/55 min-[1024px]:hidden" />
+        <LeftSidebar currentView={currentView} onNavigate={handleSidebarNavigate} onOpenMessenger={() => { setMobileMenuOpen(false); setIsMessengerDrawerOpen(true); }} onOpenGoLive={() => { setMobileMenuOpen(false); setIsGoLiveOpen(true); }} mobileDrawer onClose={() => setMobileMenuOpen(false)} />
+      </>}
 
       {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
 
@@ -296,12 +334,12 @@ export function MainApp() {
         {/* Left Sidebar (Desktop) */}
         <LeftSidebar
           currentView={currentView}
-          onNavigate={handleNavigate}
+          onNavigate={handleSidebarNavigate}
           onOpenGoLive={() => setIsGoLiveOpen(true)}
         />
 
         {/* Central Stage */}
-        <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
+        <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' || currentView === 'marketplace' || currentView === 'orders' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
           {currentView === 'feed' && <TryNewEchatBanner/>}
           {currentView === 'feed' && (
             <Feed
@@ -348,6 +386,10 @@ export function MainApp() {
             <SavedPosts onViewProfile={(uid) => handleNavigate('profile', uid)} />
           )}
 
+          {currentView === 'marketplace' && <V2Market route={marketRoute} onNavigate={navigateMarketplace} onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} />}
+
+          {currentView === 'orders' && <V2MarketOrders onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} />}
+
           {currentView === 'admin' && canAdmin && (
             <AdminDashboard
               onViewProfile={(uid) => handleNavigate('profile', uid)}
@@ -356,8 +398,16 @@ export function MainApp() {
         </main>
 
         {/* Right Contacts Sidebar (Desktop XL) */}
-        {currentView !== 'dashboard' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
+        {currentView !== 'dashboard' && currentView !== 'marketplace' && currentView !== 'orders' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
       </div>
+
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur min-[769px]:hidden">
+        <button type="button" onClick={() => handleNavigate('feed')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'feed' ? 'text-blue-700' : 'text-slate-600'}`}><Home size={21}/><span>Home</span></button>
+        <button type="button" onClick={() => handleNavigate('reels')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'reels' ? 'text-blue-700' : 'text-slate-600'}`}><Film size={21}/><span>Reels</span></button>
+        <button type="button" onClick={() => navigateMarketplace('/v2/market')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'marketplace' ? 'text-blue-700' : 'text-slate-600'}`}><ShoppingBag size={21}/><span>Marketplace</span></button>
+        <button type="button" onClick={() => setIsMessengerDrawerOpen(true)} className="flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold text-slate-600"><MessageSquare size={21}/><span>Messages</span></button>
+        <button type="button" onClick={() => setMobileMenuOpen(true)} aria-expanded={mobileMenuOpen} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${mobileMenuOpen ? 'text-blue-700' : 'text-slate-600'}`}><Menu size={21}/><span>Menu</span></button>
+      </nav>
 
       {/* Floating Messenger Window */}
       {activeChatPartner && (

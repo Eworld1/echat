@@ -17,16 +17,20 @@ import {
   Flag,
   Users2,
   Calendar
-  , Film, BarChart3, ChevronDown, Plus, X
+  , Film, BarChart3, ChevronDown, Plus, X, MessageCircle, ShoppingBag
 } from 'lucide-react';
+type SidebarDestination = AppView | 'marketplace' | 'orders';
 
 interface LeftSidebarProps {
   currentView: string;
-  onNavigate: (view: AppView, targetProfileId?: string) => void;
+  onNavigate: (view: SidebarDestination, targetProfileId?: string) => void;
   onOpenGoLive?: () => void;
+  onOpenMessenger?: () => void;
+  mobileDrawer?: boolean;
+  onClose?: () => void;
 }
 
-export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigate, onOpenGoLive }) => {
+export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigate, onOpenGoLive, onOpenMessenger, mobileDrawer = false, onClose }) => {
   const { user, isDeveloper, myPages, activePage, switchIdentity, createIdentityPage } = useAuth();
   const canAdmin = Boolean(user?.role === 'admin' || user?.role === 'super_admin' || isDeveloper || (user as (typeof user & {isAdmin?:boolean})|null)?.isAdmin);
   const { t } = usePreferences();
@@ -38,6 +42,30 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
   const [isCreatingPage, setIsCreatingPage] = useState(false);
 
   if (!user) return null;
+
+  if (mobileDrawer) {
+    const items: { label: string; icon: React.ReactNode; action: () => void; active?: boolean }[] = [
+      { label: 'News Feed', icon: <Compass size={20}/>, action: () => onNavigate('feed'), active: currentView === 'feed' },
+      { label: 'Reels', icon: <Film size={20}/>, action: () => onNavigate('reels'), active: currentView === 'reels' },
+      { label: 'Friends & Requests', icon: <Users size={20}/>, action: () => onNavigate('friends'), active: currentView === 'friends' },
+      { label: 'Messages', icon: <MessageSquare size={20}/>, action: () => onOpenMessenger?.() },
+      { label: 'Pages', icon: <Flag size={20}/>, action: () => onNavigate('pages'), active: currentView === 'pages' },
+      { label: 'Groups', icon: <Users2 size={20}/>, action: () => onNavigate('groups'), active: currentView === 'groups' },
+      { label: 'Events', icon: <Calendar size={20}/>, action: () => onNavigate('events'), active: currentView === 'events' },
+      { label: 'Dashboard', icon: <BarChart3 size={20}/>, action: () => onNavigate('dashboard'), active: currentView === 'dashboard' },
+      { label: 'Saved Posts', icon: <Bookmark size={20}/>, action: () => onNavigate('saved'), active: currentView === 'saved' },
+      { label: 'Marketplace', icon: <ShoppingBag size={20}/>, action: () => onNavigate('marketplace'), active: currentView === 'marketplace' },
+      { label: 'My Orders', icon: <ShoppingBag size={20}/>, action: () => onNavigate('orders'), active: currentView === 'orders' },
+      { label: 'Settings & Privacy', icon: <Settings size={20}/>, action: () => onNavigate('settings'), active: currentView === 'settings' }
+    ];
+    return <aside role="dialog" aria-modal="true" aria-label="Navigation menu" className="fixed inset-y-0 left-0 z-[90] flex w-[min(84vw,340px)] flex-col overflow-y-auto border-r border-slate-200 bg-white px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(env(safe-area-inset-top)+0.5rem)] shadow-2xl animate-in slide-in-from-left duration-200">
+      <div className="mb-3 flex items-center justify-between border-b border-slate-100 px-2 pb-3"><div className="flex items-center gap-3"><img src={activePage?.avatar || user.avatar} alt="" className="h-10 w-10 rounded-full object-cover"/><div className="min-w-0"><p className="truncate text-sm font-bold text-slate-900">{activePage?.name || user.name}</p><p className="text-xs text-slate-500">Echat menu</p></div></div><button type="button" onClick={onClose} aria-label="Close navigation menu" className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-slate-100"><X size={21}/></button></div>
+      <nav className="space-y-1">{items.map(item=><button key={item.label} type="button" onClick={item.action} className={`flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold transition ${item.active?'bg-blue-50 text-blue-800':'text-slate-800 hover:bg-slate-100'}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[#0A2A6B]">{item.icon}</span><span className="flex-1">{item.label}</span></button>)}
+        <button type="button" onClick={onOpenGoLive} className="flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold text-slate-800 hover:bg-rose-50"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600"><Video size={20}/></span><span>Go Live</span></button>
+        {canAdmin&&<button type="button" onClick={()=>onNavigate('admin')} className="flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-100"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[#0A2A6B]"><Shield size={20}/></span><span>Developer Mode · Admin</span></button>}
+      </nav>
+    </aside>;
+  }
 
   return (
     <aside className="w-64 xl:w-72 flex-shrink-0 hidden lg:block sticky top-18 h-[calc(100vh-5rem)] overflow-y-auto pr-2 select-none">
