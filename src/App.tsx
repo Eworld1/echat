@@ -36,8 +36,9 @@ import { V2Market } from './pages/v2/V2Market';
 import { V2MarketOrders } from './pages/v2/V2MarketOrders';
 import type { V2MarketListing } from './services/v2Market';
 import { Film, Home, Menu, MessageSquare, ShoppingBag } from 'lucide-react';
+import { SearchPage } from './pages/SearchPage';
 
-const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders' };
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders','/search':'search' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -167,7 +168,7 @@ export function MainApp() {
   ) => {
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders'};
+    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search'};
     const routePath=view==='marketplace' ? (targetRoute?.startsWith('/marketplace/') ? targetRoute : '/marketplace') : routeByView[view];
     if(view==='marketplace')setMarketRoute(routePath);
     window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${window.location.search}`);
@@ -313,7 +314,7 @@ export function MainApp() {
         />
 
         {/* Central Stage */}
-        <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'live' ? 'max-w-6xl' : currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
+        <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'live' ? 'max-w-6xl' : currentView === 'dashboard' || currentView === 'search' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
           {/* TEMP DISABLED FOR V2 ROLLBACK: V2 route renderer remains in EchatV2App.tsx for reactivation. */}
           {currentView === 'feed' && (
             <Feed
@@ -322,6 +323,8 @@ export function MainApp() {
               onOpenGoLive={() => handleNavigate('live')}
             />
           )}
+
+          {currentView === 'search' && <SearchPage onViewProfile={uid => handleNavigate('profile', uid)} onOpenListing={id => navigateMarket(`/marketplace/listing/${id}`)} onNavigate={view => handleNavigate(view)} />}
 
           {currentView === 'live' && <LiveDiscoveryFeed onBack={() => handleNavigate('feed')} onOpenGoLive={() => setIsGoLiveOpen(true)} onWatchLive={stream => setActiveViewerStream(stream)} legacyStream={currentLiveStream} />}
 

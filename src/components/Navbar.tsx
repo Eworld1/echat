@@ -43,7 +43,7 @@ import {
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
 
-export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders';
+export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
 
 interface NavbarProps {
   currentView: AppView;
@@ -351,6 +351,16 @@ export const Navbar: React.FC<NavbarProps> = ({
     performSearch(q);
   };
 
+  const openFullSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter' || !searchQuery.trim()) return;
+    event.preventDefault();
+    saveRecentSearch(searchQuery);
+    setShowSearchDropdown(false);
+    window.history.pushState({ echatApp: true, tab: 'search' }, '', `/search?q=${encodeURIComponent(searchQuery.trim())}`);
+    window.dispatchEvent(new Event('echat:navigate'));
+    window.dispatchEvent(new CustomEvent('echat:search-query', { detail: searchQuery.trim() }));
+  };
+
   const handleClearSearch = () => {
     setSearchQuery('');
     setSearchResults({ users: [], posts: [] });
@@ -473,6 +483,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={handleSearchChange}
+                onKeyDown={openFullSearch}
                 onFocus={() => setShowSearchDropdown(true)}
                 placeholder={window.innerWidth <= 768 ? 'Search' : 'Search EChat'}
                 className="h-10 w-full min-w-0 rounded-full border border-transparent bg-slate-100 py-1.5 pl-9 pr-10 text-xs shadow-inner transition placeholder-slate-400 hover:bg-slate-100/80 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 sm:text-sm"
@@ -503,7 +514,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button type="button" onClick={() => setShowSearchDropdown(false)} aria-label="Back from search" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-700 hover:bg-slate-100"><X size={20} /></button>
                   <div className="relative min-w-0 flex-1">
                     <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input autoFocus value={searchQuery} onChange={handleSearchChange} placeholder="Search EChat" className="h-11 w-full rounded-full bg-slate-100 pl-10 pr-4 text-base text-slate-900 outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input autoFocus value={searchQuery} onChange={handleSearchChange} onKeyDown={openFullSearch} placeholder="Search EChat" className="h-11 w-full rounded-full bg-slate-100 pl-10 pr-4 text-base text-slate-900 outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
                 </div>
                 
