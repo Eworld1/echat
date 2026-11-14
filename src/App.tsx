@@ -271,8 +271,6 @@ export function MainApp() {
     return <AuthModal isOpen={true} />;
   }
 
-  if (isV2Route) return <EchatV2Boundary><EchatV2App /></EchatV2Boundary>;
-
   return (
     <div className="echat-classic min-h-screen bg-[#F0F2F5] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
@@ -301,7 +299,7 @@ export function MainApp() {
 
         {/* Central Stage */}
         <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
-          {currentView === 'feed' && (
+          {isV2Route ? <EchatV2Boundary><EchatV2App embedded /></EchatV2Boundary> : currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
               onViewProfile={(uid) => handleNavigate('profile', uid)}

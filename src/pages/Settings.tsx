@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { setChatSoundVolume } from '../utils/sounds';
-import { EchatThemeToggle } from '../components/EchatThemeToggle';
 import { listenBlockIds, unblockLiveUser } from '../services/liveDiscovery';
 import {
   Settings as SettingsIcon,
@@ -472,7 +471,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
           </div>
 
           <div className="space-y-6 max-w-xl">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 p-3"><div><p className="text-sm font-bold text-slate-900">Echat experience</p><p className="text-xs text-slate-600">Switch between Classic Echat and the V2 add-on.</p></div><EchatThemeToggle/></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-sm font-bold text-slate-900">Professional Features</p><p className="text-xs text-slate-600">All features enabled</p></div>
             {/* Dark / Light Mode */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">

@@ -92,7 +92,7 @@ export const V2Games:React.FC=()=>{
  };
  return <div className="echat-v2-page echat-v2-games-page mx-auto max-w-[1100px] space-y-4">
   <header className="echat-v2-card p-5 sm:p-6"><button type="button" aria-label={soundOn?'Mute game sounds':'Enable game sounds'} aria-pressed={soundOn} onClick={()=>setSoundOn(value=>!value)} className="games-action float-right inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm font-bold">{soundOn?<Volume2 size={18}/>:<VolumeX size={18}/>}<span>{soundOn?'Sound On':'Sound Off'}</span></button>
-   <p className="text-xs font-extrabold uppercase tracking-[.18em] text-[#6B7280]">ECHAT V2 · PLAY</p>
+   <p className="text-xs font-extrabold uppercase tracking-[.18em] text-[#6B7280]">ECHAT · PLAY</p>
    <h1 className="mt-1 text-[32px] font-extrabold text-[#111827]">Games for everyone</h1>
    <p className="games-subtitle mt-2 text-[15px] text-[#4B5563]">Choose a game, play with a friend, and keep track of your results.</p>
   </header>

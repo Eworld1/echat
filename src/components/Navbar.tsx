@@ -42,13 +42,12 @@ import {
   Users2,
   Calendar,
   Settings as SettingsIcon
-  , Film, BarChart3, LayoutGrid
+  , Film, BarChart3, LayoutGrid, Bot, Gamepad2
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
 import { EchatThemeToggle } from './EchatThemeToggle';
-import { EchatAppSwitcherTile } from './EchatAppSwitcherTile';
 
 export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
 
@@ -87,7 +86,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [showIosHelp, setShowIosHelp] = useState(false);
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [appMenuOpen, setAppMenuOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [showHelpInfo, setShowHelpInfo] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -126,7 +124,6 @@ export const Navbar: React.FC<NavbarProps> = ({
     setSettingsExpanded(false);
     setShowNotifications(false);
     setShowSearchDropdown(false);
-    setAppMenuOpen(false);
   }, [currentView, onProfileMenuChange]);
 
   const closeProfileMenu = () => {
@@ -136,7 +133,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   useBackButton(showProfileMenu, closeProfileMenu, 'profile-menu');
   useBackButton(showSearchDropdown, () => setShowSearchDropdown(false), 'navbar-search');
   useBackButton(showNotifications, () => setShowNotifications(false), 'navbar-notifications');
-  useBackButton(appMenuOpen, () => setAppMenuOpen(false), 'navbar-app-menu');
+
+  const navigateFeature = (path: string) => {
+    window.history.pushState({ echatApp: true }, '', path);
+    window.dispatchEvent(new Event('echat:navigate'));
+    closeProfileMenu();
+  };
 
   const toggleProfileMenu = () => {
     setShowProfileMenu(open => {
@@ -946,18 +948,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title="Go Live"><Radio size={17}/>Go Live</button>
           <div className="hidden min-[1440px]:block"><EchatThemeToggle compact/></div>
 
-          <div className="relative">
-            <button type="button" onClick={() => setAppMenuOpen(value => !value)} aria-label="Open Echat apps menu" aria-expanded={appMenuOpen} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10">
-              <LayoutGrid size={19} />
-            </button>
-            {appMenuOpen && <>
-              <button type="button" aria-label="Close apps menu" onClick={() => setAppMenuOpen(false)} className="fixed inset-0 z-[45] cursor-default" />
-              <div role="menu" aria-label="Echat apps" className="absolute right-0 top-12 z-[46] w-[min(340px,calc(100vw-24px))] rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-                <h2 className="mb-2 px-1 text-sm font-bold text-slate-900 dark:text-white">Echat apps</h2>
-                <EchatAppSwitcherTile variant="classic" onNavigate={() => setAppMenuOpen(false)} />
-              </div>
-            </>}
-          </div>
+          <button type="button" onClick={toggleProfileMenu} aria-label="Open profile features menu" aria-expanded={showProfileMenu} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10">
+            <LayoutGrid size={19} />
+          </button>
 
           {/* Messenger Icon */}
           <button
@@ -1148,7 +1141,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </div>
                 </button>
 
-                <div className="mb-3"><EchatAppSwitcherTile variant="classic" onNavigate={closeProfileMenu} /></div>
 
                 <div className="mb-3 rounded-xl border border-slate-100 p-2 dark:border-slate-600">
                   <p className="px-2 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Switch identity</p>
@@ -1158,6 +1150,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {activePage && <p className="px-2 pt-1 text-[10px] text-blue-700">Currently using {activePage.name}</p>}
                 </div>
 
+                <div className="mb-2 mt-3 border-y border-slate-100 py-2 dark:border-slate-600">
+                  <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Your features</p>
+                  <button onClick={() => navigateFeature('/v2/ai')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Sparkles size={21} className="text-blue-600"/>eChat AI</button>
+                  <button onClick={() => { onOpenGoLive?.(); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>Go Live</button>
+                  <button onClick={() => navigateFeature('/v2/games')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Gamepad2 size={21} className="text-blue-600"/>Games</button>
+                  <button onClick={() => navigateFeature('/v2/finds')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Compass size={21} className="text-blue-600"/>Finds / Marketplace</button>
+                  <button onClick={() => { onNavigate('feed'); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>Live Now</button>
+                </div>
+
+                <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Manage</p>
                 {([
                   ['pages', 'Pages', Flag],
                   ['groups', 'Groups', UsersRound],
@@ -1179,11 +1181,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 ))}
 
                 <button type="button" onClick={() => setSettingsExpanded(value => !value)} aria-expanded={settingsExpanded} className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === 'settings' ? 'bg-slate-100 dark:bg-white/10' : ''}`}>
-                  <Settings2 size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Settings &amp; Privacy<ChevronRight size={18} className={`ml-auto transition-transform ${settingsExpanded ? 'rotate-90' : ''}`} />
+                  <Settings2 size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Settings / Professional Settings<ChevronRight size={18} className={`ml-auto transition-transform ${settingsExpanded ? 'rotate-90' : ''}`} />
                 </button>
                 {settingsExpanded && <div className="mb-1 ml-8 space-y-1 border-l border-slate-200 pl-2 dark:border-slate-600">
                   <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Settings</button>
-                  <div className="px-2 py-2"><p className="mb-2 text-xs font-semibold text-slate-500">Echat experience</p><EchatThemeToggle/></div>
+                  <p className="px-3 py-2 text-xs font-semibold text-slate-600">Professional Features: All features enabled</p>
                   <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Privacy Checkup</button>
                   <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Dark Mode: {theme === 'dark' ? 'On' : 'Off'}</button>
                   <label className="flex h-11 items-center justify-between gap-2 rounded-lg px-3 text-sm font-medium text-slate-700 dark:text-slate-100">Language<select aria-label="Language" value={language} onChange={event => setLanguage(event.target.value as LanguageName)} className="max-w-36 rounded-md border border-slate-200 bg-white px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800">{(Object.keys(LANGUAGES) as LanguageName[]).map(name => <option key={name} value={name}>{LANGUAGES[name].label}</option>)}</select></label>
@@ -1206,8 +1208,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                     {t('install_app')}
                   </button>
                 )}
-
-                <button type="button" onClick={() => { onOpenGoLive?.(); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-700 transition hover:bg-rose-50 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={22} className="shrink-0 text-rose-600"/>Go Live</button>
 
                 {canAdmin && (
                   <button

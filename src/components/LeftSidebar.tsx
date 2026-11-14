@@ -19,7 +19,6 @@ import {
   Calendar
   , Film, BarChart3, ChevronDown, Plus, X
 } from 'lucide-react';
-import { EchatAppSwitcherTile } from './EchatAppSwitcherTile';
 
 interface LeftSidebarProps {
   currentView: string;
@@ -190,9 +189,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
             <Clock size={20} />
           </div>
           <span>Memories</span>
-        </div>
-        <div className="px-1 pt-2">
-          <EchatAppSwitcherTile variant="classic" compact />
         </div>
       </div>
 
