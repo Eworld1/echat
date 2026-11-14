@@ -9,6 +9,7 @@ export interface User {
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
   v2?: { whatsapp?: string; whatsappEnabled?: boolean; whatsappDisplay?: boolean; whatsappAutoReplyTemplate?: string; [key:string]: unknown };
   role: 'user' | 'creator' | 'admin' | 'developer' | 'super_admin';
+  canApproveLive?: boolean;
   liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';
   isAdmin?: boolean;
   isVerified?: boolean; isOfficialDeveloper?: boolean;
@@ -75,7 +76,7 @@ export type LiveCategory = 'Church' | 'Music' | 'Education' | 'Market / Selling'
 export type LiveLocation = 'Freetown' | 'Bo' | 'Kenema' | 'Makeni' | 'Other';
 export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; category?: LiveCategory; location?: LiveLocation; reportCount?: number; underReview?: boolean; taggedPageIds?: string[]; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; liveKitRoom?: string; }
 export interface LiveAccessRequest { id: string; userId: string; name: string; avatar: string; reason: string; status: 'pending' | 'approved' | 'rejected' | 'blocked' | 'cancelled'; createdAt: number; reviewedBy?: string; }
-export type LiveAccessMode = 'everyone' | 'approved_only' | 'admins_creators_only';
+export type LiveAccessMode = 'everyone' | 'approved_only' | 'sixty_days_plus' | 'admins_creators_only';
 
 export interface PagePost {
   id: string;

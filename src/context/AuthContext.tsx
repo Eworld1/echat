@@ -492,7 +492,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(prev => (prev ? { ...prev, ...updated } : updated));
   };
 
-  const isDeveloper = Boolean(user && (user.role === 'super_admin' || (user.role === 'developer' && user.isOfficialDeveloper)));
+  const configuredDeveloperUid = String(import.meta.env.VITE_SUPER_ADMIN_UID || '').trim();
+  const configuredDeveloperEmail = String(import.meta.env.VITE_SUPER_ADMIN_EMAIL || 'eldermoses89@gmail.com').trim().toLowerCase();
+  const isConfiguredDeveloper = Boolean(user && ((configuredDeveloperUid && auth.currentUser?.uid === configuredDeveloperUid) || (auth.currentUser?.emailVerified && user.email?.trim().toLowerCase() === configuredDeveloperEmail)));
+  const isDeveloper = Boolean(user && (user.role === 'super_admin' || user.canApproveLive === true || (user.role === 'developer' && user.isOfficialDeveloper) || isConfiguredDeveloper));
 
   return (
     <AuthContext.Provider value={{ 

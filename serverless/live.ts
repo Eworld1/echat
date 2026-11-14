@@ -83,6 +83,7 @@ export interface LiveUser {
   avatar: string;
   role: string;
   liveAccess: string;
+  liveAccessMode?: string;
   isVerified: boolean;
   isBlocked: boolean;
   createdAt: number;
@@ -130,6 +131,7 @@ function createProfileFields(data: StoredLiveProfile, uid: string, email: string
     work: String(data.work || ''),
     education: String(data.education || ''),
     role: isDeveloper ? 'super_admin' : String(data.role || 'user'),
+    canApproveLive: isDeveloper || data.canApproveLive === true,
     liveAccess: isDeveloper ? 'approved' : String(data.liveAccess || 'none'),
     isVerified: Boolean(data.isVerified),
     isOfficialDeveloper: isDeveloper || data.isOfficialDeveloper === true,
@@ -331,6 +333,8 @@ export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser;
 
   data = createProfileFields(data, decoded.uid, email, developer);
   await mirrorProfileToMongo(data);
+  const accessConfig = await firestore.collection('siteConfig').doc('site').get().catch(() => null);
+  const liveAccessMode = String(accessConfig?.data()?.liveAccessMode || 'sixty_days_plus');
   const createdAt = toTimestamp(data.createdAt);
   const authCreated = decoded.auth_time ? decoded.auth_time * 1000 : 0;
   return {
@@ -342,6 +346,7 @@ export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser;
       avatar: String(data.avatar || (decoded as FirebaseIdToken & { picture?: string }).picture || ''),
       role: developer ? 'super_admin' : String(data.role || 'user'),
       liveAccess: developer ? 'approved' : String(data.liveAccess || 'none'),
+      liveAccessMode: developer ? 'everyone' : liveAccessMode,
       isVerified: Boolean(data.isVerified),
       isBlocked: !developer && Boolean(data.isBlocked),
       createdAt: createdAt || authCreated
@@ -350,10 +355,13 @@ export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser;
 }
 
 export function canStartLive(user: LiveUser): boolean {
+  if (user.role === 'super_admin' || user.role === 'developer') return true;
   if (user.isBlocked || user.liveAccess === 'blocked') return false;
-  if (user.role === 'super_admin' || user.role === 'developer' || user.role === 'admin') return true;
+  if (user.liveAccessMode === 'everyone') return true;
+  if (user.liveAccessMode === 'admins_creators_only' && (user.role === 'admin' || user.role === 'creator')) return true;
+  if (user.role === 'admin') return true;
   if (user.liveAccess === 'approved') return true;
-  return user.createdAt > 0 && Date.now() - user.createdAt >= 60 * 24 * 60 * 60 * 1000;
+  return user.liveAccessMode !== 'approved_only' && user.createdAt > 0 && Date.now() - user.createdAt >= 60 * 24 * 60 * 60 * 1000;
 }
 
 export function requireLiveKit(): { url: string; rooms: RoomServiceClient; apiKey: string; apiSecret: string } {

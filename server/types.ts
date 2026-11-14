@@ -6,6 +6,7 @@ export interface User {
   dob?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
   reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
   role: 'user' | 'creator' | 'admin' | 'developer' | 'super_admin';
+  canApproveLive?: boolean;
   liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';
   liveAuthSecret?: string;
   isVerified?: boolean; isOfficialDeveloper?: boolean;
@@ -26,7 +27,7 @@ export interface GlobalSearchResults { users: User[]; posts: Post[]; }
 export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
 export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
 export interface LiveAccessRequest { id: string; userId: string; name: string; avatar: string; reason: string; status: 'pending' | 'approved' | 'rejected' | 'blocked' | 'cancelled'; createdAt: number; reviewedBy?: string; }
-export type LiveAccessMode = 'everyone' | 'approved_only' | 'admins_creators_only';
+export type LiveAccessMode = 'everyone' | 'approved_only' | 'sixty_days_plus' | 'admins_creators_only';
 export interface PagePost {
   id: string;
   pageId: string;
