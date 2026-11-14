@@ -35,6 +35,7 @@ import { ECHAT_V2_ENABLED } from './config/featureFlags';
 import { V2Market } from './pages/v2/V2Market';
 import { V2MarketOrders } from './pages/v2/V2MarketOrders';
 import type { V2MarketListing } from './services/v2Market';
+import { Film, Home, Menu, MessageSquare, ShoppingBag } from 'lucide-react';
 
 const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders' };
 
@@ -49,6 +50,7 @@ export function MainApp() {
 
   const [currentView, setCurrentView] = useState<AppView>('feed');
   const [marketRoute, setMarketRoute] = useState<string>('/marketplace');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
@@ -200,6 +202,10 @@ export function MainApp() {
     }
     handleNavigate('marketplace', undefined, undefined, route);
   };
+  const handleMobileSidebarNavigate = (view: AppView, targetProfileId?: string) => {
+    setMobileMenuOpen(false);
+    handleNavigate(view, targetProfileId);
+  };
 
   useEffect(() => {
     if (!window.history.state?.echatApp) window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);
@@ -286,8 +292,14 @@ export function MainApp() {
         currentView={currentView}
         onNavigate={handleNavigate}
         onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
+        onOpenMenu={() => setMobileMenuOpen(true)}
         onProfileMenuChange={handleProfileMenuChange}
       />
+
+      {mobileMenuOpen && <>
+        <button type="button" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} className="fixed inset-0 z-[80] bg-black/55 min-[1025px]:hidden" />
+        <LeftSidebar currentView={currentView} onNavigate={handleMobileSidebarNavigate} onOpenMessenger={() => { setMobileMenuOpen(false); setIsMessengerDrawerOpen(true); }} mobileDrawer onClose={() => setMobileMenuOpen(false)} />
+      </>}
 
       {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
 
@@ -361,6 +373,14 @@ export function MainApp() {
         {/* Right Contacts Sidebar (Desktop XL) */}
         {currentView !== 'dashboard' && currentView !== 'live' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
       </div>
+
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur min-[769px]:hidden">
+        <button type="button" onClick={() => handleNavigate('feed')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'feed' ? 'text-blue-700' : 'text-slate-600'}`}><Home size={21}/><span>Home</span></button>
+        <button type="button" onClick={() => handleNavigate('reels')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'reels' ? 'text-blue-700' : 'text-slate-600'}`}><Film size={21}/><span>Reels</span></button>
+        <button type="button" onClick={() => navigateMarket('/marketplace')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'marketplace' ? 'text-blue-700' : 'text-slate-600'}`}><ShoppingBag size={21}/><span>Marketplace</span></button>
+        <button type="button" onClick={() => setIsMessengerDrawerOpen(true)} className="flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold text-slate-600"><MessageSquare size={21}/><span>Messages</span></button>
+        <button type="button" onClick={() => setMobileMenuOpen(true)} aria-expanded={mobileMenuOpen} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${mobileMenuOpen ? 'text-blue-700' : 'text-slate-600'}`}><Menu size={21}/><span>Menu</span></button>
+      </nav>
 
       {/* Floating Messenger Window */}
       {activeChatPartner && (
