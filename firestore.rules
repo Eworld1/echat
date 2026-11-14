@@ -59,7 +59,27 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports';
+    }
+
+    match /echat_v2_market_listings/{listingId} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.get('sellerId', '') == request.auth.uid;
+      allow update: if signedIn() && resource.data.get('sellerId', '') == request.auth.uid && request.resource.data.get('sellerId', '') == request.auth.uid;
+      allow delete: if signedIn() && resource.data.get('sellerId', '') == request.auth.uid;
+    }
+
+    match /echat_v2_market_orders/{orderId} {
+      allow read: if signedIn() && (resource.data.get('buyerId', '') == request.auth.uid || resource.data.get('sellerId', '') == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.get('buyerId', '') == request.auth.uid;
+      allow update: if signedIn() && resource.data.get('sellerId', '') == request.auth.uid && request.resource.data.get('sellerId', '') == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /echat_v2_market_reports/{reportId} {
+      allow create: if signedIn() && request.resource.data.get('reporterId', '') == request.auth.uid;
+      allow read: if isAdmin() || (signedIn() && resource.data.get('reporterId', '') == request.auth.uid);
+      allow update, delete: if isAdmin();
     }
 
     match /users/{userId} {

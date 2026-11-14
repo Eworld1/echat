@@ -228,6 +228,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setError('Please select a video.');
       return;
     }
+    if (videoOnly && mediaDuration > 90) { setError('Reels must be 90 seconds or shorter. Trim the video and try again.'); return; }
     if (videoOnly && content.trim().length > 2200) { setError('Caption too long. Keep Reel captions under 2,200 characters.'); return; }
     if (!content.trim() && !mediaFile) return;
     if (videoOnly && showCompressionPrompt) { setError('Choose Compress & Upload or Upload Original to continue.'); return; }
@@ -416,7 +417,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                   <p className="text-xs text-slate-300">{mediaFile ? formatFileSize(mediaFile.size) : ''} · Video preview not available in this browser. The original file can still be uploaded.</p>
                 </div> : <video src={url} poster={videoOnly ? thumbnailPreviewUrl || undefined : undefined} controls preload="metadata" playsInline muted className="max-h-72 w-full object-contain" onLoadedMetadata={event => {
                   const video = event.currentTarget;
-                  if (Number.isFinite(video.duration)) setMediaDuration(video.duration);
+                  if (Number.isFinite(video.duration)) {
+                    setMediaDuration(video.duration);
+                    if (videoOnly && video.duration > 90) setError('Reels must be 90 seconds or shorter. Trim the video and try again.');
+                  }
                   if (video.videoWidth && video.videoHeight) setVideoResolution(`${video.videoWidth} × ${video.videoHeight}`);
                   setPreviewUnavailable(false);
                   setPreviewReady(true);

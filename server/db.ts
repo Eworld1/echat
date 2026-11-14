@@ -578,8 +578,25 @@ class Database {
   getPosts(viewerId?: string): Post[] {
     const isDev = Boolean(viewerId && this.getUserById(viewerId)?.role === 'developer');
     return this.data.posts
+      .filter(p => p.type === 'post' && p.isReel !== true && p.videoType !== 'reel')
       .filter(p => (!p.isReported || isDev) && this.canViewPost(p, viewerId))
       .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  getUserPosts(authorId: string, viewerId?: string): Post[] {
+    return this.getPosts(viewerId).filter(post => post.authorId === authorId);
+  }
+
+  getUserReels(authorId: string, viewerId?: string): Post[] {
+    return this.getReels(viewerId).filter(post => post.authorId === authorId);
+  }
+
+  getReels(viewerId?: string): Post[] {
+    const isDev = Boolean(viewerId && this.getUserById(viewerId)?.role === 'developer');
+    return this.data.posts
+      .filter(p => (p.type === 'reel' || p.isReel === true || p.videoType === 'reel') && p.mediaType === 'video')
+      .filter(p => (!p.isReported || isDev) && this.canViewPost(p, viewerId))
+      .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
   }
 
   recordPostView(postId: string, viewerId: string): Post | null {

@@ -762,11 +762,8 @@ app.get('/api/users/:id', (req: Request, res: Response) => {
 
   // Get user's posts (only those the person looking at this profile is allowed to see)
   const viewer = getAuthUser(req);
-  const allUserPosts = db.getPosts(viewer?.id)
-    .filter(p => p.authorId === user.id)
-    ;
-  const posts = allUserPosts.filter(p => p.type === 'post').map(p => populatePost(p));
-  const reels = allUserPosts.filter(p => p.type === 'reel').map(p => populatePost(p));
+  const posts = db.getUserPosts(user.id, viewer?.id).map(p => populatePost(p));
+  const reels = db.getUserReels(user.id, viewer?.id).map(p => populatePost(p));
 
   // Get friends details
   const friends = user.friends
@@ -784,13 +781,13 @@ app.get('/api/users/:id', (req: Request, res: Response) => {
 
 app.get('/api/users/:id/posts', (req: Request, res: Response) => {
   const viewer = getAuthUser(req);
-  const visiblePosts = db.getPosts(viewer?.id).filter(post => post.authorId === req.params.id && post.type === 'post').map(populatePost);
+  const visiblePosts = db.getUserPosts(req.params.id, viewer?.id).map(populatePost);
   res.json(visiblePosts);
 });
 
 app.get('/api/users/:id/reels', (req: Request, res: Response) => {
   const viewer = getAuthUser(req);
-  const visibleReels = db.getPosts(viewer?.id).filter(post => post.authorId === req.params.id && post.type === 'reel').map(populatePost);
+  const visibleReels = db.getUserReels(req.params.id, viewer?.id).map(populatePost);
   res.json(visibleReels);
 });
 
@@ -1065,7 +1062,7 @@ app.get('/api/search', (req: Request, res: Response) => {
 app.get('/api/posts', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   const rawPosts = db.getPosts(authUser?.id);
-  const populated = rawPosts.filter(p => p.type === 'post').map(p => populatePost(p));
+  const populated = rawPosts.map(p => populatePost(p));
   res.json(populated);
 });
 
@@ -1075,9 +1072,8 @@ app.get('/api/reels', (req: Request, res: Response) => {
   res.setHeader('Expires', '0');
   const authUser = getAuthUser(req);
   const limit = 20;
-  const rawReels = db.getPosts(authUser?.id)
-    .filter(post => post.type === 'reel' && post.mediaType === 'video' && post.privacy === 'public')
-    .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+  const rawReels = db.getReels(authUser?.id)
+    .filter(post => post.privacy === 'public');
   const rawCursor = typeof req.query.cursor === 'string' ? req.query.cursor : '';
   let cursor: { createdAt: number; id: string } | null = null;
   if (rawCursor) {
@@ -1179,6 +1175,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
         .slice(0, 20)
     : [];
 
+  const requestedType = type === 'reel' && mediaType === 'video' ? 'reel' : 'post';
   const post = db.createPost(
     authUser.id,
     content || '',
@@ -1186,7 +1183,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
     mediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds, mediaUrls, images: mediaType === 'image' ? mediaUrls : undefined, imagesCount: mediaType === 'image' ? mediaUrls.length || (primaryMediaUrl ? 1 : 0) : undefined, v2: v2 ? { feeling: typeof v2.feeling === 'string' ? v2.feeling.slice(0, 80) : undefined, privacy: safePrivacy } : undefined, type: type === 'reel' && mediaType === 'video' ? 'reel' : 'post', isReel: type === 'reel' && mediaType === 'video', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
+    { taggedUserIds: cleanTaggedIds, mediaUrls, images: mediaType === 'image' ? mediaUrls : undefined, imagesCount: mediaType === 'image' ? mediaUrls.length || (primaryMediaUrl ? 1 : 0) : undefined, v2: v2 ? { feeling: typeof v2.feeling === 'string' ? v2.feeling.slice(0, 80) : undefined, privacy: safePrivacy } : undefined, type: requestedType, isReel: requestedType === 'reel', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
   );
   if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 
