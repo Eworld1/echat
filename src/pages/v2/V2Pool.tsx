@@ -7,12 +7,12 @@ const rack = (): Ball[] => [
   ...['#ef4444','#facc15','#3b82f6','#f97316','#a855f7','#22c55e','#111827','#f8fafc'].map((color,i)=>({x:290+(i%3)*19,y:112+Math.floor(i/3)*20+(i%2)*8,vx:0,vy:0,color}))
 ];
 
-export const V2Pool: React.FC<{ resetKey: number; onWin: (score:number)=>void }> = ({ resetKey, onWin }) => {
-  const canvas=useRef<HTMLCanvasElement>(null), balls=useRef<Ball[]>(rack()), aim=useRef({x:350,y:140}), moving=useRef(false), done=useRef(false), win=useRef(onWin), shotCount=useRef(0);
+export const V2Pool: React.FC<{ resetKey: number; onWin: (score:number)=>void; onShot?:()=>void; onPocket?:()=>void }> = ({ resetKey, onWin, onShot, onPocket }) => {
+  const canvas=useRef<HTMLCanvasElement>(null), balls=useRef<Ball[]>(rack()), aim=useRef({x:350,y:140}), moving=useRef(false), done=useRef(false), win=useRef(onWin), shot=useRef(onShot), pocket=useRef(onPocket), shotCount=useRef(0), previousCount=useRef(8);
   const [remaining,setRemaining]=useState(8),[shots,setShots]=useState(0);
-  win.current=onWin;
+  win.current=onWin;shot.current=onShot;pocket.current=onPocket;
   useEffect(()=>{
-    balls.current=rack();moving.current=false;done.current=false;shotCount.current=0;setRemaining(8);setShots(0);
+    balls.current=rack();moving.current=false;done.current=false;shotCount.current=0;previousCount.current=8;setRemaining(8);setShots(0);
     let frame=0;
     const draw=()=>{
       const el=canvas.current,ctx=el?.getContext('2d');if(!el||!ctx)return;
@@ -25,12 +25,12 @@ export const V2Pool: React.FC<{ resetKey: number; onWin: (score:number)=>void }>
       for(const b of balls.current){ctx.beginPath();ctx.arc(b.x,b.y,9,0,Math.PI*2);ctx.fillStyle=b.color;ctx.fill();ctx.strokeStyle='#e2e8f0';ctx.stroke();}
       const cue=balls.current.find(b=>b.cue);if(cue&&!moving.current){ctx.beginPath();ctx.moveTo(cue.x,cue.y);ctx.lineTo(aim.current.x,aim.current.y);ctx.strokeStyle='rgba(255,255,255,.5)';ctx.setLineDash([5,5]);ctx.stroke();ctx.setLineDash([]);}
       if(!balls.current.some(b=>Math.abs(b.vx)+Math.abs(b.vy)>.07))moving.current=false;
-      const count=balls.current.filter(b=>!b.cue).length;setRemaining(old=>old===count?old:count);if(!count&&!done.current){done.current=true;win.current(Math.max(1,80-shotCount.current*5));}
+      const count=balls.current.filter(b=>!b.cue).length;if(count<previousCount.current)pocket.current?.();previousCount.current=count;setRemaining(old=>old===count?old:count);if(!count&&!done.current){done.current=true;win.current(Math.max(1,80-shotCount.current*5));}
       frame=requestAnimationFrame(draw);
     };
     frame=requestAnimationFrame(draw);return()=>cancelAnimationFrame(frame);
   },[resetKey]);
   const point=(e:React.PointerEvent<HTMLCanvasElement>)=>{const r=e.currentTarget.getBoundingClientRect();aim.current={x:(e.clientX-r.left)*480/r.width,y:(e.clientY-r.top)*280/r.height};};
-  const shoot=(e:React.PointerEvent<HTMLCanvasElement>)=>{if(moving.current||done.current)return;point(e);const cue=balls.current.find(b=>b.cue);if(!cue)return;const dx=aim.current.x-cue.x,dy=aim.current.y-cue.y,n=Math.hypot(dx,dy)||1;cue.vx=dx/n*8;cue.vy=dy/n*8;moving.current=true;shotCount.current+=1;setShots(shotCount.current);};
+  const shoot=(e:React.PointerEvent<HTMLCanvasElement>)=>{if(moving.current||done.current)return;point(e);const cue=balls.current.find(b=>b.cue);if(!cue)return;const dx=aim.current.x-cue.x,dy=aim.current.y-cue.y,n=Math.hypot(dx,dy)||1;cue.vx=dx/n*8;cue.vy=dy/n*8;moving.current=true;shotCount.current+=1;shot.current?.();setShots(shotCount.current);};
   return <div className="mx-auto max-w-lg text-center"><p className="mb-2">Balls remaining: {remaining} · Shots: {shots} · Aim, then tap to shoot.</p><canvas ref={canvas} width={480} height={280} onPointerMove={point} onPointerDown={shoot} aria-label="Pool table. Aim and tap to shoot." className="w-full touch-none rounded-2xl border-4 border-[#563b29]"/><p className="mt-2 text-xs text-slate-500">Pocket all eight balls. The cue ball resets if it falls in a pocket.</p></div>;
 };
