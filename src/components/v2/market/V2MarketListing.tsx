@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, BadgeCheck, Bookmark, Flag, MapPin, MessageCircle, Share2, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, Bookmark, Flag, MapPin, MessageCircle, Phone, Share2, ShoppingBag } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { api } from '../../../services/api';
 import type { User } from '../../../types';

@@ -37,7 +37,8 @@ import {
   Users2,
   Calendar,
   Film,
-  BarChart3
+  BarChart3,
+  Menu
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
@@ -49,6 +50,7 @@ interface NavbarProps {
   onNavigate: (view: AppView, targetProfileId?: string, targetPostId?: string) => void;
   onOpenMessenger: () => void;
   onProfileMenuChange: (open: boolean) => void;
+  onOpenMenu?: () => void;
 }
 
 interface PageItem {
@@ -65,7 +67,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentView,
   onNavigate,
   onOpenMessenger,
-  onProfileMenuChange
+  onProfileMenuChange,
+  onOpenMenu
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
   const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
@@ -442,16 +445,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className={`sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} bg-white border-b border-slate-200/90 shadow-2xs`}>
-      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[220px_minmax(180px,320px)_minmax(260px,1fr)_auto] min-[1025px]:grid-rows-[64px]">
+      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[80px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 max-[768px]:grid-rows-[56px] min-[1025px]:grid-cols-[220px_minmax(180px,320px)_minmax(260px,1fr)_auto] min-[1025px]:grid-rows-[64px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
         <div className="contents">
-          <div
-            onClick={() => onNavigate('feed')}
-            className="col-start-1 row-start-1 flex min-w-0 shrink-0 cursor-pointer items-center gap-2 group min-[1025px]:w-[220px]"
-          >
-            <img src="/logo-mark-blue.svg" alt="" className="h-10 w-10 shrink-0 object-contain transition group-hover:scale-105 min-[1025px]:hidden" />
-            <img src="/logo-blue.svg" alt="Echat" className="hidden h-10 w-[190px] shrink-0 object-contain object-left min-[1025px]:block" />
+          <div className="col-start-1 row-start-1 flex min-w-0 shrink-0 items-center gap-1 group min-[1025px]:w-[220px]">
+            <button type="button" onClick={onOpenMenu} aria-label="Open navigation menu" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-700 hover:bg-slate-100 min-[1025px]:hidden"><Menu size={22}/></button>
+            <button type="button" onClick={() => onNavigate('feed')} aria-label="Go to Echat home" className="flex min-w-0 shrink-0 cursor-pointer items-center gap-2">
+              <img src="/logo-mark-blue.svg" alt="" className="h-8 w-8 shrink-0 object-contain transition group-hover:scale-105 min-[1025px]:hidden" />
+              <img src="/logo-blue.svg" alt="Echat" className="hidden h-10 w-[190px] shrink-0 object-contain object-left min-[1025px]:block" />
+            </button>
           </div>
 
           {/* Global Search Bar */}
@@ -852,7 +855,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Center: Main Navigation Icons (Facebook style) */}
 
-        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-3 min-[1025px]:col-span-1 min-[1025px]:row-start-1 min-[1025px]:h-14 min-[1025px]:overflow-visible">
+        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none max-[768px]:hidden min-[1025px]:col-start-3 min-[1025px]:col-span-1 min-[1025px]:row-start-1 min-[1025px]:h-14 min-[1025px]:overflow-visible">
           <button
             onClick={() => onNavigate('feed')}
             className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex flex-col items-center justify-center gap-0 transition cursor-pointer ${
