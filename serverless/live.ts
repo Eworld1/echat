@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import type { App } from 'firebase-admin/app';
 import type { CollectionReference, Firestore } from 'firebase-admin/firestore';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
@@ -33,6 +34,7 @@ export function handleLiveOptions(req: ApiRequest, res: ApiResponse): boolean {
 }
 
 const projectId = (process.env.FIREBASE_PROJECT_ID || 'echat-studio-6e215').trim();
+const databaseId = (process.env.FIREBASE_DATABASE_ID || 'ai-studio-echat-134f096e-b18d-4bb7-870d-d4f7fa96d17d').trim();
 const rawCredential = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim() || '';
 let adminApp: App | null = null;
 let firestoreInstance: Firestore | null = null;
@@ -43,7 +45,7 @@ if (rawCredential) {
     const [appSdk, firestoreSdk] = await Promise.all([import('firebase-admin/app'), import('firebase-admin/firestore')]);
     const appName = 'echat-vercel-live-service-account';
     adminApp = appSdk.getApps().find(app => app.name === appName) || appSdk.initializeApp({ projectId, credential: appSdk.cert(parsed) }, appName);
-    firestoreInstance = firestoreSdk.getFirestore(adminApp, process.env.FIREBASE_DATABASE_ID || 'ai-studio-echat-134f096e-b18d-4bb7-870d-d4f7fa96d17d');
+    firestoreInstance = firestoreSdk.getFirestore(adminApp, databaseId);
   } catch (error) {
     console.warn('[Vercel Live API] FIREBASE_SERVICE_ACCOUNT_JSON is invalid; Firestore live APIs will return a configuration error.', error instanceof Error ? error.message : error);
   }
@@ -84,6 +86,101 @@ export interface LiveUser {
   isVerified: boolean;
   isBlocked: boolean;
   createdAt: number;
+}
+
+type StoredLiveProfile = Record<string, any>;
+let mongoConnectPromise: Promise<void> | null = null;
+
+async function getMongoUsersCollection() {
+  const uri = process.env.MONGO_URI?.trim();
+  if (!uri) return null;
+  const mongoose = (await import('mongoose')).default;
+  if (mongoose.connection.readyState !== 1) {
+    if (!mongoConnectPromise) {
+      mongoConnectPromise = mongoose.connect(uri, { serverSelectionTimeoutMS: 7000, maxPoolSize: 2 })
+        .then(() => undefined)
+        .catch(error => { mongoConnectPromise = null; throw error; });
+    }
+    await mongoConnectPromise;
+  }
+  const collection = mongoose.connection.db?.collection('echat_users');
+  if (!collection) throw new Error('MongoDB echat_users collection is unavailable.');
+  return collection;
+}
+
+function toTimestamp(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (value && typeof value === 'object' && 'toMillis' in value && typeof (value as { toMillis?: unknown }).toMillis === 'function') {
+    const result = (value as { toMillis: () => number }).toMillis();
+    return Number.isFinite(result) && result > 0 ? result : 0;
+  }
+  return 0;
+}
+
+function createProfileFields(data: StoredLiveProfile, uid: string, email: string, isDeveloper: boolean): StoredLiveProfile {
+  const name = String(data.name || '').trim() || email.split('@')[0] || 'Echat User';
+  return {
+    id: uid,
+    name,
+    email,
+    avatar: String(data.avatar || data.photoURL || ''),
+    coverPhoto: String(data.coverPhoto || ''),
+    bio: String(data.bio || 'Excited to be on Echat! 👋'),
+    location: String(data.location || 'Global'),
+    work: String(data.work || ''),
+    education: String(data.education || ''),
+    role: isDeveloper ? 'super_admin' : String(data.role || 'user'),
+    liveAccess: isDeveloper ? 'approved' : String(data.liveAccess || 'none'),
+    isVerified: Boolean(data.isVerified),
+    isOfficialDeveloper: isDeveloper || data.isOfficialDeveloper === true,
+    isBlocked: !isDeveloper && Boolean(data.isBlocked),
+    isOnline: true,
+    lastSeen: Date.now(),
+    createdAt: toTimestamp(data.createdAt) || Date.now(),
+    friends: Array.isArray(data.friends) ? data.friends : [],
+    friendRequestsSent: Array.isArray(data.friendRequestsSent) ? data.friendRequestsSent : [],
+    friendRequestsReceived: Array.isArray(data.friendRequestsReceived) ? data.friendRequestsReceived : [],
+    liveAuthSecret: typeof data.liveAuthSecret === 'string' && data.liveAuthSecret ? data.liveAuthSecret : randomBytes(32).toString('hex')
+  };
+}
+
+async function findMongoProfile(uid: string, email: string): Promise<{ profile: StoredLiveProfile; matchedUid: string } | null> {
+  if (!process.env.MONGO_URI?.trim()) {
+    console.warn('[Vercel Live API] Mongo profile lookup skipped: MONGO_URI is not configured.', { tokenUid: uid, database: 'MongoDB', collection: 'echat_users' });
+    return null;
+  }
+  try {
+    const collection = await getMongoUsersCollection();
+    if (!collection) return null;
+    const record = await collection.findOne({ _id: uid } as any)
+      || await collection.findOne({ id: uid } as any)
+      || (email ? await collection.findOne({ email } as any) : null);
+    if (!record) return null;
+    const profile = record as StoredLiveProfile;
+    const matchedUid = String(profile.id || profile._id || '');
+    console.info('[Vercel Live API] Mongo profile lookup', { tokenUid: uid, matchedUid: matchedUid || null, uidMatches: matchedUid === uid, database: 'MongoDB', collection: 'echat_users' });
+    return { profile, matchedUid };
+  } catch (error) {
+    console.error('[Vercel Live API] Mongo profile lookup failed', { tokenUid: uid, database: 'MongoDB', collection: 'echat_users', code: (error as { code?: string })?.code || null, message: error instanceof Error ? error.message : 'unknown error' });
+    return null;
+  }
+}
+
+async function mirrorProfileToMongo(profile: StoredLiveProfile): Promise<void> {
+  if (!process.env.MONGO_URI?.trim()) {
+    console.warn('[Vercel Live API] Mongo profile mirror skipped: MONGO_URI is not configured.', { uid: profile.id, collection: 'echat_users' });
+    return;
+  }
+  try {
+    const collection = await getMongoUsersCollection();
+    if (!collection) return;
+    const existing = await collection.findOne({ _id: profile.id } as any) || await collection.findOne({ id: profile.id } as any);
+    if (existing) return;
+    await collection.replaceOne({ _id: profile.id } as any, { ...profile, _id: profile.id }, { upsert: true });
+    console.info('[Vercel Live API] Mongo profile created', { uid: profile.id, collection: 'echat_users' });
+  } catch (error) {
+    console.error('[Vercel Live API] Mongo profile mirror failed', { uid: profile.id, collection: 'echat_users', code: (error as { code?: string })?.code || null, message: error instanceof Error ? error.message : 'unknown error' });
+  }
 }
 
 function getHeader(req: ApiRequest, key: string): string {
@@ -159,41 +256,95 @@ export async function verifyLiveUser(req: ApiRequest): Promise<{ user: LiveUser;
   const developerEmail = String(process.env.SUPER_ADMIN_EMAIL || process.env.VITE_SUPER_ADMIN_EMAIL || 'eldermoses89@gmail.com').trim().toLowerCase();
   const developer = Boolean((developerUid && decoded.uid === developerUid) || (email && email === developerEmail && decoded.email_verified));
 
-  if (developer) {
-    return {
-      decoded,
-      user: {
-        uid: decoded.uid,
-        email,
-        name: String(decoded.name || 'Echat Developer'),
-        avatar: '',
-        role: 'super_admin',
-        liveAccess: 'approved',
-        isVerified: true,
-        isBlocked: false,
-        createdAt: 0
+  const users = firestore.collection('users');
+  const searchedUid = decoded.uid;
+  let snapshot = await users.doc(searchedUid).get();
+  let data: StoredLiveProfile = snapshot.exists ? snapshot.data() || {} : {};
+  if (!snapshot.exists) {
+    console.warn('[Vercel Live API] Firestore profile lookup missed; bootstrapping profile', {
+      tokenUid: decoded.uid,
+      searchedUid,
+      database: 'Firestore',
+      projectId,
+      databaseId
+    });
+
+    let source: StoredLiveProfile = {};
+    let sourceUid = '';
+    let sourceDatabase = 'Firebase ID token';
+    const mongoMatch = await findMongoProfile(decoded.uid, email);
+    if (mongoMatch) {
+      source = mongoMatch.profile;
+      sourceUid = mongoMatch.matchedUid;
+      sourceDatabase = 'MongoDB echat_users';
+    } else if (process.env.MONGO_URI?.trim()) {
+      console.info('[Vercel Live API] Mongo profile lookup missed', { tokenUid: decoded.uid, searchedUid: decoded.uid, database: 'MongoDB', collection: 'echat_users' });
+    }
+
+    if (!sourceUid && email) {
+      try {
+        const emailMatch = await users.where('email', '==', email).limit(1).get();
+        const match = emailMatch.docs[0];
+        if (match) {
+          source = match.data();
+          sourceUid = String(source.id || match.id);
+          sourceDatabase = `Firestore ${databaseId}`;
+          console.info('[Vercel Live API] Firestore email fallback', { tokenUid: decoded.uid, matchedUid: sourceUid, uidMatches: sourceUid === decoded.uid, database: 'Firestore', projectId, databaseId });
+        }
+      } catch (error) {
+        console.warn('[Vercel Live API] Firestore email fallback failed', { tokenUid: decoded.uid, searchedUid, database: 'Firestore', projectId, databaseId, code: (error as { code?: string })?.code || null });
       }
-    };
+    }
+
+    const exactUidMatch = sourceUid === decoded.uid;
+    if (sourceUid && !exactUidMatch) {
+      console.warn('[Vercel Live API] Profile UID mismatch; copying public profile fields only', {
+        tokenUid: decoded.uid,
+        searchedUid,
+        matchedUid: sourceUid,
+        sourceDatabase,
+        targetDatabase: `Firestore ${databaseId}`
+      });
+    }
+    const safeSource = exactUidMatch
+      ? source
+      : {
+          name: source.name,
+          avatar: source.avatar || source.photoURL,
+          coverPhoto: source.coverPhoto,
+          bio: source.bio,
+          location: source.location
+        };
+    const profile = createProfileFields({
+      ...safeSource,
+      name: safeSource.name || decoded.name,
+      avatar: safeSource.avatar || (decoded as FirebaseIdToken & { picture?: string }).picture || '',
+      email,
+      ...(developer ? { role: 'super_admin', liveAccess: 'approved', isOfficialDeveloper: true, isVerified: true, isBlocked: false } : {}),
+      ...(!exactUidMatch && !developer ? { role: 'user', liveAccess: 'none', isBlocked: false, createdAt: Date.now() } : {})
+    }, decoded.uid, email, developer);
+    await users.doc(decoded.uid).set(profile, { merge: true });
+    snapshot = await users.doc(decoded.uid).get();
+    data = snapshot.exists ? snapshot.data() || profile : profile;
+    console.info('[Vercel Live API] Firestore profile created', { tokenUid: decoded.uid, searchedUid, createdUid: decoded.uid, database: 'Firestore', projectId, databaseId, sourceDatabase });
   }
 
-  const snapshot = await firestore.collection('users').doc(decoded.uid).get();
-  const data = snapshot.exists ? snapshot.data() || {} : {};
-  if (!snapshot.exists && !developer) throw Object.assign(new Error('Your Echat profile was not found.'), { status: 403, code: 'profile-not-found' });
-  const created = data.createdAt;
-  const createdAt = typeof created === 'number' ? created : typeof created?.toMillis === 'function' ? created.toMillis() : 0;
-  const authCreated = Date.parse(decoded.auth_time ? new Date(decoded.auth_time * 1000).toISOString() : '');
+  data = createProfileFields(data, decoded.uid, email, developer);
+  await mirrorProfileToMongo(data);
+  const createdAt = toTimestamp(data.createdAt);
+  const authCreated = decoded.auth_time ? decoded.auth_time * 1000 : 0;
   return {
     decoded,
     user: {
       uid: decoded.uid,
       email,
       name: String(data.name || decoded.name || (developer ? 'Echat Developer' : 'Echat User')),
-      avatar: String(data.avatar || ''),
-      role: String(data.role || 'user'),
-      liveAccess: String(data.liveAccess || 'none'),
+      avatar: String(data.avatar || (decoded as FirebaseIdToken & { picture?: string }).picture || ''),
+      role: developer ? 'super_admin' : String(data.role || 'user'),
+      liveAccess: developer ? 'approved' : String(data.liveAccess || 'none'),
       isVerified: Boolean(data.isVerified),
-      isBlocked: Boolean(data.isBlocked),
-      createdAt: createdAt || (Number.isFinite(authCreated) ? authCreated : 0)
+      isBlocked: !developer && Boolean(data.isBlocked),
+      createdAt: createdAt || authCreated
     }
   };
 }
