@@ -18,7 +18,7 @@ import {
   Flag,
   Users2,
   Calendar
-  , Film, BarChart3, ChevronDown, Plus, X
+  , Film, BarChart3, ChevronDown, Plus, X, ShoppingBag, Package, Gamepad2
 } from 'lucide-react';
 
 interface LeftSidebarProps {
@@ -87,6 +87,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
 
         <button onClick={onOpenGoLive} className="w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left hover:bg-rose-50 text-slate-700 font-semibold text-sm"><div className="w-9 h-9 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center"><Video size={19}/></div><span className="truncate">{goLiveLabel}</span></button>
 
+        <button onClick={() => onNavigate('/v2/ai')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === '/v2/ai' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><Sparkles size={19}/></div><span>eChat AI</span></button>
+        <button onClick={() => onNavigate('/v2/games')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === '/v2/games' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><Gamepad2 size={19}/></div><span>Games</span></button>
+        <button onClick={() => onNavigate('/v2/finds')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === '/v2/finds' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><Compass size={19}/></div><span>Finds</span></button>
+        <button onClick={() => onNavigate('/v2/market')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${typeof currentView === 'string' && currentView.startsWith('/v2/market') && currentView !== '/v2/market/orders' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center"><ShoppingBag size={19}/></div><span>Marketplace</span></button>
+        <button onClick={() => onNavigate('/v2/market/orders')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === '/v2/market/orders' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><Package size={19}/></div><span>My Orders</span></button>
+
         {/* Friends */}
         <button
           onClick={() => onNavigate('friends')}
@@ -145,36 +151,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
         </button>
 
         {/* Settings & Privacy */}
-        <button
-          onClick={() => onNavigate('settings')}
-          className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${
-            currentView === 'settings' ? 'bg-slate-200 text-slate-900 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
-          }`}
-        >
-          <div className="w-9 h-9 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center">
-            <Settings size={20} />
-          </div>
-          <span className="flex-1 truncate">{t('settings_privacy')}</span>
-        </button>
-
-        {/* Developer Admin (Only visible to Super Admin) */}
-        {canAdmin && (
-          <button
-            onClick={() => onNavigate('admin')}
-            className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${
-              currentView === 'admin' ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
-            }`}
-          >
-            <div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center">
-              <Shield size={20} />
-            </div>
-            <span className="flex-1 truncate">Developer Mode</span>
-            <span className="bg-[#0A2A6B] text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded uppercase">
-              Admin
-            </span>
-          </button>
-        )}
-
         {/* Saved */}
         <button
           onClick={() => onNavigate('saved')}
@@ -186,13 +162,17 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
           <span>{t('saved_posts')}</span>
         </button>
 
+        {/* Settings and administrator access */}
+        <button onClick={() => onNavigate('settings')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'settings' ? 'bg-slate-200 text-slate-900 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center"><Settings size={20}/></div><span className="flex-1 truncate">{t('settings_privacy')}</span></button>
+        {canAdmin && <button onClick={() => onNavigate('admin')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'admin' ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><Shield size={20}/></div><span className="flex-1 truncate">Developer Mode</span><span className="bg-[#0A2A6B] text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded uppercase">Admin</span></button>}
+
         {/* Memories */}
-        <div className="w-full p-2.5 hover:bg-slate-200/60 rounded-2xl flex items-center gap-3 transition text-slate-600 font-semibold text-sm cursor-pointer">
+        <button onClick={() => onNavigate('/v2/memories')} className="w-full p-2.5 hover:bg-slate-200/60 rounded-2xl flex items-center gap-3 transition text-slate-600 font-semibold text-sm cursor-pointer text-left">
           <div className="w-9 h-9 rounded-full bg-cyan-100 text-cyan-600 flex items-center justify-center">
             <Clock size={20} />
           </div>
           <span>Memories</span>
-        </div>
+        </button>
       </div>
 
       {/* Shortcuts divider */}

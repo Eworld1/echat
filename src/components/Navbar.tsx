@@ -42,14 +42,14 @@ import {
   Users2,
   Calendar,
   Settings as SettingsIcon
-  , Film, BarChart3, LayoutGrid, Gamepad2
+  , Film, BarChart3, LayoutGrid, Gamepad2, ShoppingBag, PackageCheck
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
 import { getGoLiveEligibility } from '../config/featureFlags';
 
-export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
+export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard' | `/v2/${string}`;
 
 interface NavbarProps {
   currentView: AppView;
@@ -137,8 +137,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   useBackButton(showNotifications, () => setShowNotifications(false), 'navbar-notifications');
 
   const navigateFeature = (path: string) => {
-    window.history.pushState({ echatApp: true }, '', path);
-    window.dispatchEvent(new Event('echat:navigate'));
+    const classicView:Record<string,AppView>={'/home':'feed','/reels':'reels','/dashboard':'dashboard','/friends':'friends','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings'};
+    onNavigate(path.startsWith('/v2/') ? path as AppView : classicView[path] || 'feed');
     closeProfileMenu();
   };
 
@@ -1152,34 +1152,22 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
 
                 <div className="mb-2 mt-3 border-y border-slate-100 py-2 dark:border-slate-600">
-                  <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Your features</p>
-                  <button onClick={() => navigateFeature('/v2/ai')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Sparkles size={21} className="text-blue-600"/>eChat AI</button>
+                  <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Menu</p>
+                  <button onClick={() => navigateFeature('/home')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Home size={21} className="text-blue-600"/>News Feed</button>
+                  <button onClick={() => navigateFeature('/reels')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Film size={21} className="text-blue-600"/>Reels</button>
+                  <button onClick={() => navigateFeature('/dashboard')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><BarChart3 size={21} className="text-blue-600"/>Dashboard</button>
                   <button onClick={() => { onOpenGoLive?.(); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>{goLiveLabel}</button>
+                  <button onClick={() => navigateFeature('/v2/ai')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Sparkles size={21} className="text-blue-600"/>eChat AI</button>
                   <button onClick={() => navigateFeature('/v2/games')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Gamepad2 size={21} className="text-blue-600"/>Games</button>
-                  <button onClick={() => navigateFeature('/v2/finds')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Compass size={21} className="text-blue-600"/>Finds / Marketplace</button>
-                  <button onClick={() => { onNavigate('feed'); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>Live Now</button>
+                  <button onClick={() => navigateFeature('/v2/finds')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Compass size={21} className="text-blue-600"/>Finds</button>
+                  <button onClick={() => navigateFeature('/v2/market')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><ShoppingBag size={21} className="text-blue-600"/>Marketplace</button>
+                  <button onClick={() => navigateFeature('/v2/market/orders')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><PackageCheck size={21} className="text-blue-600"/>My Orders</button>
+                  <button onClick={() => navigateFeature('/friends')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Users size={21} className="text-blue-600"/>Friends &amp; Requests</button>
+                  <button onClick={() => navigateFeature('/pages')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Flag size={21} className="text-blue-600"/>Pages</button>
+                  <button onClick={() => navigateFeature('/groups')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><UsersRound size={21} className="text-blue-600"/>Groups</button>
+                  <button onClick={() => navigateFeature('/events')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><CalendarDays size={21} className="text-blue-600"/>Events</button>
+                  <button onClick={() => navigateFeature('/saved')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Bookmark size={21} className="text-blue-600"/>Saved Posts</button>
                 </div>
-
-                <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Manage</p>
-                {([
-                  ['pages', 'Pages', Flag],
-                  ['groups', 'Groups', UsersRound],
-                  ['events', 'Events', CalendarDays],
-                  ['dashboard', 'Dashboard', BarChart3],
-                  ['saved', 'Saved Posts', Bookmark]
-                ] as const).map(([view, label, Icon]) => (
-                  <button
-                    key={view}
-                    onClick={() => {
-                      onNavigate(view);
-                      closeProfileMenu();
-                    }}
-                    className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === view ? 'bg-slate-100 dark:bg-white/10' : ''}`}
-                  >
-                    <Icon size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />
-                    {label}
-                  </button>
-                ))}
 
                 <button type="button" onClick={() => setSettingsExpanded(value => !value)} aria-expanded={settingsExpanded} className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === 'settings' ? 'bg-slate-100 dark:bg-white/10' : ''}`}>
                   <Settings2 size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Settings / Professional Settings<ChevronRight size={18} className={`ml-auto transition-transform ${settingsExpanded ? 'rotate-90' : ''}`} />

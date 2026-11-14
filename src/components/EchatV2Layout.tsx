@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bookmark, CalendarDays, Bell, Film, Home, Menu, MessageCircle, Plus, Search, Settings, ShoppingBag, Users, UsersRound, X, Shield, Compass, Bot, Megaphone, Smile, Newspaper, Gamepad2, Clock3, Baby, Rss, LayoutDashboard, UserRound, ContactRound, Radio, LockKeyhole, LayoutGrid } from 'lucide-react';
+import { Bookmark, CalendarDays, Bell, Film, Home, Menu, MessageCircle, Plus, Search, Settings, ShoppingBag, Users, UsersRound, X, Shield, Compass, Bot, Megaphone, Smile, Newspaper, Gamepad2, Clock3, Baby, Rss, LayoutDashboard, UserRound, ContactRound, Radio, LockKeyhole, LayoutGrid, PackageCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { getGoLiveEligibility } from '../config/featureFlags';
 import { api } from '../services/api';
@@ -28,10 +28,10 @@ const links: { route: V2Route; title: string; icon: React.ReactNode; classic?:st
   { route:'/v2/feeds', title:'Feeds', icon:<Newspaper size={19}/> },
   { route:'/v2/games', title:'Games', icon:<Gamepad2 size={19}/> },
   { route:'/v2/market', title:'Marketplace', icon:<ShoppingBag size={19}/> },
+  { route:'/v2/market/orders', title:'My Orders', icon:<PackageCheck size={19}/> },
   { route:'/v2/memories', title:'Memories', icon:<Clock3 size={19}/> },
   { route:'/v2/kids', title:'Messenger Kids', icon:<Baby size={19}/> },
   { route:'/v2/communities', title:'Communities', icon:<UsersRound size={19}/> },
-  { route:'/v2/market', title:'Echat Market', icon:<ShoppingBag size={19}/> },
   { route:'/v2/profile', title:'My Space', icon:<UserRound size={19}/> }
 ];
 const v2MenuLinks: {route:V2Route;title:string;icon:React.ReactNode}[]=[
@@ -45,6 +45,7 @@ const v2MenuLinks: {route:V2Route;title:string;icon:React.ReactNode}[]=[
   {route:'/v2/games',title:'Games',icon:<Gamepad2 size={19}/>},
   {route:'/v2/groups',title:'Groups',icon:<UsersRound size={19}/>},
   {route:'/v2/market',title:'Marketplace',icon:<ShoppingBag size={19}/>},
+  {route:'/v2/market/orders',title:'My Orders',icon:<PackageCheck size={19}/>},
   {route:'/v2/memories',title:'Memories',icon:<Clock3 size={19}/>},
   {route:'/v2/kids',title:'Messenger Kids',icon:<Baby size={19}/>},
   {route:'/v2/pages',title:'Pages',icon:<UsersRound size={19}/>},

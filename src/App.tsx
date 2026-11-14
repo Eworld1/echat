@@ -43,8 +43,9 @@ export function MainApp() {
   useEffect(() => { const timer = window.setTimeout(() => setSplashElapsed(true), 2000); return () => window.clearTimeout(timer); }, []);
   useEffect(() => { if (!splashElapsed || isLoading) return; const timer = window.setTimeout(() => setSplashHidden(true), 500); return () => window.clearTimeout(timer); }, [splashElapsed, isLoading]);
 
-  const [currentView, setCurrentView] = useState<AppView>('feed');
-  const [isV2Route, setIsV2Route] = useState(() => window.location.pathname.startsWith('/v2/'));
+  const initialPath = window.location.pathname;
+  const [currentView, setCurrentView] = useState<AppView>(() => initialPath.startsWith('/v2/') ? initialPath as AppView : 'feed');
+  const isV2Route = typeof currentView === 'string' && currentView.startsWith('/v2/');
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
@@ -61,11 +62,10 @@ export function MainApp() {
   useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname;
-      if (path.startsWith('/v2/')) { setIsV2Route(true); return; }
-      setIsV2Route(false);
+      if (path.startsWith('/v2/')) { setCurrentView(path as AppView); return; }
       if (path === '/market') {
         window.history.replaceState({ echatV2: true }, '', `/v2/market${window.location.search}`);
-        setIsV2Route(true);
+        setCurrentView('/v2/market');
         return;
       }
       if (path === '/' || path.startsWith('/classic')) {
@@ -104,8 +104,7 @@ export function MainApp() {
       const target = window.location.pathname === '/v2/home' ? '/v2/home' : '/home';
       const goV2 = target === '/v2/home';
       window.history.replaceState({ [goV2 ? 'echatV2' : 'echatApp']: true }, '', target);
-      setIsV2Route(goV2);
-      setCurrentView('feed');
+      setCurrentView(goV2 ? '/v2/home' : 'feed');
     }
     previousLoggedIn.current = Boolean(user);
     initialAuthResolved.current = true;
@@ -160,10 +159,22 @@ export function MainApp() {
     targetProfileId?: string,
     targetPostId?: string
   ) => {
+    if (typeof view === 'string' && view.startsWith('/v2/')) {
+      window.history.pushState({ echatV2: true }, '', `${view}${window.location.search}`);
+      setActiveChatPartner(null);
+      setIsMessengerDrawerOpen(false);
+      setIsGoLiveOpen(false);
+      setActiveViewerStream(null);
+      setCurrentView(view);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Record<AppView,string>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard'};
-    window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routeByView[view]}${window.location.search}`);
+    const routeByView:Partial<Record<AppView,string>>={feed:'/home',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard'};
+    const routePath=routeByView[view];
+    if(!routePath)return;
+    window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${window.location.search}`);
     setActiveChatPartner(null);
     setIsMessengerDrawerOpen(false);
     setIsGoLiveOpen(false);
@@ -297,7 +308,7 @@ export function MainApp() {
 
         {/* Central Stage */}
         <main className={`box-border w-full min-w-0 flex-1 px-1 sm:px-0 ${currentView === 'dashboard' ? 'max-w-5xl' : currentView === 'feed' ? 'max-w-[680px]' : 'max-w-3xl'}`}>
-          {isV2Route ? <EchatV2Boundary><EchatV2App embedded /></EchatV2Boundary> : currentView === 'feed' && (
+          {isV2Route ? <EchatV2Boundary><EchatV2App embedded route={currentView as `/v2/${string}`} onNavigate={route => handleNavigate(route as AppView)} /></EchatV2Boundary> : currentView === 'feed' && (
             <Feed
               onOpenChat={handleOpenChat}
               onViewProfile={(uid) => handleNavigate('profile', uid)}
