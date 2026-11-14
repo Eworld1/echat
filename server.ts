@@ -6,7 +6,6 @@ import crypto from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import express, { Request, Response } from 'express';
-import { createServer as createViteServer } from 'vite';
 import { db, hashPassword } from './server/db.js';
 import { SocketManager } from './server/socket.js';
 import { firebaseProjectId, firestore, getFirebaseAdminAuth } from './server/firebase-admin.js';
@@ -2739,8 +2738,6 @@ app.delete('/api/users/:id', (req: Request, res: Response) => {
 
 // ----------------- VITE & SERVER STARTUP -----------------
 async function startServer() {
-  await db.init(); // connect MongoDB (if MONGO_URI is set) and load saved data before serving requests
-
   app.use('/api', (_req: Request, res: Response) => {
     res.status(404).json({ error: 'API route not found' });
   });
@@ -2764,6 +2761,7 @@ async function startServer() {
   }
 
   if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -2799,8 +2797,11 @@ async function startServer() {
   });
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.info(`[Echat] Server on ${PORT}`);
+    console.info(`[Echat] Listening on ${PORT}`);
   });
+
+  // Bind Render's port before starting the existing database initialization.
+  void db.init();
 
   // Dev only: also answer on :5173 so http://localhost:5173 works like a Vite dev server.
   if (!isProd && PORT !== 5173) {
