@@ -1,6 +1,4 @@
 import { usePreferences } from '../context/PreferencesContext';
-import { useInstallPrompt } from '../hooks/useInstallPrompt';
-import { IosInstallHelp } from './InstallAppBanner';
 import { initialsAvatar } from '../utils/avatar';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
@@ -10,10 +8,8 @@ import { getNotifications as getFirestoreNotifications, markNotificationsRead as
 import { User, Notification, Post } from '../types';
 import {
   MessageSquare,
-  Radio,
   Search,
   Home,
-  PlusSquare,
   Users,
   Shield,
   Bell,
@@ -28,7 +24,6 @@ import {
   CalendarDays,
   Settings2,
   Heart,
-  Download,
   MessageCircle,
   Phone,
   PhoneMissed,
@@ -41,22 +36,18 @@ import {
   Flag,
   Users2,
   Calendar,
-  Settings as SettingsIcon
-  , Film, BarChart3, LayoutGrid, Gamepad2
+  Film,
+  BarChart3
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
-import { LANGUAGES, type LanguageName } from '../i18n/translations';
 import { useBackButton } from '../hooks/useBackButton';
-import { getGoLiveEligibility } from '../config/featureFlags';
 
-export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
+export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders';
 
 interface NavbarProps {
   currentView: AppView;
   onNavigate: (view: AppView, targetProfileId?: string, targetPostId?: string) => void;
   onOpenMessenger: () => void;
-  onOpenCreate: () => void;
-  onOpenGoLive?: () => void;
   onProfileMenuChange: (open: boolean) => void;
 }
 
@@ -74,22 +65,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentView,
   onNavigate,
   onOpenMessenger,
-  onOpenCreate,
-  onOpenGoLive,
   onProfileMenuChange
 }) => {
   const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
   const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
-  const goLiveEligibility = getGoLiveEligibility({ role: user?.role, isAdmin: user?.isAdmin, isDeveloper, createdAt: user?.createdAt });
-  const goLiveLabel = goLiveEligibility.canGoLive ? 'Go Live' : `Locked 🔒 - Go Live in ${goLiveEligibility.daysLeft} ${goLiveEligibility.daysLeft === 1 ? 'day' : 'days'}`;
-  const { t, theme, setTheme, language, setLanguage } = usePreferences();
+  const { t } = usePreferences();
   const { onlineUserIds, onNotification, startCall } = useSocket();
-  const { canInstall, install } = useInstallPrompt();
-  const [showIosHelp, setShowIosHelp] = useState(false);
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [settingsExpanded, setSettingsExpanded] = useState(false);
-  const [showHelpInfo, setShowHelpInfo] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [toast, setToast] = useState<Notification | null>(null);
@@ -123,7 +106,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   useEffect(() => {
     setShowProfileMenu(false);
     onProfileMenuChange(false);
-    setSettingsExpanded(false);
     setShowNotifications(false);
     setShowSearchDropdown(false);
   }, [currentView, onProfileMenuChange]);
@@ -136,19 +118,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   useBackButton(showSearchDropdown, () => setShowSearchDropdown(false), 'navbar-search');
   useBackButton(showNotifications, () => setShowNotifications(false), 'navbar-notifications');
 
-  const navigateFeature = (path: string) => {
-    window.history.pushState({ echatApp: true }, '', path);
-    window.dispatchEvent(new Event('echat:navigate'));
-    closeProfileMenu();
-  };
-
   const toggleProfileMenu = () => {
     setShowProfileMenu(open => {
       onProfileMenuChange(!open);
       return !open;
     });
-    setSettingsExpanded(false);
-    setShowHelpInfo(false);
   };
 
   // App Pages definition for search
@@ -468,13 +442,13 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className={`sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} bg-white border-b border-slate-200/90 shadow-2xs`}>
-      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[280px_minmax(0,1fr)_320px] min-[1025px]:grid-rows-[56px_48px]">
+      <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[40px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 min-[1025px]:grid-cols-[220px_minmax(180px,320px)_minmax(260px,1fr)_auto] min-[1025px]:grid-rows-[64px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
         <div className="contents">
           <div
             onClick={() => onNavigate('feed')}
-            className="col-start-1 row-start-1 flex min-w-0 shrink-0 cursor-pointer items-center gap-2 group min-[1025px]:w-[280px]"
+            className="col-start-1 row-start-1 flex min-w-0 shrink-0 cursor-pointer items-center gap-2 group min-[1025px]:w-[220px]"
           >
             <img src="/logo-mark-blue.svg" alt="" className="h-10 w-10 shrink-0 object-contain transition group-hover:scale-105 min-[1025px]:hidden" />
             <img src="/logo-blue.svg" alt="Echat" className="hidden h-10 w-[190px] shrink-0 object-contain object-left min-[1025px]:block" />
@@ -878,7 +852,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Center: Main Navigation Icons (Facebook style) */}
 
-        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-1 min-[1025px]:col-span-3 min-[1025px]:row-start-2 min-[1025px]:overflow-visible">
+        <div className="col-span-3 row-start-2 flex h-12 w-full max-w-full items-stretch justify-center gap-0 overflow-x-auto overflow-y-hidden px-2 scrollbar-none min-[1025px]:col-start-3 min-[1025px]:col-span-1 min-[1025px]:row-start-1 min-[1025px]:h-14 min-[1025px]:overflow-visible">
           <button
             onClick={() => onNavigate('feed')}
             className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] flex flex-col items-center justify-center gap-0 transition cursor-pointer ${
@@ -919,39 +893,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </button>
 
-          <button onClick={() => onNavigate('pages')} className={`hidden h-12 min-w-14 max-w-28 flex-1 items-center justify-center border-b-[3px] transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:flex ${currentView === 'pages' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`} title="Pages"><Flag size={22} /></button>
           <button onClick={onOpenMessenger} className="relative flex h-12 min-w-14 max-w-28 flex-1 flex-col items-center justify-center gap-0 border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Messages"><MessageSquare size={20} /><span className="text-[9px] leading-3">Messages</span>{unreadMessageCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white">{unreadMessageCount}</span>}</button>
           <button onClick={() => { setShowNotifications(value => !value); if (!showNotifications) handleMarkNotificationsRead(); }} className="relative flex h-12 min-w-14 max-w-28 flex-1 flex-col items-center justify-center gap-0 border-b-[3px] border-transparent text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 min-[1025px]:hidden" title="Notifications"><Bell size={20} /><span className="text-[9px] leading-3">Notifications</span>{unreadNotificationsCount > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unreadNotificationsCount}</span>}</button>
 
-          {canAdmin && (
-            <button
-              onClick={() => onNavigate('admin')}
-              className={`h-12 min-w-14 max-w-28 flex-1 border-b-[3px] items-center justify-center transition cursor-pointer hidden min-[1025px]:flex ${
-                currentView === 'admin'
-                  ? 'border-purple-600 text-purple-600'
-                  : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-              }`}
-              title="Master Developer Console"
-            >
-              <div className="flex items-center gap-1.5">
-                <Shield size={20} strokeWidth={currentView === 'admin' ? 2.5 : 2} />
-                <span className="hidden md:inline text-[11px] font-extrabold uppercase bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-md">
-                  Developer
-                </span>
-              </div>
-            </button>
-          )}
         </div>
 
         {/* Right: Actions, Messenger, Notifications, Profile */}
-        <div className="col-start-3 row-start-1 flex shrink-0 items-center justify-end gap-1 min-[1025px]:gap-2">
-
-          <button onClick={onOpenCreate} className="hidden h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-700 min-[1025px]:flex" title="Create post"><PlusSquare size={19} /></button>
-          <button onClick={onOpenGoLive} className="hidden h-10 items-center gap-2 rounded-full bg-rose-600 px-3 text-xs font-extrabold text-white transition hover:bg-rose-700 min-[1025px]:flex" title={goLiveLabel}><Radio size={17}/>{goLiveLabel}</button>
-
-          <button type="button" onClick={toggleProfileMenu} aria-label="Open profile features menu" aria-expanded={showProfileMenu} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:h-10 min-[1025px]:w-10">
-            <LayoutGrid size={19} />
-          </button>
+        <div className="col-start-3 row-start-1 flex shrink-0 items-center justify-end gap-1 min-[1025px]:col-start-4 min-[1025px]:gap-2">
 
           {/* Messenger Icon */}
           <button
@@ -1073,8 +1021,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
-          {showIosHelp && <IosInstallHelp onClose={() => setShowIosHelp(false)} />}
-
           {/* Live pop-up for a new message / missed call */}
           {toast && (
             <div className="fixed bottom-4 right-4 z-[80] max-w-xs w-[calc(100%-2rem)] bg-white rounded-2xl shadow-2xl border border-slate-200 p-3.5 flex items-start gap-3 animate-in fade-in">
@@ -1151,64 +1097,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {activePage && <p className="px-2 pt-1 text-[10px] text-blue-700">Currently using {activePage.name}</p>}
                 </div>
 
-                <div className="mb-2 mt-3 border-y border-slate-100 py-2 dark:border-slate-600">
-                  <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Your features</p>
-                  <button onClick={() => navigateFeature('/v2/ai')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Sparkles size={21} className="text-blue-600"/>eChat AI</button>
-                  <button onClick={() => { onOpenGoLive?.(); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>{goLiveLabel}</button>
-                  <button onClick={() => navigateFeature('/v2/games')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Gamepad2 size={21} className="text-blue-600"/>Games</button>
-                  <button onClick={() => navigateFeature('/v2/finds')} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Compass size={21} className="text-blue-600"/>Finds / Marketplace</button>
-                  <button onClick={() => { onNavigate('feed'); closeProfileMenu(); }} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><Radio size={21} className="text-rose-600"/>Live Now</button>
-                </div>
-
-                <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Manage</p>
+                <p className="px-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Menu</p>
                 {([
                   ['pages', 'Pages', Flag],
                   ['groups', 'Groups', UsersRound],
                   ['events', 'Events', CalendarDays],
                   ['dashboard', 'Dashboard', BarChart3],
                   ['saved', 'Saved Posts', Bookmark]
-                ] as const).map(([view, label, Icon]) => (
-                  <button
-                    key={view}
-                    onClick={() => {
-                      onNavigate(view);
-                      closeProfileMenu();
-                    }}
-                    className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === view ? 'bg-slate-100 dark:bg-white/10' : ''}`}
-                  >
-                    <Icon size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />
-                    {label}
-                  </button>
-                ))}
-
-                <button type="button" onClick={() => setSettingsExpanded(value => !value)} aria-expanded={settingsExpanded} className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === 'settings' ? 'bg-slate-100 dark:bg-white/10' : ''}`}>
-                  <Settings2 size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Settings / Professional Settings<ChevronRight size={18} className={`ml-auto transition-transform ${settingsExpanded ? 'rotate-90' : ''}`} />
-                </button>
-                {settingsExpanded && <div className="mb-1 ml-8 space-y-1 border-l border-slate-200 pl-2 dark:border-slate-600">
-                  <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Settings</button>
-                  <p className="px-3 py-2 text-xs font-semibold text-slate-600">Professional Features: All features enabled</p>
-                  <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Privacy Checkup</button>
-                  <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10">Dark Mode: {theme === 'dark' ? 'On' : 'Off'}</button>
-                  <label className="flex h-11 items-center justify-between gap-2 rounded-lg px-3 text-sm font-medium text-slate-700 dark:text-slate-100">Language<select aria-label="Language" value={language} onChange={event => setLanguage(event.target.value as LanguageName)} className="max-w-36 rounded-md border border-slate-200 bg-white px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800">{(Object.keys(LANGUAGES) as LanguageName[]).map(name => <option key={name} value={name}>{LANGUAGES[name].label}</option>)}</select></label>
-                  <button onClick={() => { logout(); closeProfileMenu(); }} className="flex h-11 w-full items-center rounded-lg px-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">Logout</button>
-                </div>}
-
-                <button type="button" onClick={() => setShowHelpInfo(value => !value)} aria-expanded={showHelpInfo} className="flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10"><MessageCircle size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Help &amp; Support</button>
-                {showHelpInfo && <p className="mx-4 mb-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-200">For help with your account, contact your EChat administrator.</p>}
-
-                {canInstall && (
-                  <button
-                    onClick={async () => {
-                      closeProfileMenu();
-                      const result = await install();
-                      if (result === 'ios') setShowIosHelp(true);
-                    }}
-                    className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 rounded-xl text-xs font-semibold text-blue-700 flex items-center gap-2.5 transition"
-                  >
-                    <Download size={16} />
-                    {t('install_app')}
-                  </button>
-                )}
+                ] as const).map(([view, label, Icon]) => <button key={view} onClick={() => { onNavigate(view); closeProfileMenu(); }} className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === view ? 'bg-slate-100 dark:bg-white/10' : ''}`}><Icon size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />{label}</button>)}
+                <button onClick={() => { onNavigate('settings'); closeProfileMenu(); }} className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === 'settings' ? 'bg-slate-100 dark:bg-white/10' : ''}`}><Settings2 size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />Settings &amp; Privacy</button>
 
                 {canAdmin && (
                   <button
