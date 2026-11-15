@@ -37,8 +37,9 @@ import { V2MarketOrders } from './pages/v2/V2MarketOrders';
 import type { V2MarketListing } from './services/v2Market';
 import { Film, Home, Menu, MessageSquare, ShoppingBag } from 'lucide-react';
 import { SearchPage } from './pages/SearchPage';
+import { MessagesPage } from './pages/MessagesPage';
 
-const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'feed','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders','/search':'search' };
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'messages','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/events':'events','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders','/search':'search' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -54,6 +55,7 @@ export function MainApp() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
+  const [activeDmUserId, setActiveDmUserId] = useState<string | null>(null);
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
   const [showBackToast, setShowBackToast] = useState(false);
   const currentViewRef = useRef(currentView);
@@ -91,7 +93,6 @@ export function MainApp() {
         }
         setCurrentView(route);
         if (route === 'profile') setProfileUserId(user?.id || null);
-        if (path === '/messages') setIsMessengerDrawerOpen(true);
         if (path.startsWith('/live/')) {
           const streamId = decodeURIComponent(path.slice('/live/'.length));
           void api.getCurrentLive().then(result => {
@@ -168,7 +169,7 @@ export function MainApp() {
   ) => {
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search'};
+    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',messages:'/messages',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',events:'/events',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search'};
     const routePath=view==='marketplace' ? (targetRoute?.startsWith('/marketplace/') ? targetRoute : '/marketplace') : routeByView[view];
     if(view==='marketplace')setMarketRoute(routePath);
     window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${window.location.search}`);
@@ -262,6 +263,10 @@ export function MainApp() {
   const handleOpenChat = (partner: User) => {
     setActiveChatPartner(partner);
   };
+  const handleOpenDm = (partner: User) => {
+    setActiveDmUserId(partner.id);
+    handleNavigate('messages');
+  };
   const closeGoLive = () => {
     setIsGoLiveOpen(false);
   };
@@ -292,14 +297,14 @@ export function MainApp() {
       <Navbar
         currentView={currentView}
         onNavigate={handleNavigate}
-        onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
+        onOpenMessenger={() => handleNavigate('messages')}
         onOpenMenu={() => setMobileMenuOpen(true)}
         onProfileMenuChange={handleProfileMenuChange}
       />
 
       {mobileMenuOpen && <>
         <button type="button" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} className="fixed inset-0 z-[80] bg-black/55 min-[1025px]:hidden" />
-        <LeftSidebar currentView={currentView} onNavigate={handleMobileSidebarNavigate} onOpenMessenger={() => { setMobileMenuOpen(false); setIsMessengerDrawerOpen(true); }} mobileDrawer onClose={() => setMobileMenuOpen(false)} />
+        <LeftSidebar currentView={currentView} onNavigate={handleMobileSidebarNavigate} onOpenMessenger={() => { setMobileMenuOpen(false); handleNavigate('messages'); }} mobileDrawer onClose={() => setMobileMenuOpen(false)} />
       </>}
 
       {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
@@ -310,7 +315,7 @@ export function MainApp() {
         <LeftSidebar
           currentView={currentView}
           onNavigate={handleNavigate}
-          onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
+          onOpenMessenger={() => handleNavigate('messages')}
         />
 
         {/* Central Stage */}
@@ -326,120 +331,4 @@ export function MainApp() {
 
           {currentView === 'search' && <SearchPage onViewProfile={uid => handleNavigate('profile', uid)} onOpenListing={id => navigateMarket(`/marketplace/listing/${id}`)} onNavigate={view => handleNavigate(view)} />}
 
-          {currentView === 'live' && <LiveDiscoveryFeed onBack={() => handleNavigate('feed')} onOpenGoLive={() => setIsGoLiveOpen(true)} onWatchLive={stream => setActiveViewerStream(stream)} legacyStream={currentLiveStream} />}
-
-          {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} />}
-
-          {currentView === 'friends' && (
-            <FriendsView
-              onOpenChat={handleOpenChat}
-              onViewProfile={(uid) => handleNavigate('profile', uid)}
-            />
-          )}
-
-          {currentView === 'profile' && profileUserId && (
-            <ProfileView
-              userId={profileUserId}
-              onOpenChat={handleOpenChat}
-              onViewProfile={(uid) => handleNavigate('profile', uid)}
-            />
-          )}
-
-          {currentView === 'pages' && (
-            <Pages onNavigateBack={() => handleNavigate('feed')} onOpenChat={handleOpenChat} />
-          )}
-
-          {currentView === 'groups' && <Groups />}
-
-          {currentView === 'events' && <Events />}
-
-          {currentView === 'dashboard' && <Dashboard />}
-
-          {currentView === 'settings' && (
-            <Settings onNavigateHome={() => handleNavigate('feed')} />
-          )}
-
-          {currentView === 'saved' && (
-            <SavedPosts onViewProfile={(uid) => handleNavigate('profile', uid)} />
-          )}
-
-          {currentView === 'marketplace' && <V2Market route={marketRoute} onNavigate={navigateMarket} onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} />}
-          {currentView === 'orders' && <V2MarketOrders onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} onShop={() => handleNavigate('marketplace')} />}
-
-          {currentView === 'admin' && canAdmin && (
-            <AdminDashboard
-              onViewProfile={(uid) => handleNavigate('profile', uid)}
-            />
-          )}
-        </main>
-
-        {/* Right Contacts Sidebar (Desktop XL) */}
-        {currentView !== 'dashboard' && currentView !== 'live' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
-      </div>
-
-      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur min-[769px]:hidden">
-        <button type="button" onClick={() => handleNavigate('feed')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'feed' ? 'text-blue-700' : 'text-slate-600'}`}><Home size={21}/><span>Home</span></button>
-        <button type="button" onClick={() => handleNavigate('reels')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'reels' ? 'text-blue-700' : 'text-slate-600'}`}><Film size={21}/><span>Reels</span></button>
-        <button type="button" onClick={() => navigateMarket('/marketplace')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'marketplace' ? 'text-blue-700' : 'text-slate-600'}`}><ShoppingBag size={21}/><span>Marketplace</span></button>
-        <button type="button" onClick={() => setIsMessengerDrawerOpen(true)} className="flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold text-slate-600"><MessageSquare size={21}/><span>Messages</span></button>
-        <button type="button" onClick={() => setMobileMenuOpen(true)} aria-expanded={mobileMenuOpen} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${mobileMenuOpen ? 'text-blue-700' : 'text-slate-600'}`}><Menu size={21}/><span>Menu</span></button>
-      </nav>
-
-      {/* Floating Messenger Window */}
-      {activeChatPartner && (
-        <ChatFloatingWindow
-          partner={activeChatPartner}
-          onClose={() => setActiveChatPartner(null)}
-        />
-      )}
-
-      {/* Slide-out Messenger Drawer */}
-      <ChatDrawer
-        isOpen={isMessengerDrawerOpen}
-        onClose={() => setIsMessengerDrawerOpen(false)}
-        onSelectUser={handleOpenChat}
-      />
-
-      {showBackToast && <div role="status" className="fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">Press back again to exit</div>}
-
-      {/* WebRTC Video / Audio Call Modal */}
-      <CallModal />
-
-      {/* Go Live Studio Modal */}
-      <GoLiveModal
-        isOpen={isGoLiveOpen}
-        onClose={closeGoLive}
-        onStreamStarted={(stream) => {
-          setCurrentLiveStream(stream);
-        }}
-        onStreamEnded={() => {
-          setCurrentLiveStream(null);
-        }}
-      />
-
-      {/* Live Stream Audience Viewer Modal */}
-      {activeViewerStream && (
-        <LiveViewerModal
-          stream={activeViewerStream}
-          onClose={() => {
-            setActiveViewerStream(null);
-            if (window.location.pathname.startsWith('/live/')) {
-              window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
-              window.dispatchEvent(new Event('echat:navigate'));
-            }
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-export default function App() {
-  return (
-    <AuthProvider>
-      <SocketProvider>
-        <MainApp />
-      </SocketProvider>
-    </AuthProvider>
-  );
-}
+          {currentView === 'messages' && <MessagesPage initialUserId={activeDmUs

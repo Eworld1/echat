@@ -22,6 +22,21 @@ import type {
 } from '../types';
 import { auth } from './firebase';
 
+export interface DirectMessage {
+  _id: string;
+  senderId: string;
+  receiverId: string;
+  text: string;
+  createdAt: number;
+  readAt: number | null;
+}
+
+export interface DirectConversation {
+  user: User;
+  lastMessage: DirectMessage;
+  unreadCount: number;
+}
+
 async function readResponse<T>(res: Response, fallbackMessage = 'Request failed'): Promise<T> {
   const contentType = res.headers.get('content-type') || '';
   const isJson = contentType.includes('application/json');
@@ -391,6 +406,23 @@ export const api = {
   async getConversationPartners(): Promise<string[]> {
     const res = await fetch(apiUrl('/api/conversations'), { headers: getHeaders() });
     return readResponse<string[]>(res, 'Could not load conversations');
+  },
+  async getDmConversations(): Promise<DirectConversation[]> {
+    const res = await fetch(apiUrl('/api/dm/conversations'), { headers: getHeaders(), cache: 'no-store' });
+    const data = await readResponse<{ conversations: DirectConversation[] }>(res, 'Could not load direct messages');
+    return Array.isArray(data.conversations) ? data.conversations : [];
+  },
+  async getDmConversation(userId: string): Promise<DirectMessage[]> {
+    const res = await fetch(apiUrl(`/api/dm/${encodeURIComponent(userId)}`), { headers: getHeaders(), cache: 'no-store' });
+    return readResponse<DirectMessage[]>(res, 'Could not load this conversation');
+  },
+  async sendDm(userId: string, text: string): Promise<DirectMessage> {
+    const res = await fetch(apiUrl(`/api/dm/${encodeURIComponent(userId)}`), { method: 'POST', headers: getHeaders(), body: JSON.stringify({ text }) });
+    return readResponse<DirectMessage>(res, 'Could not send this message');
+  },
+  async markDmRead(userId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/api/dm/${encodeURIComponent(userId)}/read`), { method: 'POST', headers: getHeaders() });
+    await readResponse<{ success: boolean }>(res, 'Could not mark messages as read');
   },
   async getSiteConfig(): Promise<import('../types').SiteConfig> {
     const res = await fetch(apiUrl('/api/site-config'));
@@ -783,293 +815,4 @@ export const api = {
       method: 'POST',
       headers: getHeaders()
     });
-    return readResponse<{ success: boolean; hasBoosted: boolean; boostsCount: number }>(res, 'Failed to boost user');
-  },
-
-  // Admin-controlled Go-Live access
-  async getLiveAccess(forceRefresh = false): Promise<{ liveAccess: NonNullable<User['liveAccess']>; mode: LiveAccessMode; canGoLive: boolean; request: LiveAccessRequest | null; accountAgeDays: number; daysUntilEligible: number; autoApproved: boolean }> {
-    const res = await fetch(LEGACY_API_URL + '/api/live/access', { headers: await getLegacyLiveHeaders(forceRefresh) });
-    return readResponse(res, 'Could not check Go Live access');
-  },
-
-  async requestLiveAccess(reason: string): Promise<{ success: boolean; liveAccess: 'pending'; request: LiveAccessRequest }> {
-    const res = await fetch(LEGACY_API_URL + '/api/live/request', { method: 'POST', headers: await getLegacyLiveHeaders(), body: JSON.stringify({ reason }) });
-    return readResponse(res, 'Could not send Go Live request');
-  },
-
-  async cancelLiveAccessRequest(): Promise<{ success: boolean; liveAccess: 'none' }> {
-    const res = await fetch(LEGACY_API_URL + '/api/live/request/cancel', { method: 'POST', headers: await getLegacyLiveHeaders() });
-    return readResponse(res, 'Could not cancel Go Live request');
-  },
-
-  async getAdminLiveAccess(): Promise<{ requests: LiveAccessRequest[]; mode: LiveAccessMode; users: User[] }> {
-    const res = await fetch(LEGACY_API_URL + '/api/admin/live-access', { headers: await getLegacyLiveHeaders() });
-    return readResponse(res, 'Could not load Go Live access requests');
-  },
-
-  async reviewLiveAccessRequest(requestId: string, decision: 'approved' | 'rejected' | 'blocked'): Promise<void> {
-    const res = await fetch(LEGACY_API_URL + `/api/admin/live-access/requests/${encodeURIComponent(requestId)}/review`, { method: 'POST', headers: await getLegacyLiveHeaders(), body: JSON.stringify({ decision }) });
-    await readResponse(res, 'Could not review Go Live request');
-  },
-
-  async updateUserLiveAccess(userId: string, action: 'grant' | 'revoke' | 'block' | 'unblock'): Promise<User> {
-    const res = await fetch(LEGACY_API_URL + `/api/admin/live-access/users/${encodeURIComponent(userId)}`, { method: 'POST', headers: await getLegacyLiveHeaders(), body: JSON.stringify({ action }) });
-    return readResponse(res, 'Could not change user Go Live access');
-  },
-
-  async updateLiveAccessMode(mode: LiveAccessMode): Promise<void> {
-    const res = await fetch(LEGACY_API_URL + '/api/admin/live-access/settings', { method: 'PUT', headers: await getLegacyLiveHeaders(), body: JSON.stringify({ mode }) });
-    await readResponse(res, 'Could not update Go Live settings');
-  },
-
-  // Live broadcast system
-  async getCurrentLive(): Promise<{ live: LiveStream | null }> {
-    const res = await fetch(apiUrl('/api/live/current'), { headers: getHeaders(), cache: 'no-store' });
-    if (!res.ok) return { live: null };
-    return readResponse<{ live: LiveStream | null }>(res);
-  },
-
-  async startLive(title?: string, taggedPageIds: string[] = [], options: { category?: string; location?: string } = {}): Promise<{ success: boolean; live: LiveStream; liveKitUrl?: string; liveKitToken?: string }> {
-    const res = await fetch(apiUrl('/api/live/start'), {
-      method: 'POST',
-      headers: await getVercelLiveHeaders(),
-      body: JSON.stringify({ title, taggedPageIds, ...options })
-    });
-    return readResponse(res, 'Failed to start live stream');
-  },
-
-  async stopLive(streamId?: string): Promise<{ success: boolean; live?: LiveStream }> {
-    const res = await fetch(apiUrl('/api/live/end'), {
-      method: 'POST',
-      headers: await getVercelLiveHeaders(),
-      body: JSON.stringify({ streamId })
-    });
-    return readResponse(res);
-  },
-
-  async getLiveKitViewerToken(streamId: string): Promise<{ url: string; token: string }> {
-    const res = await fetch(apiUrl(`/api/live/watch?streamId=${encodeURIComponent(streamId)}`), { headers: await getVercelLiveHeaders(), cache: 'no-store' });
-    return readResponse(res, 'Could not join this live stream');
-  },
-
-  async getLiveKitHostToken(streamId: string): Promise<{ url: string; token: string }> {
-    const res = await fetch(apiUrl('/api/live/publish'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify({ streamId }), cache: 'no-store' });
-    return readResponse(res, 'Could not publish your live broadcast');
-  },
-
-  async sendLiveComment(text: string): Promise<{ success: boolean; comment: LiveComment }> {
-    const res = await fetch(LEGACY_API_URL + '/api/live/comment', {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ text })
-    });
-    return readResponse(res, 'Failed to send comment');
-  },
-
-  async sendLiveReaction(emoji: string): Promise<{ success: boolean; reactionsCount: number }> {
-    const res = await fetch(LEGACY_API_URL + '/api/live/reaction', {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ emoji })
-    });
-    return readResponse(res);
-  },
-
-  async joinLive(): Promise<{ success: boolean; viewersCount: number }> {
-    const res = await fetch(LEGACY_API_URL + '/api/live/join', {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse(res);
-  },
-
-  async leaveLive(): Promise<{ success: boolean; viewersCount: number }> {
-    const res = await fetch(LEGACY_API_URL + '/api/live/leave', {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse(res);
-  },
-
-  // Pages
-  async getPages(): Promise<Page[]> {
-    try {
-      const res = await fetch(apiUrl('/api/pages'), { headers: getHeaders() });
-      if (!res.ok) return [];
-      const data = await readResponse<Page[]>(res);
-      return Array.isArray(data) ? data : [];
-    } catch {
-      return [];
-    }
-  },
-
-  async getPage(id: string): Promise<Page> {
-    const res = await fetch(apiUrl(`/api/pages/${id}`), { headers: getHeaders() });
-    return readResponse<Page>(res, 'Page not found');
-  },
-  async getMyPages(): Promise<Page[]> {
-    const res = await fetch(apiUrl('/api/my-pages'), { headers: getHeaders() });
-    return readResponse<Page[]>(res, 'Could not load your pages');
-  },
-
-  async createPage(data: { name: string; category: string; bio: string; cover: string; avatar?: string }): Promise<Page> {
-    const res = await fetch(apiUrl('/api/pages'), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    });
-    return readResponse<Page>(res, 'Failed to create page');
-  },
-
-  async updatePage(pageId: string, data: { name?: string; category?: string; bio?: string; avatar?: string; cover?: string }): Promise<Page> {
-    const res = await fetch(apiUrl(`/api/pages/${pageId}`), { method: 'PUT', headers: getHeaders(), body: JSON.stringify(data) });
-    return readResponse<Page>(res, 'Could not update the page');
-  },
-  async updateGroup(groupId: string, data: { name?: string; description?: string; privacy?: 'public' | 'private'; avatar?: string; cover?: string }): Promise<Group> {
-    const res = await fetch(apiUrl(`/api/groups/${groupId}`), { method: 'PUT', headers: getHeaders(), body: JSON.stringify(data) });
-    return readResponse<Group>(res, 'Could not update the group');
-  },
-  async togglePageFollow(pageId: string): Promise<Page> {
-    const res = await fetch(apiUrl(`/api/pages/${pageId}/follow`), {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse<Page>(res, 'Failed to toggle follow');
-  },
-
-  async togglePageLike(pageId: string): Promise<Page> {
-    const res = await fetch(apiUrl(`/api/pages/${pageId}/like`), {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse<Page>(res, 'Failed to toggle like');
-  },
-
-  async createPagePost(pageId: string, data: { content: string; mediaUrl?: string; mediaType?: 'image' | 'video' }): Promise<PagePost> {
-    const res = await fetch(apiUrl(`/api/pages/${pageId}/posts`), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    });
-    return readResponse<PagePost>(res, 'Failed to publish post');
-  },
-
-  // Groups
-  async getGroups(): Promise<Group[]> {
-    try {
-      const res = await fetch(apiUrl('/api/groups'), { headers: getHeaders() });
-      if (!res.ok) return [];
-      const data = await readResponse<Group[]>(res);
-      return Array.isArray(data) ? data : [];
-    } catch {
-      return [];
-    }
-  },
-
-  async getGroup(id: string): Promise<Group> {
-    const res = await fetch(apiUrl(`/api/groups/${id}`), { headers: getHeaders() });
-    return readResponse<Group>(res, 'Group not found');
-  },
-
-  async createGroup(data: { name: string; privacy: 'public' | 'private'; description: string; cover: string; avatar?: string }): Promise<Group> {
-    const res = await fetch(apiUrl('/api/groups'), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    });
-    return readResponse<Group>(res, 'Failed to create group');
-  },
-
-  async joinGroup(groupId: string): Promise<Group> {
-    const res = await fetch(apiUrl(`/api/groups/${groupId}/join`), {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse<Group>(res, 'Failed to join group');
-  },
-
-  async leaveGroup(groupId: string): Promise<Group> {
-    const res = await fetch(apiUrl(`/api/groups/${groupId}/leave`), {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse<Group>(res, 'Failed to leave group');
-  },
-
-  async createGroupPost(groupId: string, data: { content: string; mediaUrl?: string; mediaType?: 'image' | 'video' }): Promise<GroupPost> {
-    const res = await fetch(apiUrl(`/api/groups/${groupId}/posts`), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    });
-    return readResponse<GroupPost>(res, 'Failed to post in group');
-  },
-
-  async approveGroupPost(groupId: string, postId: string): Promise<{ success: boolean; group: Group }> {
-    const res = await fetch(apiUrl(`/api/groups/${groupId}/posts/${postId}/approve`), {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse<{ success: boolean; group: Group }>(res, 'Failed to approve post');
-  },
-
-  // Events
-  async getEvents(): Promise<EventItem[]> {
-    try {
-      const res = await fetch(apiUrl('/api/events'), { headers: getHeaders() });
-      if (!res.ok) return [];
-      const data = await readResponse<EventItem[]>(res);
-      return Array.isArray(data) ? data : [];
-    } catch {
-      return [];
-    }
-  },
-
-  async getEvent(id: string): Promise<EventItem> {
-    const res = await fetch(apiUrl(`/api/events/${id}`), { headers: getHeaders() });
-    return readResponse<EventItem>(res, 'Event not found');
-  },
-
-  async createEvent(data: { title: string; date: string; location: string; cover: string; description: string }): Promise<EventItem> {
-    const res = await fetch(apiUrl('/api/events'), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    });
-    return readResponse<EventItem>(res, 'Failed to create event');
-  },
-
-  async toggleEventGoing(eventId: string): Promise<EventItem> {
-    const res = await fetch(apiUrl(`/api/events/${eventId}/going`), {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse<EventItem>(res, 'Failed to update RSVP');
-  },
-
-  async toggleEventInterested(eventId: string): Promise<EventItem> {
-    const res = await fetch(apiUrl(`/api/events/${eventId}/interested`), {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    return readResponse<EventItem>(res, 'Failed to update interest');
-  },
-
-  // Account Settings
-  async changePassword(userId: string, data: { currentPassword?: string; newPassword: string }): Promise<{ success: boolean; message: string }> {
-    const res = await fetch(apiUrl(`/api/users/${userId}/change-password`), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    });
-    return readResponse<{ success: boolean; message: string }>(res, 'Failed to change password');
-  },
-
-  async deleteAccount(userId: string): Promise<{ success: boolean; message: string }> {
-    const res = await fetch(apiUrl(`/api/users/${userId}`), {
-      method: 'DELETE',
-      headers: getHeaders()
-    });
-    return readResponse<{ success: boolean; message: string }>(res, 'Failed to delete account');
-  }
-};
+    return readResponse<{ success: boolean; hasBoosted: boolean; boostsCount: number }>(res,

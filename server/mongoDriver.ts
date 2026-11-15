@@ -1,4 +1,4 @@
-import type { CollectionChange, CollectionName, PersistenceDriver, Snapshot } from './persistence.js';
+import type { CollectionChange, CollectionName, DirectMessageRecord, PersistenceDriver, Snapshot } from './persistence.js';
 import { COLLECTIONS } from './persistence.js';
 
 /**
@@ -74,7 +74,6 @@ export class MongoDriver implements PersistenceDriver {
     return { mime: String((doc as { mime?: string }).mime || 'application/octet-stream'), data: Buffer.from(new Uint8Array(bytes as any)) };
   }
 
-  async close(): Promise<void> {
-    await this.mongoose?.disconnect();
-  }
-}
+  private directMessages() {
+    const db = this.mongoose?.connection.db;
+    if (!db) throw new Error('MongoDB is not conne
