@@ -2084,4 +2084,820 @@ app.get('/api/live/access', (req: Request, res: Response) => {
 app.post('/api/live/request', (req: Request, res: Response) => {
   const authUser = getLiveAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
-  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (reason.length < 3 || reason.length > 500) return res.status(400).json({ error: 'Please tell us why you want to go live (3–500 characters).' });
+  if (authUser.liveAccess === 'blocked') return res.status(403).json({ error: 'Your Go Live access is blocked. Contact an administrator.' });
+  autoApproveMatureLiveUser(authUser);
+  if (canStartLive(authUser)) return res.status(409).json({ error: 'You already have Go Live access.' });
+  const request = db.createLiveRequest(authUser.id, reason);
+  if (!request) return res.status(400).json({ error: 'Could not submit your request.' });
+  syncLiveProfileToFirestore(db.getUserById(authUser.id));
+  res.status(201).json({ success: true, request, liveAccess: 'pending' });
+});
+
+app.post('/api/live/request/cancel', (req: Request, res: Response) => {
+  const authUser = getLiveAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  if (!db.cancelLiveRequest(authUser.id)) return res.status(404).json({ error: 'No pending request to cancel.' });
+  syncLiveProfileToFirestore(db.getUserById(authUser.id));
+  res.json({ success: true, liveAccess: 'none' });
+});
+
+app.get('/api/admin/live-access', (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
+  res.json({ requests: db.getLiveRequests().filter(item => item.status === 'pending'), mode: db.getLiveAccessMode(), users: db.getUsers(true).map(user => db.sanitizeUser(user, admin!.id)) });
+});
+
+app.put('/api/admin/live-access/settings', async (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
+  const mode = req.body?.mode;
+  if (!['everyone', 'approved_only', 'sixty_days_plus', 'admins_creators_only'].includes(mode)) return res.status(400).json({ error: 'Invalid Go Live access mode.' });
+  db.setLiveAccessMode(mode);
+  if (firestore) {
+    try { await firestore.collection('siteConfig').doc('site').set({ liveAccessMode: mode }, { merge: true }); }
+    catch (error) { console.warn('[Echat] Could not sync live access mode to Firestore:', error instanceof Error ? error.message : error); }
+  }
+  audit(admin!, 'live_access.settings', undefined, `Go Live access mode: ${mode}`);
+  res.json({ success: true, mode });
+});
+
+app.post('/api/admin/live-access/requests/:id/review', async (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
+  const decision = req.body?.decision;
+  if (!['approved', 'rejected', 'blocked'].includes(decision)) return res.status(400).json({ error: 'Invalid review decision.' });
+  const request = db.reviewLiveRequest(req.params.id, decision, admin!.id);
+  if (!request) return res.status(404).json({ error: 'Pending request not found.' });
+  await syncLiveProfileToFirestore(db.getUserById(request.userId));
+  if (decision === 'blocked') endLiveForBlockedUser(request.userId);
+  const message = decision === 'approved' ? 'You can now Go Live! 🎉' : decision === 'rejected' ? 'Your Go Live request was declined.' : 'Your Go Live access has been blocked.';
+  const notification = db.addNotification({ userId: request.userId, actorId: admin!.id, type: 'announcement', message, targetId: request.id, read: false });
+  socketManager.sendToUser(request.userId, { type: 'new_notification', notification: populateNotification(notification) });
+  audit(admin!, `live_access.${decision}`, { type: 'user', id: request.userId, name: request.name });
+  res.json({ success: true, request, liveAccess: decision === 'approved' ? 'approved' : decision === 'blocked' ? 'blocked' : 'none' });
+});
+
+app.post('/api/admin/live-access/users/:id', (req: Request, res: Response) => {
+  const admin = getLiveAuthUser(req);
+  if (!isSuperAdminLiveUser(admin)) return res.status(403).json({ error: 'Super-admin access required' });
+  const target = db.getUserById(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (isDeveloperUser(target)) return res.status(403).json({ error: 'Super-admin live access cannot be changed.' });
+  const action = req.body?.action;
+  if (!['grant', 'revoke', 'block', 'unblock'].includes(action)) return res.status(400).json({ error: 'Invalid user access action.' });
+  const access = action === 'grant' ? 'approved' : action === 'block' ? 'blocked' : 'none';
+  const pending = db.getLiveRequests().find(item => item.userId === target.id && item.status === 'pending');
+  if (pending && action !== 'unblock') db.reviewLiveRequest(pending.id, action === 'grant' ? 'approved' : action === 'block' ? 'blocked' : 'rejected', admin!.id);
+  if (action === 'block') {
+    endLiveForBlockedUser(target.id);
+  }
+  const updated = db.updateUser(target.id, { liveAccess: access });
+  syncLiveProfileToFirestore(updated);
+  if (action === 'grant') {
+    const notification = db.addNotification({ userId: target.id, actorId: admin!.id, type: 'announcement', message: 'You can now Go Live! 🎉', read: false });
+    socketManager.sendToUser(target.id, { type: 'new_notification', notification: populateNotification(notification) });
+  }
+  audit(admin!, `live_access.${action}`, { type: 'user', id: target.id, name: target.name });
+  res.json({ success: true, user: db.sanitizeUser(updated!, admin!.id) });
+});
+
+interface LiveComment {
+  id: string;
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  text: string;
+  createdAt: number;
+}
+
+interface LiveSession {
+  id: string;
+  hostId: string;
+  hostName: string;
+  hostAvatar: string;
+  hostEmail: string;
+  isHostVerified?: boolean;
+  title: string;
+  taggedPageIds: string[];
+  viewersCount: number;
+  reactionsCount: number;
+  startedAt: number;
+  isActive: boolean;
+  comments: LiveComment[];
+}
+
+let activeLiveSession: LiveSession | null = null;
+
+function endLiveForBlockedUser(userId: string): void {
+  if (activeLiveSession?.hostId !== userId) return;
+  const endedHostId = activeLiveSession.hostId;
+  socketManager.clearLiveHost(activeLiveSession.id);
+  activeLiveSession = null;
+  socketManager.broadcast({ type: 'live_ended', hostId: endedHostId });
+}
+
+app.get('/api/live/current', (_req: Request, res: Response) => {
+  res.json({ live: activeLiveSession });
+});
+
+app.post('/api/live/start', (req: Request, res: Response) => {
+  const authUser = getLiveAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  autoApproveMatureLiveUser(authUser);
+  if (!canStartLive(authUser)) return res.status(403).json({ error: authUser.liveAccess === 'blocked' ? 'Your Go Live access is blocked.' : 'Request Go Live access from an administrator first.' });
+  const isDev = isDeveloperUser(authUser);
+
+  const { title, taggedPageIds } = req.body;
+  const pageIdentityId = String(req.get('x-page-id') || '');
+  const pageIdentity = pageIdentityId ? db.getPageById(pageIdentityId) : null;
+  if (pageIdentityId && pageIdentity?.ownerId !== authUser.id) return res.status(403).json({ error: 'You do not manage this Page' });
+  activeLiveSession = {
+    id: 'live_' + crypto.randomBytes(6).toString('hex'),
+    hostId: authUser.id,
+    hostName: pageIdentity?.name || authUser.name,
+    hostAvatar: pageIdentity?.avatar || authUser.avatar,
+    hostEmail: authUser.email,
+    isHostVerified: authUser.isVerified ?? isDev,
+    title: title?.trim() || `${pageIdentity?.name || authUser.name} is Live on EChat!`,
+    taggedPageIds: Array.isArray(taggedPageIds) ? [...new Set<string>(taggedPageIds.filter((id: unknown): id is string => typeof id === 'string' && Boolean(db.getPageById(id))))].slice(0, 22) : [],
+    viewersCount: 1,
+    reactionsCount: 0,
+    startedAt: Date.now(),
+    isActive: true,
+    comments: [
+      {
+        id: 'lc_init',
+        userId: authUser.id,
+        userName: 'EChat Broadcast',
+        userAvatar: authUser.avatar,
+        text: 'Stream started. Live comments are open!',
+        createdAt: Date.now()
+      }
+    ]
+  };
+
+  socketManager.setLiveHost(activeLiveSession.id, activeLiveSession.hostId);
+
+  for (const uid of authUser.friends.filter(id => !db.isBlockedBetween(authUser.id, id))) {
+    const notification = db.addNotification({
+      userId: uid,
+      actorId: authUser.id,
+      type: 'live_stream',
+      message: `${authUser.name} is live: ${activeLiveSession.title}`,
+      targetId: activeLiveSession.id,
+      read: false
+    });
+    socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
+  }
+
+  const taggedPageAudience = new Set<string>();
+  for (const pageId of activeLiveSession.taggedPageIds) {
+    const page = db.getPageById(pageId);
+    if (!page) continue;
+    for (const uid of [...page.followers, page.ownerId]) {
+      if (uid === authUser.id || taggedPageAudience.has(uid) || db.isBlockedBetween(authUser.id, uid)) continue;
+      taggedPageAudience.add(uid);
+      const notification = db.addNotification({ userId: uid, actorId: authUser.id, type: 'live_stream', message: `${authUser.name} is live with ${page.name}: ${activeLiveSession.title}`, targetId: activeLiveSession.id, read: false });
+      socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
+    }
+  }
+
+  socketManager.broadcast({
+    type: 'live_started',
+    live: activeLiveSession
+  });
+
+  res.json({ success: true, live: activeLiveSession });
+});
+
+app.post('/api/live/stop', (req: Request, res: Response) => {
+  const authUser = getLiveAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+  if (activeLiveSession) {
+    if (activeLiveSession.hostId !== authUser.id && !isDeveloperUser(authUser)) {
+      return res.status(403).json({ error: 'Only the host or developer can stop the live stream' });
+    }
+
+    const endedHostId = activeLiveSession.hostId;
+    socketManager.clearLiveHost(activeLiveSession.id);
+    activeLiveSession = null;
+
+    socketManager.broadcast({
+      type: 'live_ended',
+      hostId: endedHostId
+    });
+  }
+
+  res.json({ success: true });
+});
+
+app.post('/api/live/comment', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  if (!activeLiveSession || !activeLiveSession.isActive) {
+    return res.status(400).json({ error: 'No active live stream' });
+  }
+
+  const { text } = req.body;
+  if (!text || !text.trim()) return res.status(400).json({ error: 'Comment text required' });
+
+  const newComment: LiveComment = {
+    id: 'lc_' + crypto.randomBytes(4).toString('hex'),
+    userId: authUser.id,
+    userName: authUser.name,
+    userAvatar: authUser.avatar,
+    text: text.trim(),
+    createdAt: Date.now()
+  };
+
+  activeLiveSession.comments.push(newComment);
+  if (activeLiveSession.comments.length > 80) {
+    activeLiveSession.comments.shift();
+  }
+
+  socketManager.broadcast({
+    type: 'live_comment',
+    comment: newComment
+  });
+
+  res.json({ success: true, comment: newComment });
+});
+
+app.post('/api/live/reaction', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  if (!activeLiveSession || !activeLiveSession.isActive) {
+    return res.status(400).json({ error: 'No active live stream' });
+  }
+
+  const { emoji } = req.body;
+  activeLiveSession.reactionsCount += 1;
+
+  socketManager.broadcast({
+    type: 'live_reaction',
+    emoji: emoji || '❤️',
+    userName: authUser.name,
+    userId: authUser.id
+  });
+
+  res.json({ success: true, reactionsCount: activeLiveSession.reactionsCount });
+});
+
+app.post('/api/live/join', (_req: Request, res: Response) => {
+  if (activeLiveSession && activeLiveSession.isActive) {
+    activeLiveSession.viewersCount += 1;
+    socketManager.broadcast({
+      type: 'live_viewers_updated',
+      viewersCount: activeLiveSession.viewersCount
+    });
+  }
+  res.json({ success: true, viewersCount: activeLiveSession?.viewersCount || 1 });
+});
+
+app.post('/api/live/leave', (_req: Request, res: Response) => {
+  if (activeLiveSession && activeLiveSession.isActive) {
+    activeLiveSession.viewersCount = Math.max(1, activeLiveSession.viewersCount - 1);
+    socketManager.broadcast({
+      type: 'live_viewers_updated',
+      viewersCount: activeLiveSession.viewersCount
+    });
+  }
+  res.json({ success: true, viewersCount: activeLiveSession?.viewersCount || 1 });
+});
+
+// ----------------- PAGES ROUTES -----------------
+app.get('/api/my-pages', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  res.json(db.getPages().filter(page => page.ownerId === authUser.id));
+});
+
+app.get('/api/pages', (_req: Request, res: Response) => {
+  try {
+    const pages = db.getPages();
+    res.json(pages);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/pages/:id', (req: Request, res: Response) => {
+  try {
+    const page = db.getPageById(req.params.id);
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    res.json(page);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Image values must be an uploaded file, an http(s) URL, or empty (to remove it).
+const cleanImageValue = (v: unknown): string | undefined => {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  if (t === '' || /^https?:\/\//i.test(t) || t.startsWith('/uploads/')) return t;
+  return undefined;
+};
+
+app.put('/api/pages/:id', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+    const page = db.getPageById(req.params.id);
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (page.ownerId !== authUser.id && !isDeveloperUser(authUser)) {
+      return res.status(403).json({ error: 'Only the page owner can edit this page' });
+    }
+    const { name, category, bio, avatar, cover } = req.body as Record<string, unknown>;
+    const cleanName = typeof name === 'string' ? name.trim() : undefined;
+    if (cleanName !== undefined && (cleanName.length < 2 || cleanName.length > 80)) {
+      return res.status(400).json({ error: 'Page name must be 2 to 80 characters' });
+    }
+    const updated = db.updatePage(page.id, {
+      ...(cleanName !== undefined && { name: cleanName }),
+      ...(typeof category === 'string' && { category: category.trim().slice(0, 60) }),
+      ...(typeof bio === 'string' && { bio: bio.trim().slice(0, 500) }),
+      ...(cleanImageValue(avatar) !== undefined && { avatar: cleanImageValue(avatar) }),
+      ...(cleanImageValue(cover) !== undefined && { cover: cleanImageValue(cover) })
+    });
+    socketManager.broadcast({ type: 'page_updated', page: updated });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/groups/:id', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+    const group = db.getGroupById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (group.ownerId !== authUser.id && !isDeveloperUser(authUser)) {
+      return res.status(403).json({ error: 'Only the group owner can edit this group' });
+    }
+    const { name, description, privacy, avatar, cover } = req.body as Record<string, unknown>;
+    const cleanName = typeof name === 'string' ? name.trim() : undefined;
+    if (cleanName !== undefined && (cleanName.length < 2 || cleanName.length > 80)) {
+      return res.status(400).json({ error: 'Group name must be 2 to 80 characters' });
+    }
+    const updated = db.updateGroup(group.id, {
+      ...(cleanName !== undefined && { name: cleanName }),
+      ...(typeof description === 'string' && { description: description.trim().slice(0, 500) }),
+      ...((privacy === 'public' || privacy === 'private') && { privacy }),
+      ...(cleanImageValue(avatar) !== undefined && { avatar: cleanImageValue(avatar) }),
+      ...(cleanImageValue(cover) !== undefined && { cover: cleanImageValue(cover) })
+    });
+    socketManager.broadcast({ type: 'group_updated', group: updated });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/pages', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { name, category, bio, cover, avatar } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Page name is required' });
+
+    const newPage = db.createPage({
+      name: name.trim(),
+      category: category?.trim() || 'General',
+      bio: bio?.trim() || '',
+      cover: cover?.trim() || '',
+      avatar: avatar?.trim() || '',
+      ownerId: authUser.id,
+      ownerName: authUser.name
+    });
+
+    socketManager.broadcast({ type: 'page_created', page: newPage });
+    res.status(201).json(newPage);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/pages/:id/follow', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const pageBefore = db.getPageById(req.params.id);
+    const wasFollowing = Boolean(pageBefore?.followers.includes(authUser.id));
+    const updated = db.togglePageFollow(req.params.id, authUser.id);
+    if (!updated) return res.status(404).json({ error: 'Page not found' });
+
+    socketManager.broadcast({ type: 'page_updated', page: updated });
+    if (!wasFollowing && updated.ownerId !== authUser.id) {
+      const notification = db.addNotification({ userId: updated.ownerId, actorId: authUser.id, type: 'page_follow', message: `${authUser.name} followed your page`, targetId: updated.id, read: false });
+      socketManager.sendToUser(updated.ownerId, { type: 'new_notification', notification: populateNotification(notification) });
+    }
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/pages/:id/like', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const updated = db.togglePageLike(req.params.id, authUser.id);
+    if (!updated) return res.status(404).json({ error: 'Page not found' });
+
+    socketManager.broadcast({ type: 'page_updated', page: updated });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/pages/:id/posts', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const page = db.getPageById(req.params.id);
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+
+    if (page.ownerId !== authUser.id && !isDeveloperUser(authUser)) {
+      return res.status(403).json({ error: 'Only the page creator can post as this page' });
+    }
+
+    const { content, mediaUrl, mediaType } = req.body;
+    if (!content && !mediaUrl) {
+      return res.status(400).json({ error: 'Post content or media required' });
+    }
+
+    const newPost = db.addPagePost(req.params.id, {
+      authorId: authUser.id,
+      content: content || '',
+      mediaUrl,
+      mediaType
+    });
+
+    socketManager.broadcast({ type: 'page_post_created', pageId: req.params.id, post: newPost });
+    res.status(201).json(newPost);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ----------------- GROUPS ROUTES -----------------
+app.get('/api/groups', (req: Request, res: Response) => {
+  try {
+    const viewer = getAuthUser(req);
+    const groups = db.getGroups()
+      .filter(group => group.privacy !== 'private' || Boolean(viewer && (group.members.includes(viewer.id) || group.ownerId === viewer.id || isDeveloperUser(viewer))))
+      .map(group => ({
+        ...group,
+        posts: (group.posts || []).filter(post => post.status === 'approved' || Boolean(viewer && (post.authorId === viewer.id || group.ownerId === viewer.id || isDeveloperUser(viewer))))
+      }));
+    res.json(groups);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/groups/:id', (req: Request, res: Response) => {
+  try {
+    const viewer = getAuthUser(req);
+    const group = db.getGroupById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (group.privacy === 'private' && (!viewer || (!group.members.includes(viewer.id) && group.ownerId !== viewer.id && !isDeveloperUser(viewer)))) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    res.json({
+      ...group,
+      posts: (group.posts || []).filter(post => post.status === 'approved' || Boolean(viewer && (post.authorId === viewer.id || group.ownerId === viewer.id || isDeveloperUser(viewer))))
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/groups', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { name, privacy, description, cover, avatar } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Group name is required' });
+
+    const newGroup = db.createGroup({
+      name: name.trim(),
+      privacy: privacy === 'private' ? 'private' : 'public',
+      description: description?.trim() || '',
+      cover: cover?.trim() || '',
+      avatar: avatar?.trim() || '',
+      ownerId: authUser.id,
+      ownerName: authUser.name
+    });
+
+    socketManager.broadcast({ type: 'group_created', group: newGroup });
+    res.status(201).json(newGroup);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/groups/:id/join', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const updated = db.joinGroup(req.params.id, authUser.id);
+    if (!updated) return res.status(404).json({ error: 'Group not found' });
+
+    socketManager.broadcast({ type: 'group_updated', group: updated });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/groups/:id/leave', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const updated = db.leaveGroup(req.params.id, authUser.id);
+    if (!updated) return res.status(404).json({ error: 'Group not found' });
+
+    socketManager.broadcast({ type: 'group_updated', group: updated });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/groups/:id/posts', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const group = db.getGroupById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    if (!group.members.includes(authUser.id) && !isDeveloperUser(authUser)) {
+      return res.status(403).json({ error: 'You must join this group before posting' });
+    }
+
+    const { content, mediaUrl, mediaType } = req.body;
+    if (!content && !mediaUrl) {
+      return res.status(400).json({ error: 'Post content or media required' });
+    }
+
+    const newPost = db.addGroupPost(req.params.id, {
+      authorId: authUser.id,
+      authorName: authUser.name,
+      authorAvatar: authUser.avatar,
+      content: content || '',
+      mediaUrl,
+      mediaType
+    });
+
+    socketManager.broadcast({ type: 'group_post_created', groupId: req.params.id, post: newPost });
+    res.status(201).json(newPost);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/groups/:id/posts/:postId/approve', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const success = db.approveGroupPost(req.params.id, req.params.postId, authUser.id);
+    if (!success) return res.status(403).json({ error: 'Cannot approve this post (unauthorized or not found)' });
+
+    const group = db.getGroupById(req.params.id);
+    socketManager.broadcast({ type: 'group_updated', group });
+    res.json({ success: true, group });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ----------------- EVENTS ROUTES -----------------
+app.get('/api/events', (_req: Request, res: Response) => {
+  try {
+    const events = db.getEvents();
+    res.json(events);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/events/:id', (req: Request, res: Response) => {
+  try {
+    const event = db.getEventById(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    res.json(event);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/events', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { title, date, location, cover, description } = req.body;
+    if (!title || !title.trim()) return res.status(400).json({ error: 'Event title is required' });
+    if (!date) return res.status(400).json({ error: 'Event date is required' });
+
+    const newEvent = db.createEvent({
+      title: title.trim(),
+      date,
+      location: location?.trim() || 'Online',
+      cover: cover?.trim() || '',
+      description: description?.trim() || '',
+      ownerId: authUser.id,
+      ownerName: authUser.name
+    });
+
+    socketManager.broadcast({ type: 'event_created', event: newEvent });
+    res.status(201).json(newEvent);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/events/:id/going', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const updated = db.toggleEventGoing(req.params.id, authUser.id);
+    if (!updated) return res.status(404).json({ error: 'Event not found' });
+
+    socketManager.broadcast({ type: 'event_updated', event: updated });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/events/:id/interested', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    const updated = db.toggleEventInterested(req.params.id, authUser.id);
+    if (!updated) return res.status(404).json({ error: 'Event not found' });
+
+    socketManager.broadcast({ type: 'event_updated', event: updated });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ----------------- USER PROFILE & SETTINGS ROUTES -----------------
+app.post('/api/users/:id/change-password', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser || authUser.id !== req.params.id) {
+      return res.status(403).json({ error: 'Unauthorized to change this password' });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+
+    // Verify current password if user had one
+    if (authUser.passwordHash && hashPassword(currentPassword) !== authUser.passwordHash) {
+      return res.status(400).json({ error: 'Current password is incorrect' });
+    }
+
+    db.updateUser(authUser.id, { passwordHash: hashPassword(newPassword) });
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/users/:id', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser || (authUser.id !== req.params.id && !isDeveloperUser(authUser))) {
+      return res.status(403).json({ error: 'Unauthorized to delete this account' });
+    }
+
+    const victim = db.getUserById(req.params.id);
+    if (!victim) return res.status(404).json({ error: 'User not found' });
+    if (victim.role === 'developer' || isDeveloperUser(victim)) {
+      return res.status(400).json({ error: 'The administrator account cannot be deleted' });
+    }
+
+    const success = db.deleteUser(req.params.id);
+    if (!success) return res.status(400).json({ error: 'Failed to delete account' });
+    if (authUser.id !== req.params.id) audit(authUser, 'user.delete', { type: 'user', id: victim.id, name: victim.name });
+
+    socketManager.broadcast({ type: 'user_deleted', userId: req.params.id });
+    res.json({ success: true, message: 'Account permanently deleted' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ----------------- VITE & SERVER STARTUP -----------------
+async function startServer() {
+  app.use('/api', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'API route not found' });
+  });
+
+  // Clear corrupted vite cache if present
+  try {
+    const viteCachePath = path.resolve(process.cwd(), 'node_modules', '.vite');
+    if (fs.existsSync(viteCachePath)) {
+      try {
+        const metaFile = path.resolve(viteCachePath, 'deps', '_metadata.json');
+        if (fs.existsSync(metaFile)) {
+          JSON.parse(fs.readFileSync(metaFile, 'utf-8'));
+        }
+      } catch {
+        fs.rmSync(viteCachePath, { recursive: true, force: true });
+        console.info('[Echat] Cleared corrupted vite cache');
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true',
+        fs: {
+          strict: false,
+        },
+      },
+      optimizeDeps: {
+        force: false,
+      },
+      appType: 'spa'
+    });
+
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.resolve(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  // Central error handler: never leak stack traces, always answer JSON.
+  app.use((err: unknown, _req: Request, res: Response, _next: express.NextFunction) => {
+    const status = typeof (err as { status?: unknown })?.status === 'number' ? (err as { status: number }).status : 500;
+    if (status >= 500) console.error('[Echat] Unhandled error:', err);
+    const detail = err instanceof Error ? err.message : undefined;
+    res.status(status).json({
+      error: status === 413 ? 'File or request is too large' : status < 500 ? 'Bad request' : 'Internal server error',
+      ...(status >= 500 && detail ? { detail } : {})
+    });
+  });
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.info(`[Echat] Listening on ${PORT}`);
+  });
+
+  // Bind Render's port before starting the existing database initialization.
+  void db.init();
+
+  // Dev only: also answer on :5173 so http://localhost:5173 works like a Vite dev server.
+  if (!isProd && PORT !== 5173) {
+    const altServer = http.createServer(app);
+    altServer.on('error', () => { /* port busy: ignore */ });
+    altServer.listen(5173, '0.0.0.0', () => {
+      console.info('[vite] Local: http://localhost:5173/');
+    });
+  }
+
+  const shutdown = () => {
+    // give the background writer a moment to push the last changes to MongoDB
+    void db.flush().finally(() => server.close(() => process.exit(0)));
+    setTimeout(() => process.exit(0), 8000).unref();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+}
+
+startServer().catch((err) => {
+  console.error('[Echat] Failed to start server:', err);
+  process.exit(1);
+});

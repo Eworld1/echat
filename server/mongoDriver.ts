@@ -76,4 +76,28 @@ export class MongoDriver implements PersistenceDriver {
 
   private directMessages() {
     const db = this.mongoose?.connection.db;
-    if (!db) throw new Error('MongoDB is not connÿÿÿ
+    if (!db) throw new Error('MongoDB is not connected');
+    // This collection is intentionally not part of COLLECTIONS or WriteThroughSync.
+    return db.collection<DirectMessageRecord>('echat_directMessages');
+  }
+
+  async listDirectMessagesForUser(userId: string): Promise<DirectMessageRecord[]> {
+    return this.directMessages().find({ $or: [{ senderId: userId }, { receiverId: userId }] }).sort({ createdAt: -1 }).toArray();
+  }
+
+  async listDirectMessagesBetween(userA: string, userB: string): Promise<DirectMessageRecord[]> {
+    return this.directMessages().find({ $or: [{ senderId: userA, receiverId: userB }, { senderId: userB, receiverId: userA }] }).sort({ createdAt: 1 }).toArray();
+  }
+
+  async insertDirectMessage(message: DirectMessageRecord): Promise<void> {
+    await this.directMessages().insertOne(message as never);
+  }
+
+  async markDirectMessagesRead(senderId: string, receiverId: string, readAt: number): Promise<void> {
+    await this.directMessages().updateMany({ senderId, receiverId, readAt: null }, { $set: { readAt } });
+  }
+
+  async close(): Promise<void> {
+    await this.mongoose?.disconnect();
+  }
+}

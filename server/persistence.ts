@@ -103,4 +103,41 @@ export class WriteThroughSync {
         if (!key) continue;
         const serialised = JSON.stringify(raw);
         cur.set(key, serialised);
-        if (prev.get(key) !== serialised) upserts.push({ key, doc: JSON.parseÿÿÿ
+        if (prev.get(key) !== serialised) upserts.push({ key, doc: JSON.parse(serialised) });
+      }
+      const deletes = [...prev.keys()].filter(k => !cur.has(k));
+      next.set(c, cur);
+      if (upserts.length || deletes.length) changes.push({ collection: c, upserts, deletes });
+    }
+    return { changes, next };
+  }
+
+  /** Push pending changes now. Safe to call concurrently: flushes are serialised. */
+  async flush(): Promise<void> {
+    if (this.running) {
+      await this.running;
+      if (!this.dirty) return;
+    }
+    this.running = (async () => {
+      if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+      this.dirty = false;
+      const { changes, next } = this.diff();
+      if (changes.length === 0) return;
+      try {
+        await this.driver.apply(changes);
+        this.lastSaved = next;
+        this.failures = 0;
+        this.stats.flushes += 1;
+        for (const ch of changes) { this.stats.upserts += ch.upserts.length; this.stats.deletes += ch.deletes.length; }
+      } catch (err) {
+        this.failures += 1;
+        this.dirty = true;
+        console.error(`[DB] ${this.driver.name} write failed (attempt ${this.failures}); will retry:`, err);
+        const retryIn = Math.min(30000, 1000 * 2 ** Math.min(this.failures, 5));
+        this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, retryIn);
+        (this.timer as { unref?: () => void }).unref?.();
+      }
+    })();
+    try { await this.running; } finally { this.running = null; }
+  }
+}

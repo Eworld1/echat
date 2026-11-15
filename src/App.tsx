@@ -331,4 +331,122 @@ export function MainApp() {
 
           {currentView === 'search' && <SearchPage onViewProfile={uid => handleNavigate('profile', uid)} onOpenListing={id => navigateMarket(`/marketplace/listing/${id}`)} onNavigate={view => handleNavigate(view)} />}
 
-          {currentView === 'messages' && <MessagesPage initialUserId={activeDmUsÿÿÿ
+          {currentView === 'messages' && <MessagesPage initialUserId={activeDmUserId} onViewProfile={uid => handleNavigate('profile', uid)} />}
+
+          {currentView === 'live' && <LiveDiscoveryFeed onBack={() => handleNavigate('feed')} onOpenGoLive={() => setIsGoLiveOpen(true)} onWatchLive={stream => setActiveViewerStream(stream)} legacyStream={currentLiveStream} />}
+
+          {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} />}
+
+          {currentView === 'friends' && (
+            <FriendsView
+              onOpenChat={handleOpenDm}
+              onViewProfile={(uid) => handleNavigate('profile', uid)}
+            />
+          )}
+
+          {currentView === 'profile' && profileUserId && (
+            <ProfileView
+              userId={profileUserId}
+              onOpenChat={handleOpenDm}
+              onViewProfile={(uid) => handleNavigate('profile', uid)}
+            />
+          )}
+
+          {currentView === 'pages' && (
+            <Pages onNavigateBack={() => handleNavigate('feed')} onOpenChat={handleOpenChat} />
+          )}
+
+          {currentView === 'groups' && <Groups />}
+
+          {currentView === 'events' && <Events />}
+
+          {currentView === 'dashboard' && <Dashboard />}
+
+          {currentView === 'settings' && (
+            <Settings onNavigateHome={() => handleNavigate('feed')} />
+          )}
+
+          {currentView === 'saved' && (
+            <SavedPosts onViewProfile={(uid) => handleNavigate('profile', uid)} />
+          )}
+
+          {currentView === 'marketplace' && <V2Market route={marketRoute} onNavigate={navigateMarket} onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} />}
+          {currentView === 'orders' && <V2MarketOrders onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} onShop={() => handleNavigate('marketplace')} />}
+
+          {currentView === 'admin' && canAdmin && (
+            <AdminDashboard
+              onViewProfile={(uid) => handleNavigate('profile', uid)}
+            />
+          )}
+        </main>
+
+        {/* Right Contacts Sidebar (Desktop XL) */}
+        {currentView !== 'dashboard' && currentView !== 'live' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
+      </div>
+
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur min-[769px]:hidden">
+        <button type="button" onClick={() => handleNavigate('feed')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'feed' ? 'text-blue-700' : 'text-slate-600'}`}><Home size={21}/><span>Home</span></button>
+        <button type="button" onClick={() => handleNavigate('reels')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'reels' ? 'text-blue-700' : 'text-slate-600'}`}><Film size={21}/><span>Reels</span></button>
+        <button type="button" onClick={() => navigateMarket('/marketplace')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'marketplace' ? 'text-blue-700' : 'text-slate-600'}`}><ShoppingBag size={21}/><span>Marketplace</span></button>
+        <button type="button" onClick={() => handleNavigate('messages')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'messages' ? 'text-blue-700' : 'text-slate-600'}`}><MessageSquare size={21}/><span>Messages</span></button>
+        <button type="button" onClick={() => setMobileMenuOpen(true)} aria-expanded={mobileMenuOpen} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${mobileMenuOpen ? 'text-blue-700' : 'text-slate-600'}`}><Menu size={21}/><span>Menu</span></button>
+      </nav>
+
+      {/* Floating Messenger Window */}
+      {activeChatPartner && (
+        <ChatFloatingWindow
+          partner={activeChatPartner}
+          onClose={() => setActiveChatPartner(null)}
+        />
+      )}
+
+      {/* Slide-out Messenger Drawer */}
+      <ChatDrawer
+        isOpen={isMessengerDrawerOpen}
+        onClose={() => setIsMessengerDrawerOpen(false)}
+        onSelectUser={handleOpenChat}
+      />
+
+      {showBackToast && <div role="status" className="fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">Press back again to exit</div>}
+
+      {/* WebRTC Video / Audio Call Modal */}
+      <CallModal />
+
+      {/* Go Live Studio Modal */}
+      <GoLiveModal
+        isOpen={isGoLiveOpen}
+        onClose={closeGoLive}
+        onStreamStarted={(stream) => {
+          setCurrentLiveStream(stream);
+        }}
+        onStreamEnded={() => {
+          setCurrentLiveStream(null);
+        }}
+      />
+
+      {/* Live Stream Audience Viewer Modal */}
+      {activeViewerStream && (
+        <LiveViewerModal
+          stream={activeViewerStream}
+          onClose={() => {
+            setActiveViewerStream(null);
+            if (window.location.pathname.startsWith('/live/')) {
+              window.history.replaceState({ echatApp: true, tab: 'feed' }, '', '/home');
+              window.dispatchEvent(new Event('echat:navigate'));
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <SocketProvider>
+        <MainApp />
+      </SocketProvider>
+    </AuthProvider>
+  );
+}

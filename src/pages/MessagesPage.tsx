@@ -136,4 +136,21 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
             <button type="button" onClick={() => onViewProfile(selectedUser.id)} className="flex min-w-0 items-center gap-3 text-left"><img src={selectedUser.avatar} alt="" className="h-10 w-10 rounded-full object-cover"/><span className="truncate font-bold text-slate-900">{selectedUser.name}</span></button>
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto bg-slate-50 px-3 py-4 sm:px-6">
-            {loadingChat && sorted
+            {loadingChat && sortedMessages.length === 0 && <p className="m-auto text-sm text-slate-500">Loading messages…</p>}
+            {!loadingChat && sortedMessages.length === 0 && <p className="m-auto max-w-xs text-center text-sm text-slate-500">No messages yet. Say hi to start chatting.</p>}
+            {sortedMessages.map(message => <div key={message._id} className={`max-w-[82%] sm:max-w-[70%] ${message.senderId === currentUser?.id ? 'self-end' : 'self-start'}`}>
+              <div className={`whitespace-pre-wrap break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${message.senderId === currentUser?.id ? 'rounded-br-md bg-blue-600 text-white' : 'rounded-bl-md border border-slate-200 bg-white text-slate-900'}`}>{message.text}</div>
+              <div className={`mt-1 text-[10px] text-slate-400 ${message.senderId === currentUser?.id ? 'text-right' : ''}`}>{timeLabel(message.createdAt)}</div>
+            </div>)}
+            <div ref={bottomRef}/>
+          </div>
+          <form onSubmit={event => { event.preventDefault(); void send(); }} className="flex items-end gap-2 border-t border-slate-200 bg-white p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3">
+            <textarea value={draft} onChange={event => setDraft(event.target.value.slice(0, 2000))} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); } }} maxLength={2000} rows={1} placeholder="Write a message…" className="max-h-32 min-h-12 flex-1 resize-y rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-base text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"/>
+            <button type="submit" disabled={!draft.trim() || sending} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300" aria-label="Send message"><Send size={19}/></button>
+          </form>
+        </> : <div className="hidden flex-1 flex-col items-center justify-center text-center md:flex"><div className="mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50 text-blue-600"><MessageSquare size={28}/></div><h2 className="font-bold text-slate-800">Your messages</h2><p className="mt-1 text-sm text-slate-500">Choose someone to open a private chat.</p></div>}
+      </section>
+    </div>
+    {error && <div role="status" className="border-t border-rose-100 bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</div>}
+  </section>;
+};

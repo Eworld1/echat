@@ -1061,4 +1061,386 @@ class Database {
   toggleVerified(userId: string): User | null {
     const user = this.getUserById(userId);
     if (!user) return null;
-  
+    user.isVerified = !user.isVerified;
+    this.save();
+    return user;
+  }
+
+  /** Everyone gets one announcement notification (the sender and blocked accounts are skipped). */
+  createAnnouncement(actorId: string, message: string): Notification[] {
+    const created: Notification[] = [];
+    for (const u of this.data.users) {
+      if (u.id === actorId || u.isBlocked) continue;
+      created.push(this.addNotification({ userId: u.id, actorId, type: 'announcement', message, read: false }));
+    }
+    return created;
+  }
+
+  // ---------- Admin: analytics ----------
+  getAnalytics(days = 14) {
+    const n = Math.max(7, Math.min(days, 60));
+    const dayKey = (t: number) => new Date(t).toISOString().slice(0, 10);
+    const buckets = new Map<string, { date: string; signups: number; posts: number; messages: number; stories: number }>();
+    for (let i = n - 1; i >= 0; i--) {
+      const date = dayKey(Date.now() - i * 86400000);
+      buckets.set(date, { date, signups: 0, posts: 0, messages: 0, stories: 0 });
+    }
+    const bump = (t: number, field: 'signups' | 'posts' | 'messages' | 'stories') => {
+      const b = buckets.get(dayKey(t));
+      if (b) b[field] += 1;
+    };
+    this.data.users.forEach(u => bump(u.createdAt, 'signups'));
+    this.data.posts.forEach(p => bump(p.createdAt, 'posts'));
+    this.data.messages.forEach(m => bump(m.createdAt, 'messages'));
+    this.data.stories.forEach(s => bump(s.createdAt, 'stories'));
+
+    const reactionCounts = new Map<string, number>();
+    for (const p of this.data.posts) for (const r of p.reactions) reactionCounts.set(r.type, (reactionCounts.get(r.type) ?? 0) + 1);
+
+    const authorCounts = new Map<string, number>();
+    for (const p of this.data.posts) authorCounts.set(p.authorId, (authorCounts.get(p.authorId) ?? 0) + 1);
+
+    const topPosts = [...this.data.posts]
+      .map(p => ({
+        id: p.id,
+        snippet: (p.content || (p.mediaUrl ? '[photo/video]' : '')).slice(0, 90),
+        authorName: this.getUserById(p.authorId)?.name ?? 'Former User',
+        reactions: p.reactions.length,
+        comments: p.comments.length,
+        shares: p.sharesCount || 0,
+        score: p.reactions.length + p.comments.length * 2 + (p.sharesCount || 0) * 3
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    const topAuthors = [...authorCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, posts]) => {
+        const u = this.getUserById(id);
+        return { id, name: u?.name ?? 'Former User', avatar: u?.avatar ?? '', posts };
+      });
+
+    return {
+      days: [...buckets.values()],
+      reactions: [...reactionCounts.entries()].map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count),
+      topPosts,
+      topAuthors,
+      verifiedUsers: this.data.users.filter(u => u.isVerified).length,
+      developers: this.data.users.filter(u => u.role === 'developer').length,
+      totals: {
+        users: this.data.users.length,
+        posts: this.data.posts.length,
+        messages: this.data.messages.length,
+        stories: this.data.stories.length,
+        pages: this.data.pages?.length ?? 0,
+        groups: this.data.groups?.length ?? 0,
+        events: this.data.events?.length ?? 0
+      }
+    };
+  }
+
+  getAdminStats(activeSocketsCount: number): AdminStats {
+    const totalUsers = this.data.users.length;
+    const onlineUsers = this.data.users.filter(u => u.isOnline).length;
+    const blockedUsers = this.data.users.filter(u => u.isBlocked).length;
+    const totalPosts = this.data.posts.length;
+    const totalMessages = this.data.messages.length;
+    const totalStories = this.data.stories.length;
+    const pendingReports = this.data.posts.filter(p => p.isReported).length;
+    const uptimeSeconds = Math.floor((Date.now() - this.startTime) / 1000);
+
+    return {
+      totalUsers,
+      onlineUsers,
+      blockedUsers,
+      totalPosts,
+      totalMessages,
+      totalStories,
+      pendingReports,
+      activeSockets: activeSocketsCount,
+      uptimeSeconds
+    };
+  }
+
+  // --- PAGES ---
+  getPages(): Page[] {
+    if (!this.data.pages) this.data.pages = [];
+    return this.data.pages.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  getPageById(id: string): Page | undefined {
+    return this.getPages().find(p => p.id === id);
+  }
+
+  createPage(data: { name: string; category: string; bio: string; cover: string; avatar?: string; ownerId: string; ownerName?: string }): Page {
+    if (!this.data.pages) this.data.pages = [];
+    const newPage: Page = {
+      id: 'page_' + crypto.randomBytes(6).toString('hex'),
+      name: data.name,
+      category: data.category || 'General',
+      bio: data.bio || '',
+      cover: data.cover || '',
+      avatar: data.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(data.name)}`,
+      ownerId: data.ownerId,
+      ownerName: data.ownerName || 'Creator',
+      followers: [data.ownerId],
+      likes: [data.ownerId],
+      posts: [],
+      createdAt: Date.now()
+    };
+    this.data.pages.unshift(newPage);
+    this.save();
+    return newPage;
+  }
+
+  updatePage(
+    pageId: string,
+    updates: { name?: string; category?: string; bio?: string; avatar?: string; cover?: string }
+  ): Page | null {
+    const page = this.getPageById(pageId);
+    if (!page) return null;
+    if (updates.name !== undefined) page.name = updates.name;
+    if (updates.category !== undefined) page.category = updates.category;
+    if (updates.bio !== undefined) page.bio = updates.bio;
+    if (updates.avatar !== undefined) page.avatar = updates.avatar;
+    if (updates.cover !== undefined) page.cover = updates.cover;
+    this.save();
+    return page;
+  }
+
+  updateGroup(
+    groupId: string,
+    updates: { name?: string; description?: string; privacy?: 'public' | 'private'; avatar?: string; cover?: string }
+  ): Group | null {
+    const group = this.getGroupById(groupId);
+    if (!group) return null;
+    if (updates.name !== undefined) group.name = updates.name;
+    if (updates.description !== undefined) group.description = updates.description;
+    if (updates.privacy !== undefined) group.privacy = updates.privacy;
+    if (updates.avatar !== undefined) group.avatar = updates.avatar;
+    if (updates.cover !== undefined) group.cover = updates.cover;
+    this.save();
+    return group;
+  }
+
+  togglePageFollow(pageId: string, userId: string): Page | null {
+    const page = this.getPageById(pageId);
+    if (!page) return null;
+    if (!page.followers) page.followers = [];
+    if (page.followers.includes(userId)) {
+      page.followers = page.followers.filter(id => id !== userId);
+    } else {
+      page.followers.push(userId);
+    }
+    this.save();
+    return page;
+  }
+
+  togglePageLike(pageId: string, userId: string): Page | null {
+    const page = this.getPageById(pageId);
+    if (!page) return null;
+    if (!page.likes) page.likes = [];
+    if (page.likes.includes(userId)) {
+      page.likes = page.likes.filter(id => id !== userId);
+    } else {
+      page.likes.push(userId);
+    }
+    this.save();
+    return page;
+  }
+
+  addPagePost(pageId: string, postData: { authorId: string; content: string; mediaUrl?: string; mediaType?: 'image' | 'video' }): PagePost | null {
+    const page = this.getPageById(pageId);
+    if (!page) return null;
+    if (!page.posts) page.posts = [];
+    const newPost: PagePost = {
+      id: 'ppost_' + crypto.randomBytes(6).toString('hex'),
+      pageId,
+      authorId: postData.authorId,
+      content: postData.content,
+      mediaUrl: postData.mediaUrl,
+      mediaType: postData.mediaType,
+      likes: [],
+      comments: [],
+      createdAt: Date.now()
+    };
+    page.posts.unshift(newPost);
+    this.save();
+    return newPost;
+  }
+
+  // --- GROUPS ---
+  getGroups(): Group[] {
+    if (!this.data.groups) this.data.groups = [];
+    return this.data.groups.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  getGroupById(id: string): Group | undefined {
+    return this.getGroups().find(g => g.id === id);
+  }
+
+  createGroup(data: { name: string; privacy: 'public' | 'private'; cover: string; description: string; avatar?: string; ownerId: string; ownerName?: string }): Group {
+    if (!this.data.groups) this.data.groups = [];
+    const newGroup: Group = {
+      id: 'group_' + crypto.randomBytes(6).toString('hex'),
+      name: data.name,
+      privacy: data.privacy || 'public',
+      cover: data.cover || 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=1200&q=80',
+      description: data.description || '',
+      avatar: data.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(data.name)}`,
+      ownerId: data.ownerId,
+      ownerName: data.ownerName || 'Community Leader',
+      members: [data.ownerId],
+      posts: [],
+      createdAt: Date.now()
+    };
+    this.data.groups.unshift(newGroup);
+    this.save();
+    return newGroup;
+  }
+
+  joinGroup(groupId: string, userId: string): Group | null {
+    const group = this.getGroupById(groupId);
+    if (!group) return null;
+    if (!group.members) group.members = [];
+    if (!group.members.includes(userId)) {
+      group.members.push(userId);
+      this.save();
+    }
+    return group;
+  }
+
+  leaveGroup(groupId: string, userId: string): Group | null {
+    const group = this.getGroupById(groupId);
+    if (!group) return null;
+    if (!group.members) group.members = [];
+    group.members = group.members.filter(id => id !== userId);
+    this.save();
+    return group;
+  }
+
+  addGroupPost(groupId: string, postData: { authorId: string; authorName: string; authorAvatar: string; content: string; mediaUrl?: string; mediaType?: 'image' | 'video' }): GroupPost | null {
+    const group = this.getGroupById(groupId);
+    if (!group) return null;
+    if (!group.posts) group.posts = [];
+    // If owner or public group without strict moderation, auto-approved
+    const isOwner = group.ownerId === postData.authorId;
+    const status: 'approved' | 'pending' = isOwner ? 'approved' : (group.privacy === 'public' ? 'approved' : 'pending');
+    const newPost: GroupPost = {
+      id: 'gpost_' + crypto.randomBytes(6).toString('hex'),
+      groupId,
+      authorId: postData.authorId,
+      authorName: postData.authorName,
+      authorAvatar: postData.authorAvatar,
+      content: postData.content,
+      mediaUrl: postData.mediaUrl,
+      mediaType: postData.mediaType,
+      status,
+      likes: [],
+      comments: [],
+      createdAt: Date.now()
+    };
+    group.posts.unshift(newPost);
+    this.save();
+    return newPost;
+  }
+
+  approveGroupPost(groupId: string, postId: string, userId: string): boolean {
+    const group = this.getGroupById(groupId);
+    if (!group) return false;
+    // Only owner or admin can approve
+    const user = this.getUserById(userId);
+    if (group.ownerId !== userId && user?.role !== 'developer') return false;
+    const post = group.posts?.find(p => p.id === postId);
+    if (!post) return false;
+    post.status = 'approved';
+    this.save();
+    return true;
+  }
+
+  // --- EVENTS ---
+  getEvents(): EventItem[] {
+    if (!this.data.events) this.data.events = [];
+    return this.data.events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }
+
+  getEventById(id: string): EventItem | undefined {
+    return this.getEvents().find(e => e.id === id);
+  }
+
+  createEvent(data: { title: string; date: string; location: string; cover: string; description: string; ownerId: string; ownerName?: string }): EventItem {
+    if (!this.data.events) this.data.events = [];
+    const newEvent: EventItem = {
+      id: 'event_' + crypto.randomBytes(6).toString('hex'),
+      title: data.title,
+      date: data.date,
+      location: data.location || 'Online',
+      cover: data.cover || 'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=1200&q=80',
+      description: data.description || '',
+      ownerId: data.ownerId,
+      ownerName: data.ownerName || 'Host',
+      going: [data.ownerId],
+      interested: [],
+      createdAt: Date.now()
+    };
+    this.data.events.unshift(newEvent);
+    this.save();
+    return newEvent;
+  }
+
+  toggleEventGoing(eventId: string, userId: string): EventItem | null {
+    const event = this.getEventById(eventId);
+    if (!event) return null;
+    if (!event.going) event.going = [];
+    if (!event.interested) event.interested = [];
+    if (event.going.includes(userId)) {
+      event.going = event.going.filter(id => id !== userId);
+    } else {
+      event.going.push(userId);
+      event.interested = event.interested.filter(id => id !== userId);
+    }
+    this.save();
+    return event;
+  }
+
+  toggleEventInterested(eventId: string, userId: string): EventItem | null {
+    const event = this.getEventById(eventId);
+    if (!event) return null;
+    if (!event.going) event.going = [];
+    if (!event.interested) event.interested = [];
+    if (event.interested.includes(userId)) {
+      event.interested = event.interested.filter(id => id !== userId);
+    } else {
+      event.interested.push(userId);
+      event.going = event.going.filter(id => id !== userId);
+    }
+    this.save();
+    return event;
+  }
+
+  // --- ACCOUNT DELETION ---
+  deleteUser(userId: string): boolean {
+    const user = this.getUserById(userId);
+    if (!user) return false;
+    // Protect primary developer account from accidental self-destruction
+    if (user.email.toLowerCase() === 'eldermoses89@gmail.com') {
+      return false;
+    }
+    this.data.users = this.data.users.filter(u => u.id !== userId);
+    // Remove from other users' friends and friend requests
+    this.data.users.forEach(u => {
+      u.friends = (u.friends || []).filter(id => id !== userId);
+      u.friendRequestsSent = (u.friendRequestsSent || []).filter(id => id !== userId);
+      u.friendRequestsReceived = (u.friendRequestsReceived || []).filter(id => id !== userId);
+    });
+    // Remove user's posts
+    this.data.posts = (this.data.posts || []).filter(p => p.authorId !== userId);
+    // Remove user's stories
+    this.data.stories = (this.data.stories || []).filter(s => s.authorId !== userId);
+    this.save();
+    return true;
+  }
+}
+
+export const db = new Database();
