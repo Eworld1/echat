@@ -923,4 +923,4 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <MessageSquare size={19} />
             {unreadMessageCount > 0 ? (
-              <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-red-600 text-white text-[10px] font-extrabold rounded-full flex items-center justify-center rin
+              <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-red-600 text-white text-[10px] font-extrabold rounded-full flex items-center justify-center rÿÿÿ

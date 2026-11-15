@@ -76,4 +76,4 @@ export class MongoDriver implements PersistenceDriver {
 
   private directMessages() {
     const db = this.mongoose?.connection.db;
-    if (!db) throw new Error('MongoDB is not conne
+    if (!db) throw new Error('MongoDB is not connÿÿÿ

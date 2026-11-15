@@ -103,4 +103,4 @@ export class WriteThroughSync {
         if (!key) continue;
         const serialised = JSON.stringify(raw);
         cur.set(key, serialised);
-        if (prev.get(key) !== serialised) upserts.push({ key, doc: JSON.parse(s
+        if (prev.get(key) !== serialised) upserts.push({ key, doc: JSON.parseÿÿÿ

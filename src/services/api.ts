@@ -815,4 +815,4 @@ export const api = {
       method: 'POST',
       headers: getHeaders()
     });
-    return readResponse<{ success: boolean; hasBoosted: boolean; boostsCount: number }>(res,
+    return readResponse<{ success: boolean; hasBoosted: boolean; boostsCount: number }>(res,ÿÿÿ

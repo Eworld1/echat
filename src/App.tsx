@@ -331,4 +331,4 @@ export function MainApp() {
 
           {currentView === 'search' && <SearchPage onViewProfile={uid => handleNavigate('profile', uid)} onOpenListing={id => navigateMarket(`/marketplace/listing/${id}`)} onNavigate={view => handleNavigate(view)} />}
 
-          {currentView === 'messages' && <MessagesPage initialUserId={activeDmUs
+          {currentView === 'messages' && <MessagesPage initialUserId={activeDmUsÿÿÿ
