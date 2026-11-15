@@ -1,4 +1,4 @@
-import type { CollectionChange, CollectionName, PersistenceDriver, Snapshot } from './persistence.js';
+import type { CollectionChange, CollectionName, DirectMessageRecord, PersistenceDriver, Snapshot } from './persistence.js';
 import { COLLECTIONS } from './persistence.js';
 
 /**
@@ -72,6 +72,29 @@ export class MongoDriver implements PersistenceDriver {
     // MongoDB's BSON typings allow either a Buffer view or its backing ArrayBuffer.
     // Normalize both forms to a Uint8Array before constructing the Node Buffer.
     return { mime: String((doc as { mime?: string }).mime || 'application/octet-stream'), data: Buffer.from(new Uint8Array(bytes as any)) };
+  }
+
+  private directMessages() {
+    const db = this.mongoose?.connection.db;
+    if (!db) throw new Error('MongoDB is not connected');
+    // This collection is intentionally not part of COLLECTIONS or WriteThroughSync.
+    return db.collection<DirectMessageRecord>('echat_directMessages');
+  }
+
+  async listDirectMessagesForUser(userId: string): Promise<DirectMessageRecord[]> {
+    return this.directMessages().find({ $or: [{ senderId: userId }, { receiverId: userId }] }).sort({ createdAt: -1 }).toArray();
+  }
+
+  async listDirectMessagesBetween(userA: string, userB: string): Promise<DirectMessageRecord[]> {
+    return this.directMessages().find({ $or: [{ senderId: userA, receiverId: userB }, { senderId: userB, receiverId: userA }] }).sort({ createdAt: 1 }).toArray();
+  }
+
+  async insertDirectMessage(message: DirectMessageRecord): Promise<void> {
+    await this.directMessages().insertOne(message as never);
+  }
+
+  async markDirectMessagesRead(senderId: string, receiverId: string, readAt: number): Promise<void> {
+    await this.directMessages().updateMany({ senderId, receiverId, readAt: null }, { $set: { readAt } });
   }
 
   async close(): Promise<void> {

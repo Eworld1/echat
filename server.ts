@@ -1456,6 +1456,82 @@ app.post('/api/stories/:id/view', (req: Request, res: Response) => {
 });
 
 // ----------------- MESSAGES / CHAT ROUTES -----------------
+// Isolated 1-on-1 DM routes. These use the dedicated Mongo collection and never touch
+// the legacy `messages` array or its write-through persistence.
+app.get('/api/dm/conversations', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  try {
+    const messages = await db.listDirectMessagesForUser(authUser.id);
+    const latestByPartner = new Map<string, typeof messages[number]>();
+    for (const message of messages) {
+      const partnerId = message.senderId === authUser.id ? message.receiverId : message.senderId;
+      const current = latestByPartner.get(partnerId);
+      if (!current || message.createdAt > current.createdAt) latestByPartner.set(partnerId, message);
+    }
+    const conversations = [...latestByPartner.entries()].map(([partnerId, lastMessage]) => {
+      const partner = db.getUserById(partnerId);
+      if (!partner) return null;
+      return {
+        user: db.sanitizeUser(partner, authUser.id),
+        lastMessage,
+        unreadCount: messages.filter(message => message.senderId === partnerId && message.receiverId === authUser.id && message.readAt === null).length
+      };
+    }).filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .sort((a, b) => b.lastMessage.createdAt - a.lastMessage.createdAt);
+    return res.json({ conversations });
+  } catch (error) {
+    console.error('[DM] Could not list conversations:', error);
+    return res.status(503).json({ error: 'Direct messaging storage is unavailable' });
+  }
+});
+
+app.get('/api/dm/:userId', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const otherUserId = String(req.params.userId || '');
+  if (otherUserId !== authUser.id && !db.getUserById(otherUserId)) return res.status(404).json({ error: 'User not found' });
+  try {
+    return res.json(await db.listDirectMessagesBetween(authUser.id, otherUserId));
+  } catch (error) {
+    console.error('[DM] Could not load conversation:', error);
+    return res.status(503).json({ error: 'Direct messaging storage is unavailable' });
+  }
+});
+
+app.post('/api/dm/:userId/read', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const senderId = String(req.params.userId || '');
+  if (!db.getUserById(senderId)) return res.status(404).json({ error: 'User not found' });
+  try {
+    await db.markDirectMessagesRead(senderId, authUser.id, Date.now());
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('[DM] Could not mark conversation read:', error);
+    return res.status(503).json({ error: 'Direct messaging storage is unavailable' });
+  }
+});
+
+app.post('/api/dm/:userId', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const receiverId = String(req.params.userId || '');
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (!text) return res.status(400).json({ error: 'Message text is required' });
+  if (text.length > 2000) return res.status(400).json({ error: 'Message must be 2000 characters or fewer' });
+  if (!db.getUserById(receiverId)) return res.status(404).json({ error: 'Recipient not found' });
+  if (receiverId === authUser.id) return res.status(400).json({ error: 'You cannot message yourself' });
+  const message = { _id: crypto.randomUUID(), senderId: authUser.id, receiverId, text, createdAt: Date.now(), readAt: null };
+  try {
+    await db.insertDirectMessage(message);
+    return res.status(201).json(message);
+  } catch (error) {
+    console.error('[DM] Could not send message:', error);
+    return res.status(503).json({ error: 'Direct messaging storage is unavailable' });
+  }
+});
+
 app.get('/api/conversations', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });

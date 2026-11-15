@@ -2,7 +2,7 @@ import { gradientCover, initialsAvatar } from './avatar.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { WriteThroughSync, type PersistenceDriver, type Snapshot } from './persistence.js';
+import { WriteThroughSync, type DirectMessageRecord, type PersistenceDriver, type Snapshot } from './persistence.js';
 import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem, SiteConfig, LiveAccessRequest, LiveAccessMode } from './types.js';
 
 // FIX: Try multiple locations because AI Studio wipes process.cwd()/data on Republish
@@ -229,6 +229,26 @@ class Database {
   // ---------- Durable storage (MongoDB) ----------
   private sync: WriteThroughSync | null = null;
   private driver: PersistenceDriver | null = null;
+
+  async listDirectMessagesForUser(userId: string): Promise<DirectMessageRecord[]> {
+    if (!this.driver?.listDirectMessagesForUser) throw new Error('Direct messaging storage is unavailable');
+    return this.driver.listDirectMessagesForUser(userId);
+  }
+
+  async listDirectMessagesBetween(userA: string, userB: string): Promise<DirectMessageRecord[]> {
+    if (!this.driver?.listDirectMessagesBetween) throw new Error('Direct messaging storage is unavailable');
+    return this.driver.listDirectMessagesBetween(userA, userB);
+  }
+
+  async insertDirectMessage(message: DirectMessageRecord): Promise<void> {
+    if (!this.driver?.insertDirectMessage) throw new Error('Direct messaging storage is unavailable');
+    return this.driver.insertDirectMessage(message);
+  }
+
+  async markDirectMessagesRead(senderId: string, receiverId: string, readAt: number): Promise<void> {
+    if (!this.driver?.markDirectMessagesRead) throw new Error('Direct messaging storage is unavailable');
+    return this.driver.markDirectMessagesRead(senderId, receiverId, readAt);
+  }
 
   private normalize(parsed: Partial<DatabaseSchema>): DatabaseSchema {
     let users = Array.isArray(parsed.users) ? parsed.users : [];

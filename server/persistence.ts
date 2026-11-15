@@ -31,7 +31,21 @@ export interface PersistenceDriver {
   /** Optional: durable storage for uploaded files (photos, videos, voice notes). */
   putFile?(name: string, mime: string, data: Buffer): Promise<void>;
   getFile?(name: string): Promise<{ mime: string; data: Buffer } | null>;
+  /** Isolated direct-message storage; deliberately excluded from snapshot sync. */
+  listDirectMessagesForUser?(userId: string): Promise<DirectMessageRecord[]>;
+  listDirectMessagesBetween?(userA: string, userB: string): Promise<DirectMessageRecord[]>;
+  insertDirectMessage?(message: DirectMessageRecord): Promise<void>;
+  markDirectMessagesRead?(senderId: string, receiverId: string, readAt: number): Promise<void>;
   close?(): Promise<void>;
+}
+
+export interface DirectMessageRecord {
+  _id: string;
+  senderId: string;
+  receiverId: string;
+  text: string;
+  createdAt: number;
+  readAt: number | null;
 }
 
 export function keyOf(collection: CollectionName, item: Record<string, unknown>): string {

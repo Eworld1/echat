@@ -22,6 +22,21 @@ import type {
 } from '../types';
 import { auth } from './firebase';
 
+export interface DirectMessage {
+  _id: string;
+  senderId: string;
+  receiverId: string;
+  text: string;
+  createdAt: number;
+  readAt: number | null;
+}
+
+export interface DirectConversation {
+  user: User;
+  lastMessage: DirectMessage;
+  unreadCount: number;
+}
+
 async function readResponse<T>(res: Response, fallbackMessage = 'Request failed'): Promise<T> {
   const contentType = res.headers.get('content-type') || '';
   const isJson = contentType.includes('application/json');
@@ -391,6 +406,23 @@ export const api = {
   async getConversationPartners(): Promise<string[]> {
     const res = await fetch(apiUrl('/api/conversations'), { headers: getHeaders() });
     return readResponse<string[]>(res, 'Could not load conversations');
+  },
+  async getDmConversations(): Promise<DirectConversation[]> {
+    const res = await fetch(apiUrl('/api/dm/conversations'), { headers: getHeaders(), cache: 'no-store' });
+    const data = await readResponse<{ conversations: DirectConversation[] }>(res, 'Could not load direct messages');
+    return Array.isArray(data.conversations) ? data.conversations : [];
+  },
+  async getDmConversation(userId: string): Promise<DirectMessage[]> {
+    const res = await fetch(apiUrl(`/api/dm/${encodeURIComponent(userId)}`), { headers: getHeaders(), cache: 'no-store' });
+    return readResponse<DirectMessage[]>(res, 'Could not load this conversation');
+  },
+  async sendDm(userId: string, text: string): Promise<DirectMessage> {
+    const res = await fetch(apiUrl(`/api/dm/${encodeURIComponent(userId)}`), { method: 'POST', headers: getHeaders(), body: JSON.stringify({ text }) });
+    return readResponse<DirectMessage>(res, 'Could not send this message');
+  },
+  async markDmRead(userId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/api/dm/${encodeURIComponent(userId)}/read`), { method: 'POST', headers: getHeaders() });
+    await readResponse<{ success: boolean }>(res, 'Could not mark messages as read');
   },
   async getSiteConfig(): Promise<import('../types').SiteConfig> {
     const res = await fetch(apiUrl('/api/site-config'));
