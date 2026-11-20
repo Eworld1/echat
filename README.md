@@ -1,0 +1,125 @@
+# Echat — Connect, Share & Chat
+
+Real-time social app: feed, 24h stories, one-to-one chat, voice/video calls (WebRTC),
+Pages, Groups, Events, Settings & Privacy, and a developer admin dashboard.
+
+**Stack:** Vite + React 19 + TypeScript + Tailwind 4 · Express · `ws` WebSocket server
+(chat, presence, call signaling) · JSON-file database (`data/echat_db.json`) · Firebase client.
+
+## Requirements
+
+- Node.js 22.12+ (Node 24 recommended)
+- npm 10+
+
+## Quick start
+
+```bash
+npm install --legacy-peer-deps
+cp .env.example .env        # then fill in your Firebase values
+npm run dev
+```
+
+`npm run dev` prints `[Echat] Server on 3000` and `[vite] Local: http://localhost:5173/`.
+Open http://localhost:5173 (or :3000 — both serve the app).
+
+## Scripts
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Express + Vite dev middleware (hot reload) |
+| `npm run build` | Production frontend build into `dist/` |
+| `npm start` | Production server: serves `dist/` + API + WebSocket + uploads |
+| `npm run preview` | Preview the built frontend only |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint |
+
+## Environment variables
+
+See `.env.example`. Key ones:
+
+- `PORT` — server port (default `3000`)
+- `CORS_ORIGIN` — allowed browser origins, comma-separated (default `*`)
+- `VITE_API_URL` — backend base URL; empty = same origin
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` — backend-only credentials used to mint temporary TURN tokens
+- `VITE_FIREBASE_*` — Firebase client config
+- `LIVE_STREAM_KEY_SECRET` — server-only random secret (32+ characters), set on the API host and Vercel; owner keys are derived on demand while only a hash is stored in Firestore. Vercel also needs `FIREBASE_SERVICE_ACCOUNT_JSON` and `FIREBASE_DATABASE_ID` for the key API.
+- `RTMP_INGEST_URL` — optional RTMP publishing URL. The Stream Key tab is available, but this repository does not include an RTMP ingest service; setting the URL alone does not enable OBS publishing. Connect an ingest provider to the owner-key validation helper in `serverless/live-stream-key.ts`.
+
+## Project structure
+
+```
+server.ts            Express app: REST API, CORS, uploads, static dist, WebSocket attach
+server/              db.ts (JSON DB), socket.ts (WebSocket + call signaling), types.ts
+src/components/      UI components (CallModal, PostCard, ProfileView, ...)
+src/pages/           Pages, Groups, Events, Settings, HomePage
+src/context/         AuthContext, SocketContext (WebSocket + WebRTC)
+src/hooks/           Custom hooks
+src/services/        api.ts (REST client), apiBase.ts (URLs), db.ts, firebase.ts
+data/                JSON database + data/uploads (git-ignored, created at runtime)
+```
+
+## Features
+
+- **Social:** feed with photo/video posts, tag friends, edit and delete your own posts, reactions, comments,
+  share to your timeline or to WhatsApp / Facebook / X / Telegram / LinkedIn / email, saved posts, hashtags and
+  trending topics, 24h stories, Go Live, post privacy (Public / Friends / Only me), blocking.
+- **Chat and calls:** one-to-one chat with online status and read receipts, voice and video calls between any
+  users (respecting "Who can call me"), live message and missed-call notifications with a Call back button.
+- **Pages, Groups, Events:** create them with a profile picture and cover photo chosen from your gallery;
+  owners can change the photos later.
+- **Appearance and language:** light, dark or follow-the-device theme and six languages (English, Krio, French,
+  Spanish, Arabic, German), applied instantly and remembered.
+- **Install it:** works as an installable app (PWA) on Android, iPhone/iPad, Windows, Mac and Linux.
+- **Admin console:** live overview with charts and system health, user management (search, filters, bulk block,
+  verify, delete, CSV export), moderation queue, announcements to everyone, and an activity log of every admin action.
+
+## Installing the app on a device
+
+Open the site, then:
+- **Android / Windows / Mac / Linux (Chrome, Edge, Samsung Internet):** tap **Install** on the banner, or
+  profile menu, **Install app**.
+- **iPhone / iPad (Safari):** Share button, then **Add to Home Screen**.
+
+## Becoming the admin
+
+Set `ADMIN_BOOTSTRAP_PASSWORD` on the server. Sign in, open the Developer tab, and enter that password in the
+**Activate admin access** box. There is no built-in admin account.
+
+## Deploying
+
+Echat needs a **long-running Node process** (WebSocket server), so the backend can't run on Vercel.
+
+1. **Database (MongoDB Atlas, free):** create a free M0 cluster at https://www.mongodb.com/atlas,
+   create a database user, allow network access from anywhere (0.0.0.0/0), and copy the connection
+   string. This keeps your users, posts, chats **and uploaded photos** safe even though Render's free
+   disk is wiped on every restart.
+2. **Backend → Render:** Build `npm install --legacy-peer-deps && npm run build`, Start `npm start`.
+   Environment: `MONGO_URI` (step 1), `CORS_ORIGIN` (your Vercel URL), `ADMIN_BOOTSTRAP_PASSWORD`,
+   `NODE_VERSION=22.12.0`.
+3. **Frontend → Vercel** (`vercel.json` included). Set `VITE_API_URL` to the Render URL and the
+   `VITE_SOCKET_URL` to the same Render URL, set the `VITE_FIREBASE_*` variables, then redeploy.
+
+Check `https://YOUR-BACKEND/api/health`: `storage` shows `MongoDB` when durable storage is active.
+Without `MONGO_URI` the app falls back to a local JSON file (fine for development).
+
+The backend URL is the public URL shown on the Render service page (for example, `https://echat-api.onrender.com`).
+The source archive does not contain a deployed backend URL. In Vercel → Project → Settings → Environment
+Variables, set both `VITE_API_URL` and `VITE_SOCKET_URL` to that backend URL, and redeploy the frontend.
+
+Uploads are capped at 2 MB. Image files are resized and compressed in the browser before upload. The REST
+feed returns 10 posts per page; use the feed's **Load more posts** control to request another page. These
+limits reduce transfer size, but image hosting and video delivery still use bandwidth each time media is viewed.
+Use a media CDN/object storage with image transformations for sustained traffic, avoid autoplaying large videos,
+and monitor Vercel Usage → Bandwidth. A suspended Vercel workspace must be reactivated by its owner in Vercel;
+redeploying this source does not remove an account suspension.
+
+Calls across restrictive NATs and mobile networks need TURN. Add `TWILIO_ACCOUNT_SID` and
+`TWILIO_AUTH_TOKEN` to the backend host (Render), not Vercel. The authenticated `/api/calls/ice-config`
+endpoint requests short-lived credentials for each call. Without these backend secrets, the app tries
+direct/STUN connectivity and some networks will not connect. The credentials are never built into the
+frontend bundle.
+
+## Security notes
+
+- `firestore.rules` currently allows all reads/writes. Lock it down before real users arrive.
+- Never commit `.env`; it is git-ignored.

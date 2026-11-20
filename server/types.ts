@@ -1,0 +1,107 @@
+export type ReactionType = 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'angry';
+export interface Reaction { userId: string; type: ReactionType; createdAt: number; }
+export interface User {
+  id: string; name: string; email: string; passwordHash?: string;
+  avatar: string; coverPhoto: string; bio: string; location: string;
+  dob?: string; dobVisibility?: 'public' | 'friends' | 'only_me' | 'month_day_only'; birthdayReminderEnabled?: boolean; work?: string; education?: string;
+  reelsAutoplay?: boolean; reelsWifiOnly?: boolean;
+  role: 'user' | 'creator' | 'admin' | 'developer' | 'super_admin';
+  canApproveLive?: boolean;
+  v2?: Record<string, unknown>;
+  liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';
+  liveAuthSecret?: string;
+  /** Firebase UID of the sign-in linked to this account, when it differs from `id` (older accounts). */
+  firebaseUid?: string;
+  isVerified?: boolean; isOfficialDeveloper?: boolean;
+  boostsCount?: number; boostedBy?: string[];
+  isBlocked: boolean; isOnline: boolean; lastSeen: number; createdAt: number; lastLogin?: number;
+  friends: string[]; friendRequestsSent: string[]; friendRequestsReceived: string[];
+  blockedUsers?: string[]; privacySettings?: any; savedPosts?: string[];
+}
+export interface Comment { id: string; postId: string; authorId: string; author?: { id: string; name: string; avatar: string; }; content: string; createdAt: number; likes: string[]; }
+export interface Post { id: string; authorId: string; pageId?: string; author?: any; type?: 'post' | 'reel' | 'story'; isReel?: boolean; videoType?: string; aspectRatio?: number | string; content: string; mediaUrl?: string; mediaUrls?: string[]; image?: string; images?: string[] | string | { url: string; id?: string; order?: number }[]; imagesCount?: number; v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown }; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number; feeling?: string; privacy: 'public' | 'friends' | 'only_me'; reactions: Reaction[]; comments: Comment[]; sharesCount: number; viewsCount?: number; views?: string[]; viewRecords?: { userId: string; viewedAt: number }[]; isReported: boolean; reportReason?: string; createdAt: number; editedAt?: number; taggedUserIds?: string[]; sharedPostId?: string; }
+export interface Story { id: string; authorId: string; author?: any; type: 'text' | 'image' | 'video'; mediaUrl?: string; text?: string; backgroundGradient?: string; viewers: { userId: string; viewedAt: number }[]; createdAt: number; expiresAt: number; }
+export interface MessageAttachment { url: string; name: string; mimeType: string; size: number; }
+export interface Message { id: string; conversationId?: string; senderId: string; receiverId: string; text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio'; v2_market_order?: { orderId?:string; listingId:string; buyerId:string; sellerId:string; status:string; createdAt:number; source?:'echat'|'whatsapp' }; audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number; editHistory?: { text: string; editedAt: number }[]; deletedFor?: string[]; }
+export interface Notification { id: string; userId: string; actorId: string; actor?: any; type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement' | 'birthday' | 'birthday_reminder' | 'birthday_today'; targetId?: string; message: string; read: boolean; createdAt: number; callType?: 'audio' | 'video'; }
+export interface AuditLog { id: string; actorId: string; actorName: string; action: string; targetType?: string; targetId?: string; targetName?: string; details?: string; createdAt: number; }
+export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUsers: number; totalPosts: number; totalMessages: number; totalStories: number; pendingReports: number; activeSockets: number; uptimeSeconds: number; }
+export interface GlobalSearchResults { users: User[]; posts: Post[]; }
+export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
+export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
+export interface LiveAccessRequest { id: string; userId: string; name: string; avatar: string; reason: string; status: 'pending' | 'approved' | 'rejected' | 'blocked' | 'cancelled'; createdAt: number; reviewedBy?: string; }
+export type LiveAccessMode = 'everyone' | 'approved_only' | 'sixty_days_plus' | 'admins_creators_only';
+export interface PagePost {
+  id: string;
+  pageId: string;
+  authorId: string;
+  content: string;
+  mediaUrl?: string;
+  mediaType?: 'image' | 'video';
+  createdAt: number;
+  likes: string[];
+  comments: Comment[];
+}
+
+export interface Page {
+  id: string;
+  name: string;
+  category: string;
+  bio: string;
+  cover: string;
+  avatar?: string;
+  ownerId: string;
+  ownerName?: string;
+  followers: string[];
+  likes: string[];
+  posts: PagePost[];
+  createdAt: number;
+}
+
+export interface GroupPost {
+  id: string;
+  groupId: string;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string;
+  content: string;
+  mediaUrl?: string;
+  mediaType?: 'image' | 'video';
+  status: 'approved' | 'pending';
+  likes: string[];
+  comments: Comment[];
+  createdAt: number;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  privacy: 'public' | 'private';
+  cover: string;
+  description: string;
+  avatar?: string;
+  ownerId: string;
+  ownerName?: string;
+  members: string[];
+  posts: GroupPost[];
+  createdAt: number;
+}
+
+export interface EventItem {
+  id: string;
+  title: string;
+  date: string;
+  location: string;
+  cover: string;
+  description: string;
+  ownerId: string;
+  ownerName?: string;
+  going: string[];
+  interested: string[];
+  createdAt: number;
+}
+export interface SavedItem { id: string; userId: string; postId: string; type: 'post' | 'page' | 'reel' | 'event'; title?: string; subtitle?: string; mediaUrl?: string; savedAt: number; }
+export interface ReelComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
+export interface ReelItem { id: string; videoUrl: string; caption: string; ownerId: string; ownerName?: string; ownerAvatar?: string; likes: string[]; likesCount?: number; comments: ReelComment[]; sharesCount?: number; createdAt: number; }
+export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; bannerEnabled?: boolean; bannerText?: string; maintenanceMode?: boolean; appName?: string; themeColor?: string; updatedAt?: number; welcomePage?: any; liveAccessMode?: LiveAccessMode; }
+export interface DeviceSession { id: string; deviceName: string; browser: string; os: string; location: string; isCurrent: boolean; lastActive: number; }

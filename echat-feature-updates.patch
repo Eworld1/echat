@@ -1,0 +1,2279 @@
+diff --git a/.env.example b/.env.example
+index 37e1006..e207b59 100644
+--- a/.env.example
++++ b/.env.example
+@@ -6,6 +6,9 @@ CORS_ORIGIN=*
+ # Admin account. Set a setup password so nobody can claim the admin email before you.
+ ADMIN_EMAIL=eldermoses89@gmail.com
+ ADMIN_BOOTSTRAP_PASSWORD=
++# Twilio Network Traversal Service. Keep these server-only; the server creates short-lived TURN credentials.
++TWILIO_ACCOUNT_SID=
++TWILIO_AUTH_TOKEN=
+ # MongoDB connection string (free MongoDB Atlas M0). With it, data survives restarts and redeploys.
+ # Leave empty to use the local JSON file only.
+ MONGO_URI=
+diff --git a/README.md b/README.md
+index ec69902..59e94a1 100644
+--- a/README.md
++++ b/README.md
+@@ -40,7 +40,7 @@ See `.env.example`. Key ones:
+ - `PORT` — server port (default `3000`)
+ - `CORS_ORIGIN` — allowed browser origins, comma-separated (default `*`)
+ - `VITE_API_URL` — backend base URL; empty = same origin
+-- `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` — optional TURN relay for calls
++- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` — backend-only credentials used to mint temporary TURN tokens
+ - `VITE_FIREBASE_*` — Firebase client config
+ 
+ ## Project structure
+@@ -100,7 +100,11 @@ Echat needs a **long-running Node process** (WebSocket server), so the backend c
+ Check `https://YOUR-BACKEND/api/health`: `storage` shows `MongoDB` when durable storage is active.
+ Without `MONGO_URI` the app falls back to a local JSON file (fine for development).
+ 
+-Calls across mobile carriers usually need a TURN server: set `VITE_TURN_*`.
++Calls across restrictive NATs and mobile networks need TURN. Add `TWILIO_ACCOUNT_SID` and
++`TWILIO_AUTH_TOKEN` to the backend host (Render), not Vercel. The authenticated `/api/calls/ice-config`
++endpoint requests short-lived credentials for each call. Without these backend secrets, the app tries
++direct/STUN connectivity and some networks will not connect. The credentials are never built into the
++frontend bundle.
+ 
+ ## Security notes
+ 
+diff --git a/server.ts b/server.ts
+index cb84d9d..7261ae1 100644
+--- a/server.ts
++++ b/server.ts
+@@ -65,7 +65,7 @@ fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+ app.get('/uploads/:name', async (req: Request, res: Response, next) => {
+   try {
+     const name = req.params.name;
+-    if (!/^[a-f0-9-]{36}\.(jpg|png|webp|gif|mp4|webm|ogg|mp3|m4a)$/.test(name)) return next();
++    if (!/^[a-f0-9-]{36}\.(jpg|png|webp|gif|mp4|webm|ogg|mp3|m4a|pdf|doc|docx)$/.test(name)) return next();
+     const target = path.join(UPLOADS_DIR, name);
+     if (fs.existsSync(target)) return next(); // normal case: express.static below serves it
+     const stored = await db.getStoredFile(name);
+@@ -94,7 +94,10 @@ const UPLOAD_MIME_EXT: Record<string, string> = {
+   'audio/webm': 'webm',
+   'audio/ogg': 'ogg',
+   'audio/mpeg': 'mp3',
+-  'audio/mp4': 'm4a'
++  'audio/mp4': 'm4a',
++  'application/pdf': 'pdf',
++  'application/msword': 'doc',
++  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx'
+ };
+ const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // base64 adds ~33%, must stay under the 25mb JSON limit
+ 
+@@ -102,6 +105,31 @@ app.get('/api/health', (_req: Request, res: Response) => {
+   res.json({ ok: true, uptime: process.uptime(), storage: db.persistenceStats ?? 'local-file' });
+ });
+ 
++app.get('/api/calls/ice-config', async (req: Request, res: Response) => {
++  if (!getAuthUser(req)) return res.status(401).json({ error: 'Not authenticated' });
++  const accountSid = process.env.TWILIO_ACCOUNT_SID;
++  const authToken = process.env.TWILIO_AUTH_TOKEN;
++  if (!accountSid || !authToken) return res.status(503).json({ error: 'TURN credentials are not configured on the server' });
++  try {
++    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Tokens.json`, {
++      method: 'POST',
++      headers: {
++        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
++        'Content-Type': 'application/x-www-form-urlencoded'
++      },
++      body: new URLSearchParams({ Ttl: '3600' })
++    });
++    const payload = await response.json() as { ice_servers?: RTCIceServer[]; message?: string };
++    if (!response.ok || !Array.isArray(payload.ice_servers) || payload.ice_servers.length === 0) {
++      return res.status(502).json({ error: 'Could not create temporary TURN credentials' });
++    }
++    res.setHeader('Cache-Control', 'no-store');
++    res.json({ iceServers: payload.ice_servers });
++  } catch {
++    res.status(502).json({ error: 'TURN credential service is unavailable' });
++  }
++});
++
+ app.get('/api/site-config', (_req: Request, res: Response) => {
+   const { welcomeTitle, welcomeSubtitle, welcomeBgImage, welcomeLogo, primaryButtonText, secondaryText, appName } = db.getSiteConfig();
+   res.json({ welcomeTitle, welcomeSubtitle, welcomeBgImage, welcomeLogo, primaryButtonText, secondaryText, appName });
+@@ -175,6 +203,7 @@ function safeEqual(a: string, b: string): boolean {
+ function getAuthUser(req: Request) {
+   const userId = req.headers['x-user-id'] as string;
+   if (!userId) return null;
++  if (userId === 'user_admin_elder') return null;
+   let user = db.getUserById(userId);
+   if (!user && userId.trim()) {
+     // Never grant developer rights here: the admin account is created only through /api/auth/register.
+@@ -230,6 +259,9 @@ app.post('/api/auth/sync-profile', (req: Request, res: Response) => {
+ app.post('/api/auth/register', (req: Request, res: Response) => {
+   try {
+     const { name, email, password, dob, avatar, bio, location, termsAccepted } = req.body;
++    if (req.body?.id === 'user_admin_elder' || (typeof name === 'string' && /^elder moses\s*\(test\)$/i.test(name.trim()))) {
++      return res.status(410).json({ error: 'This legacy demo account was removed.' });
++    }
+     if (!name || !email || !password || !dob) {
+       return res.status(400).json({ error: 'Name, email, password, and Date of Birth are required' });
+     }
+@@ -381,7 +413,6 @@ app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
+     // Without an email provider the code must not be handed to the requester: that would let
+     // anyone reset anyone's password. It is shown only in dev, or if explicitly enabled.
+     const exposeToken = !isProd || process.env.ALLOW_RESET_TOKEN_IN_RESPONSE === 'true';
+-    if (!exposeToken) console.log(`[Echat] Password reset code for ${email}: ${token}`);
+     res.json({ success: true, message: genericMessage, ...(exposeToken ? { token } : {}) });
+   } catch (e: any) {
+     res.status(500).json({ error: e.message });
+@@ -704,12 +735,28 @@ app.post('/api/posts/:id/view', (req: Request, res: Response) => {
+   res.json({ viewsCount: post.viewsCount || 0 });
+ });
+ 
++app.get('/api/posts/:id/viewers', (req: Request, res: Response) => {
++  const authUser = getAuthUser(req);
++  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
++  const post = db.getPostById(req.params.id);
++  if (!post || post.authorId !== authUser.id) return res.status(404).json({ error: 'Post not found' });
++  const viewers = db.getPostViewRecords(post.id).map(record => {
++    const viewer = db.getUserById(record.userId);
++    return viewer ? { id: viewer.id, name: viewer.name, avatar: viewer.avatar, viewedAt: record.viewedAt } : null;
++  }).filter((viewer): viewer is NonNullable<typeof viewer> => Boolean(viewer));
++  res.json(viewers);
++});
++
+ app.post('/api/posts', (req: Request, res: Response) => {
+   const authUser = getAuthUser(req);
+   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+ 
+   const { content, mediaUrl, mediaType, feeling, privacy, taggedUserIds } = req.body;
+-  if (!content && !mediaUrl) {
++  const requestedMediaUrls = Array.isArray(req.body.mediaUrls) ? req.body.mediaUrls : [];
++  if (requestedMediaUrls.length > 10) return res.status(400).json({ error: 'A post can include at most 10 images' });
++  const mediaUrls = requestedMediaUrls.filter((url: unknown): url is string => typeof url === 'string' && (/^https:\/\//i.test(url) || url.startsWith('/uploads/'))).slice(0, 10);
++  const primaryMediaUrl = mediaUrls[0] || (typeof mediaUrl === 'string' ? mediaUrl : undefined);
++  if (!content && !primaryMediaUrl) {
+     return res.status(400).json({ error: 'Post must contain text or media' });
+   }
+   const safePrivacy = privacy === 'friends' || privacy === 'only_me' ? privacy : 'public';
+@@ -724,11 +771,11 @@ app.post('/api/posts', (req: Request, res: Response) => {
+   const post = db.createPost(
+     authUser.id,
+     content || '',
+-    mediaUrl,
++    primaryMediaUrl,
+     mediaType,
+     feeling,
+     safePrivacy,
+-    { taggedUserIds: cleanTaggedIds }
++    { taggedUserIds: cleanTaggedIds, mediaUrls }
+   );
+ 
+   // Tell each tagged friend (not for private "only me" posts)
+@@ -777,11 +824,17 @@ app.post('/api/posts/:id/react', (req: Request, res: Response) => {
+   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+ 
+   const { type } = req.body;
++  const before = db.getPostById(req.params.id);
++  const hadReaction = Boolean(before?.reactions.some(reaction => reaction.userId === authUser.id));
+   const post = db.toggleReaction(req.params.id, authUser.id, type || 'like');
+   if (!post) return res.status(404).json({ error: 'Post not found' });
+ 
+   const populated = populatePost(post);
+   socketManager.broadcast({ type: 'post_updated', post: populated });
++  if (!hadReaction && post.authorId !== authUser.id) {
++    const notification = db.addNotification({ userId: post.authorId, actorId: authUser.id, type: 'post_reaction', message: `${authUser.name} liked your post`, targetId: post.id, read: false });
++    socketManager.sendToUser(post.authorId, { type: 'new_notification', notification: populateNotification(notification) });
++  }
+ 
+   res.json(populated);
+ });
+@@ -800,6 +853,10 @@ app.post('/api/posts/:id/comment', (req: Request, res: Response) => {
+ 
+   const populated = populatePost(result.post);
+   socketManager.broadcast({ type: 'post_updated', post: populated });
++  if (result.post.authorId !== authUser.id) {
++    const notification = db.addNotification({ userId: result.post.authorId, actorId: authUser.id, type: 'post_comment', message: `${authUser.name} commented on your post`, targetId: result.post.id, read: false });
++    socketManager.sendToUser(result.post.authorId, { type: 'new_notification', notification: populateNotification(notification) });
++  }
+ 
+   res.json(populated);
+ });
+@@ -1010,7 +1067,10 @@ app.post('/api/messages', (req: Request, res: Response) => {
+   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+ 
+   const { receiverId, text, mediaUrl, mediaType, audioDuration } = req.body;
+-  if (!receiverId || (!text && !mediaUrl)) {
++  const inputAttachments = Array.isArray(req.body.attachments) ? req.body.attachments : [];
++  if (inputAttachments.length > 10) return res.status(400).json({ error: 'Attach up to 10 files per message' });
++  const attachments = inputAttachments.filter((file: any) => file && typeof file.url === 'string' && (/^https:\/\//i.test(file.url) || file.url.startsWith('/uploads/')) && typeof file.name === 'string' && typeof file.mimeType === 'string' && Number.isFinite(file.size) && file.size >= 0).slice(0, 10);
++  if (!receiverId || (!text && !mediaUrl && attachments.length === 0)) {
+     return res.status(400).json({ error: 'Recipient and message content required' });
+   }
+ 
+@@ -1028,6 +1088,7 @@ app.post('/api/messages', (req: Request, res: Response) => {
+     mediaUrl,
+     mediaType,
+     audioDuration,
++    attachments,
+     status
+   });
+ 
+@@ -1047,6 +1108,7 @@ app.post('/api/messages', (req: Request, res: Response) => {
+     text ? String(text).slice(0, 80)
+     : mediaType === 'audio' ? 'sent you a voice message'
+     : mediaType === 'video' ? 'sent you a video'
++    : attachments.length ? `sent you ${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`
+     : 'sent you a photo';
+   const notif = db.upsertMessageNotification(receiverId, authUser.id, text ? `${authUser.name}: ${what}` : `${authUser.name} ${what}`);
+   socketManager.sendToUser(receiverId, { type: 'new_notification', notification: populateNotification(notif) });
+@@ -1054,6 +1116,21 @@ app.post('/api/messages', (req: Request, res: Response) => {
+   res.json(message);
+ });
+ 
++app.put('/api/messages/:id', (req: Request, res: Response) => {
++  const authUser = getAuthUser(req);
++  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
++  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
++  if (!text || text.length > 4000) return res.status(400).json({ error: 'Message text must be 1 to 4000 characters' });
++  const current = db.getConversationPartners(authUser.id).flatMap(partnerId => db.getConversation(authUser.id, partnerId)).find(message => message.id === req.params.id);
++  if (!current || current.senderId !== authUser.id) return res.status(404).json({ error: 'Message not found' });
++  if (!current.text || Date.now() - current.createdAt > 15 * 60 * 1000) return res.status(403).json({ error: 'Messages can only be edited within 15 minutes' });
++  const updated = db.editMessage(current.id, authUser.id, text);
++  if (!updated) return res.status(403).json({ error: 'This message can no longer be edited' });
++  socketManager.sendToUser(updated.senderId, { type: 'message_updated', message: updated });
++  socketManager.sendToUser(updated.receiverId, { type: 'message_updated', message: updated });
++  res.json(updated);
++});
++
+ app.post('/api/messages/seen', (req: Request, res: Response) => {
+   const authUser = getAuthUser(req);
+   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+@@ -1113,7 +1190,7 @@ app.post('/api/admin/claim', (req: Request, res: Response) => {
+ 
+     const claimed = db.claimAdmin(authUser.id, ADMIN_EMAIL);
+     if (!claimed) return res.status(404).json({ error: 'User not found' });
+-    console.log(`[Echat] Admin access claimed by user ${authUser.id}`);
++    console.info(`[Echat] Admin access claimed by user ${authUser.id}`);
+     audit(claimed, 'admin.claim', { type: 'user', id: claimed.id, name: claimed.name });
+     res.json({ user: db.sanitizeUser(claimed) });
+   } catch (e: any) {
+@@ -1348,6 +1425,7 @@ interface LiveSession {
+   hostEmail: string;
+   isHostVerified?: boolean;
+   title: string;
++  taggedPageIds: string[];
+   viewersCount: number;
+   reactionsCount: number;
+   startedAt: number;
+@@ -1380,7 +1458,7 @@ app.post('/api/live/start', (req: Request, res: Response) => {
+     });
+   }
+ 
+-  const { title } = req.body;
++  const { title, taggedPageIds } = req.body;
+   activeLiveSession = {
+     id: 'live_' + crypto.randomBytes(6).toString('hex'),
+     hostId: authUser.id,
+@@ -1389,6 +1467,7 @@ app.post('/api/live/start', (req: Request, res: Response) => {
+     hostEmail: authUser.email,
+     isHostVerified: authUser.isVerified ?? isDev,
+     title: title?.trim() || `${authUser.name} is Live on EChat!`,
++    taggedPageIds: Array.isArray(taggedPageIds) ? [...new Set<string>(taggedPageIds.filter((id: unknown): id is string => typeof id === 'string' && Boolean(db.getPageById(id))))].slice(0, 22) : [],
+     viewersCount: 1,
+     reactionsCount: 0,
+     startedAt: Date.now(),
+@@ -1419,6 +1498,18 @@ app.post('/api/live/start', (req: Request, res: Response) => {
+     socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
+   }
+ 
++  const taggedPageAudience = new Set<string>();
++  for (const pageId of activeLiveSession.taggedPageIds) {
++    const page = db.getPageById(pageId);
++    if (!page) continue;
++    for (const uid of [...page.followers, page.ownerId]) {
++      if (uid === authUser.id || taggedPageAudience.has(uid) || db.isBlockedBetween(authUser.id, uid)) continue;
++      taggedPageAudience.add(uid);
++      const notification = db.addNotification({ userId: uid, actorId: authUser.id, type: 'live_stream', message: `${authUser.name} is live with ${page.name}: ${activeLiveSession.title}`, targetId: activeLiveSession.id, read: false });
++      socketManager.sendToUser(uid, { type: 'new_notification', notification: populateNotification(notification) });
++    }
++  }
++
+   socketManager.broadcast({
+     type: 'live_started',
+     live: activeLiveSession
+@@ -1637,10 +1728,16 @@ app.post('/api/pages/:id/follow', (req: Request, res: Response) => {
+     const authUser = getAuthUser(req);
+     if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+ 
++    const pageBefore = db.getPageById(req.params.id);
++    const wasFollowing = Boolean(pageBefore?.followers.includes(authUser.id));
+     const updated = db.togglePageFollow(req.params.id, authUser.id);
+     if (!updated) return res.status(404).json({ error: 'Page not found' });
+ 
+     socketManager.broadcast({ type: 'page_updated', page: updated });
++    if (!wasFollowing && updated.ownerId !== authUser.id) {
++      const notification = db.addNotification({ userId: updated.ownerId, actorId: authUser.id, type: 'page_follow', message: `${authUser.name} followed your page`, targetId: updated.id, read: false });
++      socketManager.sendToUser(updated.ownerId, { type: 'new_notification', notification: populateNotification(notification) });
++    }
+     res.json(updated);
+   } catch (e: any) {
+     res.status(500).json({ error: e.message });
+@@ -1974,7 +2071,7 @@ async function startServer() {
+         }
+       } catch {
+         fs.rmSync(viteCachePath, { recursive: true, force: true });
+-        console.log('[Echat] Cleared corrupted vite cache');
++        console.info('[Echat] Cleared corrupted vite cache');
+       }
+     }
+   } catch {
+@@ -2017,7 +2114,7 @@ async function startServer() {
+   });
+ 
+   server.listen(PORT, '0.0.0.0', () => {
+-    console.log(`[Echat] Server on ${PORT}`);
++    console.info(`[Echat] Server on ${PORT}`);
+   });
+ 
+   // Dev only: also answer on :5173 so http://localhost:5173 works like a Vite dev server.
+@@ -2025,7 +2122,7 @@ async function startServer() {
+     const altServer = http.createServer(app);
+     altServer.on('error', () => { /* port busy: ignore */ });
+     altServer.listen(5173, '0.0.0.0', () => {
+-      console.log('[vite] Local: http://localhost:5173/');
++      console.info('[vite] Local: http://localhost:5173/');
+     });
+   }
+ 
+diff --git a/server/db.ts b/server/db.ts
+index 24551c8..05f7b98 100644
+--- a/server/db.ts
++++ b/server/db.ts
+@@ -36,130 +36,9 @@ export function hashPassword(password: string): string {
+ // account is claimed through POST /api/admin/claim using the ADMIN_BOOTSTRAP_PASSWORD secret.
+ const SEED_USERS: User[] = [];
+ 
+-const SEED_PAGES: Page[] = [
+-  {
+-    id: 'page_tech_hub',
+-    name: 'Tech & Code Community',
+-    category: 'Technology & Gaming',
+-    bio: 'Official Echat Developer & Tech enthusiast community. Coding, architecture, and innovation.',
+-    cover: 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80',
+-    avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80',
+-    ownerId: 'user_admin_elder',
+-    ownerName: 'Elder Moses',
+-    followers: ['user_admin_elder'],
+-    likes: ['user_admin_elder'],
+-    posts: [
+-      {
+-        id: 'ppost_1',
+-        pageId: 'page_tech_hub',
+-        authorId: 'user_admin_elder',
+-        content: 'Welcome to the Tech & Code page! We are excited to build high-performance WebRTC and real-time social tools.',
+-        mediaUrl: 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?auto=format&fit=crop&w=1200&q=80',
+-        mediaType: 'image',
+-        createdAt: Date.now() - 3600000,
+-        likes: ['user_admin_elder'],
+-        comments: []
+-      }
+-    ],
+-    createdAt: Date.now() - 86400000
+-  },
+-  {
+-    id: 'page_echat_hq',
+-    name: 'Echat Official',
+-    category: 'Social Network',
+-    bio: 'Official news, release updates, and announcements from the Echat platform team.',
+-    cover: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&w=1200&q=80',
+-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+-    ownerId: 'user_admin_elder',
+-    ownerName: 'Elder Moses',
+-    followers: ['user_admin_elder'],
+-    likes: ['user_admin_elder'],
+-    posts: [
+-      {
+-        id: 'ppost_2',
+-        pageId: 'page_echat_hq',
+-        authorId: 'user_admin_elder',
+-        content: '🎉 Echat upgrade deployed: Pages, Groups, Events, and full Settings & Privacy are now live!',
+-        mediaUrl: '',
+-        createdAt: Date.now() - 1800000,
+-        likes: ['user_admin_elder'],
+-        comments: []
+-      }
+-    ],
+-    createdAt: Date.now() - 172800000
+-  }
+-];
+-
+-const SEED_GROUPS: Group[] = [
+-  {
+-    id: 'group_react_devs',
+-    name: 'React & Modern Web Masters',
+-    privacy: 'public',
+-    description: 'A global community sharing tips, performance tricks, UI patterns, and Vite/React architecture.',
+-    cover: 'https://images.unsplash.com/photo-1633356122544-f134324a6cee?auto=format&fit=crop&w=1200&q=80',
+-    avatar: 'https://images.unsplash.com/photo-1633356122544-f134324a6cee?auto=format&fit=crop&w=400&q=80',
+-    ownerId: 'user_admin_elder',
+-    ownerName: 'Elder Moses',
+-    members: ['user_admin_elder'],
+-    posts: [
+-      {
+-        id: 'gpost_1',
+-        groupId: 'group_react_devs',
+-        authorId: 'user_admin_elder',
+-        authorName: 'Elder Moses',
+-        authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+-        content: 'What are your favorite practices for low-latency WebRTC and state synchronization in React 18+?',
+-        status: 'approved',
+-        likes: ['user_admin_elder'],
+-        comments: [],
+-        createdAt: Date.now() - 7200000
+-      }
+-    ],
+-    createdAt: Date.now() - 86400000 * 2
+-  },
+-  {
+-    id: 'group_creators',
+-    name: 'Global Creators & Innovators',
+-    privacy: 'public',
+-    description: 'Connect with artists, video editors, music makers, and digital creators on Echat.',
+-    cover: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=1200&q=80',
+-    avatar: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=400&q=80',
+-    ownerId: 'user_admin_elder',
+-    ownerName: 'Elder Moses',
+-    members: ['user_admin_elder'],
+-    posts: [],
+-    createdAt: Date.now() - 86400000 * 3
+-  }
+-];
+-
+-const SEED_EVENTS: EventItem[] = [
+-  {
+-    id: 'event_hackathon_2026',
+-    title: 'Echat Global Hackathon 2026',
+-    date: '2026-11-15T18:00:00.000Z',
+-    location: 'Virtual Live Stream & Freetown Tech Center',
+-    cover: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1200&q=80',
+-    description: 'Join developers, designers, and entrepreneurs from around the globe to build next-generation social apps.',
+-    ownerId: 'user_admin_elder',
+-    ownerName: 'Elder Moses',
+-    going: ['user_admin_elder'],
+-    interested: [],
+-    createdAt: Date.now() - 86400000
+-  },
+-  {
+-    id: 'event_founder_talk',
+-    title: 'Founder Live Q&A: The Future of Echat',
+-    date: '2026-11-20T17:00:00.000Z',
+-    location: 'Echat Video Auditorium',
+-    cover: 'https://images.unsplash.com/photo-1475721027785-f74eccf877e2?auto=format&fit=crop&w=1200&q=80',
+-    description: 'Elder Moses answers questions about upcoming features, WebRTC audio/video quality, and developer tooling.',
+-    ownerId: 'user_admin_elder',
+-    ownerName: 'Elder Moses',
+-    going: ['user_admin_elder'],
+-    interested: [],
+-    createdAt: Date.now() - 43200000
+-  }
+-];
++const SEED_PAGES: Page[] = [];
++const SEED_GROUPS: Group[] = [];
++const SEED_EVENTS: EventItem[] = [];
+ 
+ class Database {
+   private data: DatabaseSchema;
+@@ -170,8 +49,7 @@ class Database {
+     const loaded = this.load();
+     this.data = loaded.data;
+     this.currentDbPath = loaded.path;
+-    this.neutralizeLegacyAdmin();
+-    console.log(`[DB] Loaded ${this.data.users.length} users, ${this.data.pages?.length || 0} pages, ${this.data.groups?.length || 0} groups, ${this.data.events?.length || 0} events from ${this.currentDbPath}`);
++    this.removeLegacyTestAccounts();
+   }
+ 
+   private findExistingDbFile(): { path: string; raw: string } | null {
+@@ -195,7 +73,7 @@ class Database {
+       if (found) {
+         const parsed = JSON.parse(found.raw);
+         if (parsed && Array.isArray(parsed.users) && parsed.users.length > 0) {
+-          // MERGE: Keep all existing users, just ensure Elder Moses exists
++          // Preserve existing user records. Legacy demo accounts are removed after loading.
+           let users = parsed.users;
+           const hasElder = users.some((u: User) => u.email.toLowerCase() === 'eldermoses89@gmail.com');
+           if (!hasElder) {
+@@ -271,24 +149,21 @@ class Database {
+     }
+   }
+ 
+-  /**
+-   * Older versions shipped a demo admin ("user_admin_elder") with a public password. If it exists in
+-   * stored data, strip its privileges and credentials so nobody can log in or act as the admin with it.
+-   */
+-  private neutralizeLegacyAdmin(): void {
+-    const legacy = this.data.users.find(u => u.id === 'user_admin_elder');
+-    if (!legacy) return;
+-    const isBackdoor =
+-      legacy.role === 'developer' ||
+-      legacy.passwordHash === hashPassword('admin123') ||
+-      legacy.email?.toLowerCase() === 'eldermoses89@gmail.com';
+-    if (!isBackdoor) return;
+-    legacy.role = 'user';
+-    legacy.isOfficialDeveloper = false;
+-    legacy.email = 'legacy-admin@echat.local';
+-    legacy.passwordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
+-    legacy.name = legacy.name || 'Former Admin';
+-    console.warn('[DB] Security: neutralised the legacy demo admin account (user_admin_elder).');
++  /** Remove the known demo profile and its owned content from persisted app data. */
++  private removeLegacyTestAccounts(): void {
++    const removedIds = new Set(this.data.users
++      .filter(user => user.id === 'user_admin_elder' || /^elder moses\s*\(test\)$/i.test(user.name.trim()))
++      .map(user => user.id));
++    const hasSeedContent = this.data.pages.some(page => ['page_tech_hub', 'page_echat_hq'].includes(page.id)) || this.data.groups.some(group => ['group_react_devs', 'group_creators'].includes(group.id)) || this.data.events.some(event => ['event_hackathon_2026', 'event_founder_talk'].includes(event.id));
++    if (!removedIds.size && !hasSeedContent) return;
++    this.data.users = this.data.users.filter(user => !removedIds.has(user.id));
++    this.data.posts = this.data.posts.filter(post => !removedIds.has(post.authorId));
++    this.data.stories = this.data.stories.filter(story => !removedIds.has(story.authorId));
++    this.data.messages = this.data.messages.filter(message => !removedIds.has(message.senderId) && !removedIds.has(message.receiverId));
++    this.data.notifications = this.data.notifications.filter(notification => !removedIds.has(notification.userId) && !removedIds.has(notification.actorId));
++    this.data.pages = this.data.pages.filter(page => !removedIds.has(page.ownerId) && !['page_tech_hub', 'page_echat_hq'].includes(page.id));
++    this.data.groups = this.data.groups.filter(group => !removedIds.has(group.ownerId) && !['group_react_devs', 'group_creators'].includes(group.id));
++    this.data.events = this.data.events.filter(event => !removedIds.has(event.ownerId) && !['event_hackathon_2026', 'event_founder_talk'].includes(event.id));
+     this.save();
+   }
+ 
+@@ -367,7 +242,7 @@ class Database {
+       if (!driver) {
+         const uri = process.env.MONGO_URI;
+         if (!uri) {
+-          console.log('[DB] MONGO_URI not set: using the local JSON file. Data is lost whenever the host wipes its disk.');
++          console.info('[DB] MONGO_URI not set: using the local JSON file.');
+           return;
+         }
+         const { MongoDriver } = await import('./mongoDriver.js');
+@@ -380,10 +255,10 @@ class Database {
+       const hasStored = (stored.users?.length ?? 0) > 0;
+       if (hasStored) {
+         this.data = this.normalize(stored as unknown as Partial<DatabaseSchema>);
+-        this.neutralizeLegacyAdmin();
+-        console.log(`[DB] ${driver.name}: loaded ${this.data.users.length} users, ${this.data.posts.length} posts, ${this.data.messages.length} messages`);
++        this.removeLegacyTestAccounts();
++        console.info(`[DB] ${driver.name}: loaded ${this.data.users.length} users, ${this.data.posts.length} posts, ${this.data.messages.length} messages`);
+       } else {
+-        console.log(`[DB] ${driver.name} is empty: migrating the current data into it`);
++        console.info(`[DB] ${driver.name} is empty: migrating the current data into it`);
+       }
+ 
+       this.driver = driver;
+@@ -391,7 +266,7 @@ class Database {
+       this.sync.prime(hasStored ? stored : {});
+       await this.sync.flush(); // pushes anything that exists only locally (first-run migration)
+       this.saveToAll(this.data); // keep the local file as a warm backup
+-      console.log(`[DB] ${driver.name} persistence is ON`);
++      console.info(`[DB] ${driver.name} persistence is ON`);
+     } catch (err) {
+       this.sync = null;
+       console.error('[DB] Durable storage unavailable, continuing with the local file only:', err);
+@@ -428,7 +303,7 @@ class Database {
+     if (!json || !Array.isArray(json.users) || json.users.length === 0) return false;
+     this.data = json;
+     this.save();
+-    console.log(`[DB] Restored backup with ${json.users.length} users`);
++    console.info(`[DB] Restored backup with ${json.users.length} users`);
+     return true;
+   }
+ 
+@@ -607,12 +482,21 @@ class Database {
+     if (!post.views) post.views = [];
+     if (!post.views.includes(viewerId)) {
+       post.views.push(viewerId);
++      if (!post.viewRecords) post.viewRecords = [];
++      post.viewRecords.push({ userId: viewerId, viewedAt: Date.now() });
+       post.viewsCount = post.views.length;
+       this.save();
+     }
+     return post;
+   }
+ 
++  getPostViewRecords(postId: string): { userId: string; viewedAt: number }[] {
++    const post = this.getPostById(postId);
++    if (!post) return [];
++    const records = post.viewRecords ?? (post.views || []).map(userId => ({ userId, viewedAt: post.createdAt }));
++    return [...records].sort((a, b) => b.viewedAt - a.viewedAt);
++  }
++
+   // ---------- Saved posts (bookmarks) ----------
+   toggleSavedPost(userId: string, postId: string): { saved: boolean; savedPosts: string[] } | null {
+     const user = this.getUserById(userId);
+@@ -663,13 +547,14 @@ class Database {
+     mediaType?: 'image' | 'video',
+     feeling?: string,
+     privacy: 'public' | 'friends' | 'only_me' = 'public',
+-    extras: { taggedUserIds?: string[]; sharedPostId?: string } = {}
++    extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[] } = {}
+   ): Post {
+     const newPost: Post = {
+       id: 'post_' + crypto.randomBytes(6).toString('hex'),
+       authorId,
+       content,
+       mediaUrl,
++      ...(extras.mediaUrls?.length ? { mediaUrls: extras.mediaUrls.slice(0, 10) } : {}),
+       mediaType,
+       feeling,
+       privacy,
+@@ -876,6 +761,7 @@ class Database {
+       mediaUrl: msg.mediaUrl,
+       mediaType: msg.mediaType,
+       audioDuration: msg.audioDuration,
++      attachments: msg.attachments?.slice(0, 10),
+       status: msg.status || 'sent',
+       createdAt: Date.now()
+     };
+@@ -884,6 +770,15 @@ class Database {
+     return newMsg;
+   }
+ 
++  editMessage(messageId: string, senderId: string, text: string): Message | null {
++    const message = this.data.messages.find(item => item.id === messageId && item.senderId === senderId);
++    if (!message || !message.text || Date.now() - message.createdAt > 15 * 60 * 1000) return null;
++    message.text = text;
++    message.editedAt = Date.now();
++    this.save();
++    return message;
++  }
++
+   updateMessageStatus(messageId: string, status: 'delivered' | 'seen'): Message | null {
+     const msg = this.data.messages.find(m => m.id === messageId);
+     if (!msg) return null;
+diff --git a/server/types.ts b/server/types.ts
+index 0a7ba0a..bcbbcf6 100644
+--- a/server/types.ts
++++ b/server/types.ts
+@@ -12,10 +12,11 @@ export interface User {
+   blockedUsers?: string[]; privacySettings?: any; savedPosts?: string[];
+ }
+ export interface Comment { id: string; postId: string; authorId: string; author?: { id: string; name: string; avatar: string; }; content: string; createdAt: number; likes: string[]; }
+-export interface Post { id: string; authorId: string; author?: any; content: string; mediaUrl?: string; mediaType?: 'image' | 'video'; feeling?: string; privacy: 'public' | 'friends' | 'only_me'; reactions: Reaction[]; comments: Comment[]; sharesCount: number; viewsCount?: number; views?: string[]; isReported: boolean; reportReason?: string; createdAt: number; editedAt?: number; taggedUserIds?: string[]; sharedPostId?: string; }
++export interface Post { id: string; authorId: string; author?: any; content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video'; feeling?: string; privacy: 'public' | 'friends' | 'only_me'; reactions: Reaction[]; comments: Comment[]; sharesCount: number; viewsCount?: number; views?: string[]; viewRecords?: { userId: string; viewedAt: number }[]; isReported: boolean; reportReason?: string; createdAt: number; editedAt?: number; taggedUserIds?: string[]; sharedPostId?: string; }
+ export interface Story { id: string; authorId: string; author?: any; type: 'text' | 'image' | 'video'; mediaUrl?: string; text?: string; backgroundGradient?: string; viewers: { userId: string; viewedAt: number }[]; createdAt: number; expiresAt: number; }
+-export interface Message { id: string; conversationId?: string; senderId: string; receiverId: string; text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio'; audioDuration?: number; status: 'sent' | 'delivered' | 'seen'; createdAt: number; }
+-export interface Notification { id: string; userId: string; actorId: string; actor?: any; type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'announcement'; targetId?: string; message: string; read: boolean; createdAt: number; callType?: 'audio' | 'video'; }
++export interface MessageAttachment { url: string; name: string; mimeType: string; size: number; }
++export interface Message { id: string; conversationId?: string; senderId: string; receiverId: string; text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio'; audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number; }
++export interface Notification { id: string; userId: string; actorId: string; actor?: any; type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement'; targetId?: string; message: string; read: boolean; createdAt: number; callType?: 'audio' | 'video'; }
+ export interface AuditLog { id: string; actorId: string; actorName: string; action: string; targetType?: string; targetId?: string; targetName?: string; details?: string; createdAt: number; }
+ export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUsers: number; totalPosts: number; totalMessages: number; totalStories: number; pendingReports: number; activeSockets: number; uptimeSeconds: number; }
+ export interface GlobalSearchResults { users: User[]; posts: Post[]; }
+diff --git a/src/App.tsx b/src/App.tsx
+index 58426db..db02a88 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -78,6 +78,10 @@ export function MainApp() {
+     targetProfileId?: string,
+     targetPostId?: string
+   ) => {
++    setActiveChatPartner(null);
++    setIsMessengerDrawerOpen(false);
++    setIsGoLiveOpen(false);
++    setActiveViewerStream(null);
+     // Prevent non-developers from opening admin
+     if (view === 'admin' && !isDeveloper) {
+       setCurrentView('feed');
+diff --git a/src/components/CallModal.tsx b/src/components/CallModal.tsx
+index 8f3ef74..681998b 100644
+--- a/src/components/CallModal.tsx
++++ b/src/components/CallModal.tsx
+@@ -20,7 +20,6 @@ const CallModalView: React.FC = () => {
+     acceptCall, 
+     rejectCall, 
+     endCall, 
+-    simulatePartnerAnswer, 
+     localStreamRef, 
+     remoteStream, 
+     peerConnectionRef 
+@@ -33,7 +32,6 @@ const CallModalView: React.FC = () => {
+   const [isVideoDisabled, setIsVideoDisabled] = useState(false);
+   const [callDuration, setCallDuration] = useState(0);
+   const [isMinimized, setIsMinimized] = useState(false);
+-  const [ringingSeconds, setRingingSeconds] = useState(0);
+   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+ 
+   // Call duration counter
+@@ -47,17 +45,6 @@ const CallModalView: React.FC = () => {
+     return () => { if (interval) clearInterval(interval); };
+   }, [activeCall?.status]);
+ 
+-  // Outgoing ringing duration counter
+-  useEffect(() => {
+-    let interval: ReturnType<typeof setInterval> | undefined;
+-    if (activeCall?.status === 'calling' || activeCall?.status === 'ringing') {
+-      interval = setInterval(() => setRingingSeconds(p => p + 1), 1000);
+-    } else {
+-      setRingingSeconds(0);
+-    }
+-    return () => { if (interval) clearInterval(interval); };
+-  }, [activeCall?.status]);
+-
+   // Attach and play local video stream
+   const attachLocalStream = useCallback(() => {
+     const el = localVideoRef.current;
+@@ -308,14 +295,6 @@ const CallModalView: React.FC = () => {
+                     {activeCall.status !== 'connected' && (
+                       <p className="text-xs text-slate-400 mt-1">Connecting peer-to-peer via WebRTC...</p>
+                     )}
+-                    {ringingSeconds >= 2 && activeCall.status !== 'connected' && (
+-                      <button 
+-                        onClick={simulatePartnerAnswer} 
+-                        className="mt-6 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-full shadow-lg transition"
+-                      >
+-                        Answer as {activeCall.partnerName} (Test)
+-                      </button>
+-                    )}
+                   </div>
+                 )}
+ 
+@@ -362,7 +341,7 @@ const CallModalView: React.FC = () => {
+                 </p>
+                 
+ 
+-                {activeCall.status === 'connected' ? (
++                {activeCall.status === 'connected' && (
+                   <div className="flex items-center gap-1.5 mt-8">
+                     <span className="w-2 h-6 bg-emerald-500 rounded-full animate-bounce" />
+                     <span className="w-2 h-10 bg-emerald-400 rounded-full animate-bounce [animation-delay:0.15s]" />
+@@ -370,15 +349,6 @@ const CallModalView: React.FC = () => {
+                     <span className="w-2 h-12 bg-emerald-400 rounded-full animate-bounce [animation-delay:0.45s]" />
+                     <span className="w-2 h-5 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.6s]" />
+                   </div>
+-                ) : (
+-                  ringingSeconds >= 2 && (
+-                    <button 
+-                      onClick={simulatePartnerAnswer} 
+-                      className="mt-6 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-full shadow-lg transition"
+-                    >
+-                      Answer as {activeCall.partnerName} (Test)
+-                    </button>
+-                  )
+                 )}
+               </div>
+             )}
+diff --git a/src/components/ChatFloatingWindow.tsx b/src/components/ChatFloatingWindow.tsx
+index 5b540da..88c3cc8 100644
+--- a/src/components/ChatFloatingWindow.tsx
++++ b/src/components/ChatFloatingWindow.tsx
+@@ -3,6 +3,7 @@ import { User, Message } from '../types';
+ import { useAuth } from '../context/AuthContext';
+ import { useSocket } from '../context/SocketContext';
+ import { api } from '../services/api';
++import { assetUrl } from '../services/apiBase';
+ import { VoiceRecorder } from './VoiceRecorder';
+ import {
+   Phone,
+@@ -16,7 +17,9 @@ import {
+   Check,
+   CheckCheck,
+   Play,
+-  Pause
++  Pause,
++  Pencil,
++  Download
+ } from 'lucide-react';
+ 
+ interface ChatFloatingWindowProps {
+@@ -32,7 +35,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+     sendTyping,
+     markSeen,
+     startCall,
+-    onNewMessage
++    onNewMessage,
++    onMessageUpdated
+   } = useSocket();
+ 
+   const [messages, setMessages] = useState<Message[]>([]);
+@@ -41,6 +45,10 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+   const [isMinimized, setIsMinimized] = useState(false);
+   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
++  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
++  const [editingMessageText, setEditingMessageText] = useState('');
++  const [isUploadingFiles, setIsUploadingFiles] = useState(false);
++  const [uploadProgress, setUploadProgress] = useState(0);
+ 
+   const messagesEndRef = useRef<HTMLDivElement>(null);
+   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+@@ -91,6 +99,11 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+     };
+   }, [partner.id, user?.id]);
+ 
++  useEffect(() => onMessageUpdated(message => {
++    setMessages(current => current.map(item => item.id === message.id ? message : item));
++    setEditingMessageId(null);
++  }), [onMessageUpdated]);
++
+   // Scroll to bottom on new messages
+   useEffect(() => {
+     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+@@ -107,8 +120,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+     }, 1500);
+   };
+ 
+-  const handleSend = async (mediaData?: { mediaUrl: string; mediaType: 'image' | 'video' | 'audio'; audioDuration?: number }) => {
+-    if ((!inputText.trim() && !mediaData) || !user) return;
++  const handleSend = async (mediaData?: { mediaUrl: string; mediaType: 'image' | 'video' | 'audio'; audioDuration?: number }, attachments?: { url: string; name: string; mimeType: string; size: number }[]) => {
++    if ((!inputText.trim() && !mediaData && !attachments?.length) || !user) return;
+ 
+     const payload = {
+       receiverId: partner.id,
+@@ -117,7 +130,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+         mediaUrl: mediaData.mediaUrl,
+         mediaType: mediaData.mediaType,
+         audioDuration: mediaData.audioDuration
+-      })
++      }),
++      ...(attachments?.length ? { attachments } : {})
+     };
+ 
+     setInputText('');
+@@ -140,18 +154,38 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+     });
+   };
+ 
+-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+-    const file = e.target.files?.[0];
+-    if (!file) return;
++  const handleEditMessage = async (messageId: string) => {
++    try {
++      const updated = await api.editMessage(messageId, editingMessageText.trim());
++      setMessages(current => current.map(item => item.id === updated.id ? updated : item));
++      setEditingMessageId(null);
++    } catch (error) {
++      alert(error instanceof Error ? error.message : 'Could not edit this message.');
++    }
++  };
+ 
+-    const reader = new FileReader();
+-    reader.onloadend = () => {
+-      handleSend({
+-        mediaUrl: reader.result as string,
+-        mediaType: file.type.startsWith('video') ? 'video' : 'image'
+-      });
+-    };
+-    reader.readAsDataURL(file);
++  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
++    const files = Array.from(e.target.files || []);
++    e.target.value = '';
++    if (!files.length) return;
++    if (files.length > 10) { alert('Choose up to 10 files at a time.'); return; }
++    if (files.some(file => file.size > 15 * 1024 * 1024)) { alert('Each file must be 15 MB or smaller.'); return; }
++    setIsUploadingFiles(true);
++    setUploadProgress(0);
++    try {
++      const attachments = [];
++      for (let index = 0; index < files.length; index++) {
++        const file = files[index];
++        attachments.push({ url: await api.uploadFile(file), name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size });
++        setUploadProgress(Math.round(((index + 1) / files.length) * 100));
++      }
++      await handleSend(undefined, attachments);
++    } catch (error) {
++      alert(error instanceof Error ? error.message : 'Could not upload the selected files.');
++    } finally {
++      setIsUploadingFiles(false);
++      setUploadProgress(0);
++    }
+   };
+ 
+   const playVoiceMessage = (msgId: string, url?: string) => {
+@@ -285,6 +319,18 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+                   />
+                 )}
+ 
++                {msg.attachments?.map((attachment, attachmentIndex) => {
++                  const url = assetUrl(attachment.url);
++                  const isImage = attachment.mimeType.startsWith('image/');
++                  const isVideo = attachment.mimeType.startsWith('video/');
++                  return <div key={`${msg.id}-file-${attachmentIndex}`} className="mb-2 min-w-36 max-w-full">
++                    {isImage ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} loading="lazy" className="max-h-48 rounded-lg object-cover" /></a>
++                      : isVideo ? <video src={url} controls playsInline className="max-h-48 max-w-full rounded-lg" />
++                      : <a href={url} download={attachment.name} className="flex items-center gap-2 rounded-lg border border-current/20 p-2 text-xs underline"><Download size={14} />{attachment.name}</a>}
++                    <div className="mt-1 flex items-center justify-between gap-3 text-[10px] opacity-70"><span className="truncate">{attachment.name}</span><span className="shrink-0">{(attachment.size / (1024 * 1024)).toFixed(2)} MB</span><a href={url} download={attachment.name} aria-label={`Download ${attachment.name}`} className="shrink-0 underline">Download</a></div>
++                  </div>;
++                })}
++
+                 {/* Voice Note Audio Player */}
+                 {msg.mediaType === 'audio' && (
+                   <div className="flex items-center gap-2 py-1">
+@@ -310,7 +356,12 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+                 )}
+ 
+                 {/* Text Content */}
+-                {msg.text && <p className="leading-relaxed break-words">{msg.text}</p>}
++                {msg.text && editingMessageId === msg.id ? (
++                  <div className="min-w-52 space-y-2">
++                    <textarea value={editingMessageText} onChange={event => setEditingMessageText(event.target.value)} maxLength={4000} rows={3} className="w-full rounded-lg border border-white/30 bg-white/10 p-2 text-sm text-current outline-none" />
++                    <div className="flex justify-end gap-2"><button onClick={() => setEditingMessageId(null)} className="rounded-lg px-2 py-1 text-xs">Cancel</button><button onClick={() => void handleEditMessage(msg.id)} disabled={!editingMessageText.trim()} className="rounded-lg bg-white/20 px-2 py-1 text-xs font-bold disabled:opacity-50">Save</button></div>
++                  </div>
++                ) : msg.text && <p className="leading-relaxed break-words">{msg.text}{msg.editedAt && <span className="ml-1 text-[10px] opacity-70">Edited</span>}</p>}
+               </div>
+ 
+               {/* Status and Timestamp */}
+@@ -333,6 +384,9 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+                     )}
+                   </span>
+                 )}
++                {isMe && msg.text && !msg.editedAt && Date.now() - msg.createdAt <= 15 * 60 * 1000 && editingMessageId !== msg.id && (
++                  <button onClick={() => { setEditingMessageId(msg.id); setEditingMessageText(msg.text || ''); }} className="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-slate-200" title="Edit within 15 minutes"><Pencil size={10} />Edit</button>
++                )}
+               </div>
+             </div>
+           );
+@@ -373,6 +427,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+ 
+       {/* Footer / Input Area */}
+       <div className="p-2.5 bg-white border-t border-slate-100">
++        {isUploadingFiles && <div className="mb-2"><div className="mb-1 flex justify-between text-[10px] text-slate-500"><span>Uploading attachments…</span><span>{uploadProgress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-blue-600 transition-all" style={{ width: `${uploadProgress}%` }} /></div></div>}
+         {isRecordingVoice ? (
+           <VoiceRecorder
+             onSendVoice={handleVoiceSend}
+@@ -384,7 +439,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
+               <Image size={18} />
+               <input
+                 type="file"
+-                accept="image/*,video/*"
++                accept="image/*,video/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
++                multiple
+                 className="hidden"
+                 onChange={handleImageUpload}
+               />
+diff --git a/src/components/CreatePostModal.tsx b/src/components/CreatePostModal.tsx
+index a0ed929..fa295ef 100644
+--- a/src/components/CreatePostModal.tsx
++++ b/src/components/CreatePostModal.tsx
+@@ -40,6 +40,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
+   const [content, setContent] = useState('');
+   const [mediaUrl, setMediaUrl] = useState('');
+   const [mediaFile, setMediaFile] = useState<File | null>(null);
++  const [additionalMediaUrls, setAdditionalMediaUrls] = useState<string[]>([]);
++  const [additionalMediaFiles, setAdditionalMediaFiles] = useState<File[]>([]);
+   const [taggedFriends, setTaggedFriends] = useState<User[]>([]);
+   const [showTagPicker, setShowTagPicker] = useState(false);
+   const [error, setError] = useState('');
+@@ -56,25 +58,63 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
+   if (!isOpen) return null;
+ 
+   const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+-    const picked = e.target.files?.[0];
++    const pickedFiles = Array.from(e.target.files || []);
+     e.target.value = '';
+-    if (!picked) return;
++    if (pickedFiles.length === 0) return;
+     setError('');
+ 
+-    const isVid = picked.type.startsWith('video');
+-    if (videoOnly && !isVid) {
++    const hasVideo = pickedFiles.some(file => file.type.startsWith('video'));
++    if (videoOnly && (pickedFiles.length !== 1 || !hasVideo)) {
+       setError('Choose a video file to create a Reel.');
+       return;
+     }
+-    if (isVid && picked.size > 15 * 1024 * 1024) {
++    if (pickedFiles.length > 10) {
++      setError('You can add up to 10 images to a post.');
++      return;
++    }
++    if (hasVideo && pickedFiles.length > 1) {
++      setError('Choose one video or up to 10 images in a post.');
++      return;
++    }
++    if (pickedFiles.some(file => file.type.startsWith('video') && file.size > 15 * 1024 * 1024)) {
+       setError('Video is too large. Maximum size is 15 MB.');
+       return;
+     }
+-    const file = isVid ? picked : await compressImage(picked);
+-    setMediaType(isVid ? 'video' : 'image');
+-    setMediaFile(file);
+-    if (mediaUrl.startsWith('blob:')) URL.revokeObjectURL(mediaUrl);
+-    setMediaUrl(URL.createObjectURL(file));
++    const files = await Promise.all(pickedFiles.map(file => file.type.startsWith('video') ? file : compressImage(file)));
++    [mediaUrl, ...additionalMediaUrls].filter(url => url.startsWith('blob:')).forEach(URL.revokeObjectURL);
++    const urls = files.map(file => URL.createObjectURL(file));
++    setMediaType(hasVideo ? 'video' : 'image');
++    setMediaFile(files[0]);
++    setMediaUrl(urls[0]);
++    setAdditionalMediaFiles(files.slice(1));
++    setAdditionalMediaUrls(urls.slice(1));
++  };
++
++  const updateMediaOrder = (files: File[], urls: string[]) => {
++    setMediaFile(files[0] || null);
++    setMediaUrl(urls[0] || '');
++    setAdditionalMediaFiles(files.slice(1));
++    setAdditionalMediaUrls(urls.slice(1));
++    setMediaType(files[0]?.type.startsWith('video') ? 'video' : 'image');
++  };
++
++  const removeMediaAt = (index: number) => {
++    const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
++    const urls = [mediaUrl, ...additionalMediaUrls];
++    if (urls[index]?.startsWith('blob:')) URL.revokeObjectURL(urls[index]);
++    files.splice(index, 1);
++    urls.splice(index, 1);
++    updateMediaOrder(files, urls);
++  };
++
++  const moveMedia = (index: number, direction: -1 | 1) => {
++    const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
++    const urls = [mediaUrl, ...additionalMediaUrls];
++    const next = index + direction;
++    if (next < 0 || next >= files.length) return;
++    [files[index], files[next]] = [files[next], files[index]];
++    [urls[index], urls[next]] = [urls[next], urls[index]];
++    updateMediaOrder(files, urls);
+   };
+ 
+   const handleSubmit = async (e: React.FormEvent) => {
+@@ -88,11 +128,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
+     setIsSubmitting(true);
+     setError('');
+     try {
+-      const uploadedUrl = mediaFile ? await api.uploadFile(mediaFile) : undefined;
++      const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
++      const uploadedUrls = await Promise.all(files.map(file => api.uploadFile(file)));
+       await api.createPost({
+         content: content.trim(),
+-        mediaUrl: uploadedUrl,
+-        mediaType: uploadedUrl ? mediaType : undefined,
++        mediaUrl: uploadedUrls[0],
++        mediaUrls: uploadedUrls,
++        mediaType: uploadedUrls.length ? mediaType : undefined,
+         feeling: feeling || undefined,
+         privacy: forcePublic ? 'public' : privacy,
+         taggedUserIds: taggedFriends.map(f => f.id)
+@@ -105,9 +147,11 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
+       });
+ 
+       setContent('');
+-      if (mediaUrl.startsWith('blob:')) URL.revokeObjectURL(mediaUrl);
++      [mediaUrl, ...additionalMediaUrls].filter(url => url.startsWith('blob:')).forEach(URL.revokeObjectURL);
+       setMediaUrl('');
+       setMediaFile(null);
++      setAdditionalMediaUrls([]);
++      setAdditionalMediaFiles([]);
+       setTaggedFriends([]);
+       setShowTagPicker(false);
+       setFeeling(null);
+@@ -210,18 +254,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
+           )}
+ 
+           {mediaUrl && (
+-            <div className="relative mt-3 rounded-2xl overflow-hidden border border-slate-200 bg-slate-50">
+-              {mediaType === 'image' ? (
+-                <img src={mediaUrl} alt="media preview" className="w-full max-h-72 object-cover" />
+-              ) : (
+-                <video src={mediaUrl} controls className="w-full max-h-72 object-cover" />
+-              )}
+-              <button
+-                onClick={() => setMediaUrl('')}
+-                className="absolute top-3 right-3 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full transition"
+-              >
+-                <X size={16} />
+-              </button>
++            <div className={`mt-3 grid gap-2 ${mediaType === 'image' && additionalMediaUrls.length ? 'grid-cols-2' : 'grid-cols-1'}`}>
++              {[mediaUrl, ...additionalMediaUrls].map((url, index) => <div key={url} className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
++                {mediaType === 'video' ? <video src={url} controls className="max-h-72 w-full object-contain" /> : <img src={url} alt={`Post image ${index + 1}`} className="h-40 w-full object-cover" />}
++                <div className="absolute right-1 top-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
++                  {mediaType === 'image' && <><button type="button" disabled={index === 0} onClick={() => moveMedia(index, -1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image earlier">←</button><button type="button" disabled={index === additionalMediaUrls.length} onClick={() => moveMedia(index, 1)} className="rounded-full bg-black/65 p-1.5 text-white disabled:opacity-30" aria-label="Move image later">→</button></>}
++                  <button type="button" onClick={() => removeMediaAt(index)} className="rounded-full bg-black/65 p-1.5 text-white" aria-label="Remove attachment"><X size={14} /></button>
++                </div>
++              </div>)}
+             </div>
+           )}
+         </div>
+@@ -246,6 +286,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
+                 <input
+                   type="file"
+                   accept={videoOnly ? 'video/*' : 'image/*,video/*'}
++                  multiple={!videoOnly}
+                   className="hidden"
+                   onChange={handleMediaUpload}
+                 />
+diff --git a/src/components/Feed.tsx b/src/components/Feed.tsx
+index 8547728..0ad5993 100644
+--- a/src/components/Feed.tsx
++++ b/src/components/Feed.tsx
+@@ -1,6 +1,6 @@
+ import { usePreferences } from '../context/PreferencesContext';
+ import { initialsAvatar } from '../utils/avatar';
+-import React, { useState, useEffect } from 'react';
++import React, { useState, useEffect, useRef } from 'react';
+ import { useAuth } from '../context/AuthContext';
+ import { useSocket } from '../context/SocketContext';
+ import { api } from '../services/api';
+@@ -32,6 +32,8 @@ export const Feed: React.FC<FeedProps> = ({
+   const [posts, setPosts] = useState<Post[]>([]);
+   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+   const [isLoading, setIsLoading] = useState(true);
++  const [isRefreshing, setIsRefreshing] = useState(false);
++  const touchStartY = useRef<number | null>(null);
+ 
+   const loadPosts = async () => {
+     setIsLoading(true);
+@@ -71,8 +73,18 @@ export const Feed: React.FC<FeedProps> = ({
+     setPosts(prev => prev.filter(p => p.id !== postId));
+   };
+ 
++  const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
++    const start = touchStartY.current;
++    touchStartY.current = null;
++    const end = event.changedTouches[0]?.clientY;
++    if (start === null || end === undefined || window.scrollY > 4 || end - start < 90 || isRefreshing) return;
++    setIsRefreshing(true);
++    loadPosts().finally(() => setIsRefreshing(false));
++  };
++
+   return (
+-    <div className="max-w-[620px] mx-auto pb-16 space-y-4">
++    <div className="max-w-[620px] mx-auto pb-16 space-y-4" onTouchStart={event => { touchStartY.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={handleTouchEnd}>
++      {isRefreshing && <p className="py-1 text-center text-xs font-semibold text-blue-600">Refreshing feed…</p>}
+       {/* Active Live Stream Banner */}
+       {liveStream && (
+         <LiveFeedBanner
+diff --git a/src/components/GoLiveModal.tsx b/src/components/GoLiveModal.tsx
+index 8f0809a..4a9dac4 100644
+--- a/src/components/GoLiveModal.tsx
++++ b/src/components/GoLiveModal.tsx
+@@ -60,6 +60,12 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+   const [isAudioMuted, setIsAudioMuted] = useState(false);
+   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+   const [videoQuality, setVideoQuality] = useState<'360p' | '720p' | '1080p' | '4k'>('720p');
++  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
++  const [selectedCameraId, setSelectedCameraId] = useState('');
++  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState('');
++  const [availablePages, setAvailablePages] = useState<{ id: string; name: string }[]>([]);
++  const [taggedPageIds, setTaggedPageIds] = useState<string[]>([]);
++  const [pageSearch, setPageSearch] = useState('');
+ 
+   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
+   const mediaStreamRef = useRef<MediaStream | null>(null);
+@@ -82,20 +88,22 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+       try {
+         const stream = await navigator.mediaDevices.getUserMedia({
+           video: {
++            ...(selectedCameraId ? { deviceId: { exact: selectedCameraId } } : {}),
+             width: { ideal: ({ '360p': 640, '720p': 1280, '1080p': 1920, '4k': 3840 } as const)[videoQuality] },
+             height: { ideal: ({ '360p': 360, '720p': 720, '1080p': 1080, '4k': 2160 } as const)[videoQuality] }
+           },
+-          audio: true
++          audio: { ...(selectedMicrophoneId ? { deviceId: { exact: selectedMicrophoneId } } : {}), echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+         });
+         if (isMounted) {
+           mediaStreamRef.current = stream;
++          setDevices(await navigator.mediaDevices.enumerateDevices());
+           if (videoPreviewRef.current) {
+             videoPreviewRef.current.srcObject = stream;
+           }
+           setHasCameraPermission(true);
+         }
+       } catch (err) {
+-        console.warn('Camera access not granted or unavailable, using broadcast studio simulator:', err);
++        console.warn('Camera or microphone access is unavailable:', err);
+         if (isMounted) {
+           setHasCameraPermission(false);
+         }
+@@ -111,7 +119,12 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+         mediaStreamRef.current = null;
+       }
+     };
+-  }, [isOpen, isEligible]);
++  }, [isOpen, isEligible, videoQuality, selectedCameraId, selectedMicrophoneId]);
++
++  useEffect(() => {
++    if (!isOpen) return;
++    api.getPages().then(pages => setAvailablePages(pages.map(page => ({ id: page.id, name: page.name })))).catch(() => setAvailablePages([]));
++  }, [isOpen]);
+ 
+   useEffect(() => {
+     if (!isBroadcasting || !currentSession) return;
+@@ -123,7 +136,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+           const stream = mediaStreamRef.current;
+           if (!stream) return;
+           livePeersRef.current.get(message.fromUserId)?.close();
+-          const peer = new RTCPeerConnection(liveRtcConfig);
++          const iceConfig = await api.getCallIceConfig().catch(() => liveRtcConfig);
++          const peer = new RTCPeerConnection(iceConfig);
+           livePeersRef.current.set(message.fromUserId, peer);
+           stream.getTracks().forEach(track => peer.addTrack(track, stream));
+           peer.onicecandidate = event => {
+@@ -242,7 +256,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+         alert('Allow camera access before starting a live video.');
+         return;
+       }
+-      const res = await api.startLive(streamTitle);
++      const res = await api.startLive(streamTitle, taggedPageIds);
+       if (res.success && res.live) {
+         setCurrentSession(res.live);
+         setComments(res.live.comments || []);
+@@ -567,6 +581,29 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+                 )}
+               </div>
+ 
++              {!isBroadcasting && (
++                <div className="space-y-3 border-b border-slate-800 p-3">
++                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Camera
++                    <select value={selectedCameraId} onChange={event => setSelectedCameraId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
++                      <option value="">Default camera</option>{devices.filter(device => device.kind === 'videoinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Camera'}</option>)}
++                    </select>
++                  </label>
++                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Microphone
++                    <select value={selectedMicrophoneId} onChange={event => setSelectedMicrophoneId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
++                      <option value="">Default microphone</option>{devices.filter(device => device.kind === 'audioinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Microphone'}</option>)}
++                    </select>
++                  </label>
++                  <div>
++                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Tag Pages ({taggedPageIds.length}/22)</label>
++                    <input value={pageSearch} onChange={event => setPageSearch(event.target.value)} placeholder="Search pages" className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder:text-slate-500" />
++                    <div className="mt-1 max-h-24 overflow-y-auto">{availablePages.filter(page => page.name.toLowerCase().includes(pageSearch.toLowerCase())).map(page => {
++                      const checked = taggedPageIds.includes(page.id);
++                      return <label key={page.id} className="flex cursor-pointer items-center gap-2 py-1 text-xs text-slate-300"><input type="checkbox" checked={checked} disabled={!checked && taggedPageIds.length >= 22} onChange={() => setTaggedPageIds(current => checked ? current.filter(id => id !== page.id) : [...current, page.id].slice(0, 22))} />{page.name}</label>;
++                    })}</div>
++                  </div>
++                </div>
++              )}
++
+               {/* Comments Feed */}
+               <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                 {comments.length === 0 ? (
+diff --git a/src/components/LiveViewerModal.tsx b/src/components/LiveViewerModal.tsx
+index 985b1b8..cfa6cff 100644
+--- a/src/components/LiveViewerModal.tsx
++++ b/src/components/LiveViewerModal.tsx
+@@ -53,45 +53,53 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
+   }, []);
+ 
+   useEffect(() => {
+-    const peer = new RTCPeerConnection(liveRtcConfig);
+-    peerRef.current = peer;
+-    peer.ontrack = event => {
+-      const incoming = event.streams[0] || new MediaStream([event.track]);
+-      setRemoteVideo(incoming);
+-      if (videoRef.current) videoRef.current.srcObject = incoming;
+-    };
+-    peer.onicecandidate = event => {
+-      if (event.candidate) socket.emit('live:signal', {
+-        targetUserId: currentStream.hostId,
+-        streamId: currentStream.id,
+-        signal: { type: 'candidate', candidate: event.candidate }
+-      });
+-    };
++    let cancelled = false;
++    let peer: RTCPeerConnection | null = null;
++    void api.getCallIceConfig().catch(() => liveRtcConfig).then(iceConfig => {
++      if (cancelled) return;
++      peer = new RTCPeerConnection(iceConfig);
++      peerRef.current = peer;
++      peer.ontrack = event => {
++        const incoming = event.streams[0] || new MediaStream([event.track]);
++        setRemoteVideo(incoming);
++        if (videoRef.current) videoRef.current.srcObject = incoming;
++      };
++      peer.onicecandidate = event => {
++        if (event.candidate) socket.emit('live:signal', {
++          targetUserId: currentStream.hostId,
++          streamId: currentStream.id,
++          signal: { type: 'candidate', candidate: event.candidate }
++        });
++      };
++      socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'watch' } });
++    });
+     const unsubscribeSignal = onLiveSignal(async message => {
+       if (message.streamId !== currentStream.id || message.fromUserId !== currentStream.hostId) return;
++      const activePeer = peer;
++      if (!activePeer) return;
+       try {
+         const signal = message.signal;
+         if (signal.type === 'offer' && signal.description) {
+-          await peer.setRemoteDescription(new RTCSessionDescription(signal.description));
++          await activePeer.setRemoteDescription(new RTCSessionDescription(signal.description));
+           while (queuedCandidatesRef.current.length) {
+             const candidate = queuedCandidatesRef.current.shift();
+-            if (candidate) await peer.addIceCandidate(new RTCIceCandidate(candidate));
++            if (candidate) await activePeer.addIceCandidate(new RTCIceCandidate(candidate));
+           }
+-          const answer = await peer.createAnswer();
+-          await peer.setLocalDescription(answer);
+-          socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'answer', description: peer.localDescription } });
++          const answer = await activePeer.createAnswer();
++          await activePeer.setLocalDescription(answer);
++          socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'answer', description: activePeer.localDescription } });
+         } else if (signal.type === 'candidate' && signal.candidate) {
+-          if (peer.remoteDescription) await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
++          if (activePeer.remoteDescription) await activePeer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+           else queuedCandidatesRef.current.push(signal.candidate);
+         }
+       } catch (error) {
+         console.warn('Could not connect to live video:', error);
+       }
+     });
+-    socket.emit('live:signal', { targetUserId: currentStream.hostId, streamId: currentStream.id, signal: { type: 'watch' } });
+     return () => {
+       unsubscribeSignal();
+-      peer.close();
++      cancelled = true;
++      peer?.close();
+       peerRef.current = null;
+       queuedCandidatesRef.current = [];
+       setRemoteVideo(null);
+diff --git a/src/components/Navbar.tsx b/src/components/Navbar.tsx
+index c1bc2a6..0f25741 100644
+--- a/src/components/Navbar.tsx
++++ b/src/components/Navbar.tsx
+@@ -97,6 +97,12 @@ export const Navbar: React.FC<NavbarProps> = ({
+   const searchInputRef = useRef<HTMLInputElement>(null);
+   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
+ 
++  useEffect(() => {
++    setShowProfileMenu(false);
++    setShowNotifications(false);
++    setShowSearchDropdown(false);
++  }, [currentView]);
++
+   // App Pages definition for search
+   const searchablePages: PageItem[] = useMemo(() => [
+     {
+@@ -930,6 +936,7 @@ export const Navbar: React.FC<NavbarProps> = ({
+                           } else if (n.type === 'live_stream') onNavigate('feed');
+                           else if (n.type === 'friend_request') onNavigate('friends');
+                           else if (n.type === 'friend_accept' || n.type === 'missed_call') onNavigate('profile', n.actorId);
++                          else if (n.type === 'page_follow') onNavigate('pages');
+                         }}
+                         className={`p-3.5 flex items-start gap-3 hover:bg-slate-50 transition cursor-pointer ${
+                           !n.read ? 'bg-blue-50/50' : ''
+diff --git a/src/components/PostCard.tsx b/src/components/PostCard.tsx
+index 9b6a9be..e7e1064 100644
+--- a/src/components/PostCard.tsx
++++ b/src/components/PostCard.tsx
+@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
+ import { Post, ReactionType, User } from '../types';
+ import { useAuth } from '../context/AuthContext';
+ import { api } from '../services/api';
++import { assetUrl } from '../services/apiBase';
+ import { VerifiedBadge } from './VerifiedBadge';
+ import confetti from 'canvas-confetti';
+ import {
+@@ -20,7 +21,9 @@ import {
+   Globe,
+   Users,
+   Send,
+-  Download
++  Download,
++  Volume2,
++  VolumeX
+ } from 'lucide-react';
+ 
+ interface PostCardProps {
+@@ -28,6 +31,8 @@ interface PostCardProps {
+   onPostUpdated: (post: Post) => void;
+   onPostDeleted: (postId: string) => void;
+   onViewProfile: (userId: string) => void;
++  reelMode?: boolean;
++  detailMode?: boolean;
+ }
+ 
+ const REACTIONS: { type: ReactionType; label: string; emoji: string; color: string }[] = [
+@@ -43,7 +48,9 @@ export const PostCard: React.FC<PostCardProps> = ({
+   post,
+   onPostUpdated,
+   onPostDeleted,
+-  onViewProfile
++  onViewProfile,
++  reelMode = false,
++  detailMode = false
+ }) => {
+   const { user, isDeveloper, updateUser } = useAuth();
+   const { t } = usePreferences();
+@@ -63,6 +70,30 @@ export const PostCard: React.FC<PostCardProps> = ({
+   const [isSavingEdit, setIsSavingEdit] = useState(false);
+   const [editError, setEditError] = useState('');
+   const cardRef = useRef<HTMLDivElement>(null);
++  const videoRef = useRef<HTMLVideoElement>(null);
++  const [showDetailModal, setShowDetailModal] = useState(false);
++  const [showViewersModal, setShowViewersModal] = useState(false);
++  const [postViewers, setPostViewers] = useState<{ id: string; name: string; avatar: string; viewedAt: number }[]>([]);
++  const [loadingViewers, setLoadingViewers] = useState(false);
++  const [isReelMuted, setIsReelMuted] = useState(true);
++
++  const openPostDetail = () => {
++    if (detailMode || showDetailModal) return;
++    window.history.pushState({ echatPostDetail: post.id }, '', `${window.location.pathname}${window.location.search}#post-${encodeURIComponent(post.id)}`);
++    setShowDetailModal(true);
++  };
++
++  const closePostDetail = () => {
++    setShowDetailModal(false);
++    if (window.history.state?.echatPostDetail === post.id) window.history.back();
++  };
++
++  useEffect(() => {
++    if (!showDetailModal) return;
++    const handlePopState = () => setShowDetailModal(false);
++    window.addEventListener('popstate', handlePopState);
++    return () => window.removeEventListener('popstate', handlePopState);
++  }, [showDetailModal]);
+ 
+   useEffect(() => {
+     const node = cardRef.current;
+@@ -78,6 +109,33 @@ export const PostCard: React.FC<PostCardProps> = ({
+     return () => observer.disconnect();
+   }, [post.id, user?.id]);
+ 
++  useEffect(() => {
++    const video = videoRef.current;
++    if (!reelMode || !video || typeof IntersectionObserver === 'undefined') return;
++    const observer = new IntersectionObserver(entries => {
++      const visible = entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= 0.65);
++      if (visible) video.play().catch(() => {});
++      else video.pause();
++    }, { threshold: [0, 0.65, 1] });
++    observer.observe(video);
++    return () => { observer.disconnect(); video.pause(); };
++  }, [reelMode, post.id]);
++
++  const handleCardClick = (event: React.MouseEvent<HTMLDivElement>) => {
++    if (detailMode) return;
++    const target = event.target as HTMLElement;
++    if (target.closest('button,a,input,textarea,select,video,[role="dialog"]')) return;
++    openPostDetail();
++  };
++
++  const handleLoadPostViewers = async () => {
++    setShowViewersModal(true);
++    setLoadingViewers(true);
++    try { setPostViewers(await api.getPostViewers(post.id)); }
++    catch (err) { alert(err instanceof Error ? err.message : 'Could not load viewers.'); }
++    finally { setLoadingViewers(false); }
++  };
++
+   // Safe author access
+   const author: Partial<User> & { id: string; name: string; avatar: string } = post.author || {
+     id: post.authorId,
+@@ -101,6 +159,7 @@ export const PostCard: React.FC<PostCardProps> = ({
+   };
+ 
+   const isSaved = Boolean(user?.savedPosts?.includes(post.id));
++  const postMediaUrls = post.mediaUrls?.length ? post.mediaUrls : (post.mediaUrl ? [post.mediaUrl] : []);
+ 
+   const handleToggleSave = async () => {
+     if (!user) return;
+@@ -185,7 +244,7 @@ export const PostCard: React.FC<PostCardProps> = ({
+   const displayName = isDevAuthor ? 'EChat Official - Developer' : author.name;
+ 
+   return (
+-    <div ref={cardRef} id={`post-${post.id}`} className="bg-white rounded-2xl shadow-xs border border-slate-200/90 overflow-hidden transition scroll-mt-20">
++    <div ref={cardRef} id={`post-${post.id}`} onClick={handleCardClick} role={detailMode ? undefined : 'button'} tabIndex={detailMode ? undefined : 0} onKeyDown={detailMode ? undefined : e => { if (e.key === 'Enter' && e.target === e.currentTarget) openPostDetail(); }} className={`bg-white rounded-2xl shadow-xs border border-slate-200/90 overflow-hidden transition scroll-mt-20 ${detailMode ? '' : 'cursor-pointer'}`}>
+       {/* Post Header */}
+       <div className="p-4 flex items-center justify-between">
+         <div className="flex items-center gap-3">
+@@ -261,9 +320,9 @@ export const PostCard: React.FC<PostCardProps> = ({
+                 {t('copy_link')}
+               </button>
+ 
+-              {post.mediaUrl && (
++              {postMediaUrls.length > 0 && (
+                 <a
+-                  href={post.mediaUrl}
++                  href={assetUrl(postMediaUrls[0])}
+                   download
+                   target="_blank"
+                   rel="noreferrer"
+@@ -427,17 +486,16 @@ export const PostCard: React.FC<PostCardProps> = ({
+       )}
+ 
+       {/* Post Media (Image / Video) */}
+-      {post.mediaUrl && (
+-        <div className="relative bg-slate-900 max-h-[500px] overflow-hidden flex items-center justify-center">
++      {postMediaUrls.length > 0 && (
++        <div className={`relative bg-slate-900 overflow-hidden flex items-center justify-center ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`}>
+           {post.mediaType === 'video' ? (
+-            <video src={post.mediaUrl} controls className="w-full max-h-[500px] object-contain" />
++            <video ref={videoRef} src={assetUrl(postMediaUrls[0])} controls playsInline preload={reelMode ? 'metadata' : 'none'} muted={reelMode ? isReelMuted : false} className={`w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
+           ) : (
+-            <img
+-              src={post.mediaUrl}
+-              alt="post attachment"
+-              className="w-full max-h-[500px] object-cover cursor-pointer hover:opacity-95 transition"
+-            />
++            <div className={`grid w-full gap-0.5 ${postMediaUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
++              {postMediaUrls.slice(0, 10).map((mediaUrl, index) => <img key={`${post.id}-${index}`} src={assetUrl(mediaUrl)} alt={`Post attachment ${index + 1}`} loading="lazy" className={`w-full object-cover cursor-pointer hover:opacity-95 transition ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'} ${postMediaUrls.length > 4 && index > 3 ? 'hidden' : ''}`} />)}
++            </div>
+           )}
++          {reelMode && <button type="button" onClick={event => { event.stopPropagation(); setIsReelMuted(value => !value); }} aria-label={isReelMuted ? 'Unmute Reel' : 'Mute Reel'} className="absolute bottom-3 right-3 rounded-full bg-black/70 p-2 text-white">{isReelMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>}
+         </div>
+       )}
+ 
+@@ -471,7 +529,9 @@ export const PostCard: React.FC<PostCardProps> = ({
+             {(post.comments || []).length} comments
+           </button>
+           <span>{post.sharesCount || 0} shares</span>
+-          <span>{post.viewsCount || 0} views</span>
++          {user?.id === post.authorId ? (
++            <button onClick={handleLoadPostViewers} className="hover:underline" title="See who viewed this post">Viewed by {post.viewsCount || 0}</button>
++          ) : <span>{post.viewsCount || 0} views</span>}
+         </div>
+       </div>
+ 
+@@ -644,6 +704,24 @@ export const PostCard: React.FC<PostCardProps> = ({
+           </div>
+         </div>
+       )}
++
++      {showDetailModal && !detailMode && (
++        <div role="dialog" aria-modal="true" aria-label="Post details" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-2 sm:p-5" onClick={closePostDetail}>
++          <div className="relative max-h-[96vh] w-full max-w-3xl overflow-y-auto rounded-2xl" onClick={e => e.stopPropagation()}>
++            <button onClick={closePostDetail} aria-label="Close post" className="sticky top-2 z-20 float-right mr-2 mt-2 rounded-full bg-white p-2 text-slate-700 shadow"><span aria-hidden="true">×</span></button>
++            <PostCard post={post} onPostUpdated={onPostUpdated} onPostDeleted={onPostDeleted} onViewProfile={onViewProfile} detailMode />
++          </div>
++        </div>
++      )}
++
++      {showViewersModal && (
++        <div role="dialog" aria-modal="true" aria-label="Post viewers" className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onClick={() => setShowViewersModal(false)}>
++          <section className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
++            <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-900">Post viewers</h2><button onClick={() => setShowViewersModal(false)} className="rounded-full p-2 hover:bg-slate-100" aria-label="Close">×</button></div>
++            {loadingViewers ? <p className="py-6 text-center text-sm text-slate-500">Loading viewers…</p> : postViewers.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">No viewers yet.</p> : <div className="max-h-[60vh] space-y-3 overflow-y-auto">{postViewers.map(viewer => <div key={viewer.id} className="flex items-center gap-3"><img src={viewer.avatar || initialsAvatar(viewer.name)} alt="" className="h-10 w-10 rounded-full object-cover"/><span className="flex-1 text-sm font-semibold text-slate-800">{viewer.name}</span><time className="text-xs text-slate-500">{new Date(viewer.viewedAt).toLocaleString()}</time></div>)}</div>}
++          </section>
++        </div>
++      )}
+     </div>
+   );
+ };
+diff --git a/src/context/AuthContext.tsx b/src/context/AuthContext.tsx
+index a444409..cb48383 100644
+--- a/src/context/AuthContext.tsx
++++ b/src/context/AuthContext.tsx
+@@ -15,17 +15,12 @@ import {
+ } from 'firebase/firestore';
+ import { auth, db } from '../services/firebase';
+ import { 
+-  createUser as dbCreateUser, 
+   getUserById, 
+-  getUserByEmail, 
+-  ensureSeedAdminUser,
+-  hashPassword 
++  getUserByEmail
+ } from '../services/db';
+ import { User } from '../types';
+ import { api } from '../services/api';
+ 
+-const ADMIN_EMAIL = 'eldermoses89@gmail.com';
+-
+ interface AuthContextType {
+   user: User | null;
+   isLoading: boolean;
+@@ -65,9 +60,13 @@ function syncServerProfile(profile: { name: string; avatar: string; coverPhoto:
+   }).catch(() => { /* server may be waking up; retried on next load */ });
+ }
+ 
++function isRemovedDemoAccount(profile: Pick<User, 'id' | 'name'>): boolean {
++  return profile.id === 'user_admin_elder' || /^elder moses\s*\(test\)$/i.test(profile.name.trim());
++}
++
+ // Friends and friend requests live on the Echat server, not in Firebase. Without this merge the
+ // UI keeps showing the stale Firebase copy, so "Add Friend" appears to do nothing.
+-async function withServerSocial<T extends { friends: string[]; friendRequestsSent: string[]; friendRequestsReceived: string[]; savedPosts?: string[]; blockedUsers?: string[]; privacySettings?: unknown }>(profile: T): Promise<T> {
++async function withServerSocial<T extends { friends: string[]; friendRequestsSent: string[]; friendRequestsReceived: string[]; savedPosts?: string[]; blockedUsers?: string[]; privacySettings?: unknown; role?: User['role']; isVerified?: boolean; isOfficialDeveloper?: boolean }>(profile: T): Promise<T> {
+   try {
+     const me = await api.getMe();
+     if (!me) return profile;
+@@ -78,7 +77,10 @@ async function withServerSocial<T extends { friends: string[]; friendRequestsSen
+       friendRequestsReceived: me.friendRequestsReceived ?? profile.friendRequestsReceived,
+       savedPosts: me.savedPosts ?? profile.savedPosts ?? [],
+       blockedUsers: me.blockedUsers ?? profile.blockedUsers ?? [],
+-      privacySettings: me.privacySettings ?? profile.privacySettings
++      privacySettings: me.privacySettings ?? profile.privacySettings,
++      role: me.role ?? profile.role,
++      isVerified: me.isVerified ?? profile.isVerified,
++      isOfficialDeveloper: me.isOfficialDeveloper ?? profile.isOfficialDeveloper
+     };
+   } catch {
+     return profile;
+@@ -104,6 +106,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+         if (!profile && currentFirebaseUser.email) {
+           profile = await getUserByEmail(currentFirebaseUser.email);
+         }
++        if (profile && isRemovedDemoAccount(profile)) {
++          await signOut(auth);
++          localStorage.removeItem('echat_user_id');
++          localStorage.removeItem('echat_token');
++          setUser(null);
++          setIsLoading(false);
++          return;
++        }
+         if (profile) {
+           localStorage.setItem('echat_user_id', profile.id);
+           localStorage.setItem('echat_token', profile.id);
+@@ -150,23 +160,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+   };
+ 
+   useEffect(() => {
+-    ensureSeedAdminUser().catch(console.error);
+     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+       if (firebaseUser) {
+         try {
+           const userDoc = await getUserById(firebaseUser.uid);
+-          if (userDoc) {
++          if (userDoc && isRemovedDemoAccount(userDoc)) {
++            await signOut(auth);
++            localStorage.removeItem('echat_user_id');
++            localStorage.removeItem('echat_token');
++            setUser(null);
++          } else if (userDoc) {
+             localStorage.setItem('echat_user_id', userDoc.id);
+             localStorage.setItem('echat_token', userDoc.id);
+-            setUser(userDoc);
++            setUser(await withServerSocial(userDoc));
+             syncServerProfile(userDoc);
+             withServerSocial(userDoc).then(setUser);
+           } else if (firebaseUser.email) {
+             const byEmail = await getUserByEmail(firebaseUser.email);
+-            if (byEmail) {
++            if (byEmail && isRemovedDemoAccount(byEmail)) {
++              await signOut(auth);
++              localStorage.removeItem('echat_user_id');
++              localStorage.removeItem('echat_token');
++              setUser(null);
++            } else if (byEmail) {
+               localStorage.setItem('echat_user_id', byEmail.id);
+               localStorage.setItem('echat_token', byEmail.id);
+-              setUser(byEmail);
++              setUser(await withServerSocial(byEmail));
+               syncServerProfile(byEmail);
+               withServerSocial(byEmail).then(setUser);
+             }
+@@ -196,7 +215,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+         profile = await getUserByEmail(cleanEmail);
+       }
+       if (!profile) {
+-        const isDeveloper = cleanEmail === ADMIN_EMAIL;
+         profile = {
+           id: uid,
+           name: cred.user.displayName || cleanEmail.split('@')[0],
+@@ -209,10 +227,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+           location: 'Global',
+           work: '',
+           education: '',
+-          role: isDeveloper ? 'developer' : 'user',
+-          isVerified: isDeveloper,
+-          isOfficialDeveloper: isDeveloper,
+-          boostsCount: isDeveloper ? 420 : 0,
++          role: 'user',
++          isVerified: false,
++          isOfficialDeveloper: false,
++          boostsCount: 0,
+           boostedBy: [],
+           isBlocked: false,
+           isOnline: true,
+@@ -224,6 +242,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+         };
+         await setDoc(doc(db, 'users', uid), profile, { merge: true });
+       } else {
++        if (isRemovedDemoAccount(profile)) {
++          await signOut(auth);
++          throw new Error('This legacy demo account was removed. Please use your personal account.');
++        }
+         await updateDoc(doc(db, 'users', profile.id), {
+           isOnline: true,
+           lastSeen: Date.now()
+@@ -244,6 +266,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+       try {
+         await api.register({ name: profile.name, email: cleanEmail, password, dob: profile.dob || '2000-01-01', id: profile.id, termsAccepted: true });
+       } catch {}
++      setUser(await withServerSocial(profile));
+ 
+     } catch (firebaseErr: any) {
+       console.warn('Firebase login failed, trying backend fallback:', firebaseErr);
+@@ -276,8 +299,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+     try {
+       const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, data.password);
+       const uid = userCredential.user.uid;
+-      const isDeveloper = cleanEmail === ADMIN_EMAIL;
+-
+       const newUser: User = {
+         id: uid,
+         name: data.name,
+@@ -291,10 +312,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+         location: data.location || 'Global',
+         work: '',
+         education: '',
+-        role: isDeveloper ? 'developer' : 'user',
+-        isVerified: isDeveloper,
+-        isOfficialDeveloper: isDeveloper,
+-        boostsCount: isDeveloper ? 420 : 0,
++        role: 'user',
++        isVerified: false,
++        isOfficialDeveloper: false,
++        boostsCount: 0,
+         boostedBy: [],
+         isBlocked: false,
+         isOnline: true,
+@@ -315,9 +336,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+       // ✅ FIX: Also create in Express backend so friends/call API works
+       try {
+         await api.register({ ...data, email: cleanEmail, id: uid });
+-      } catch (e) {
+-        console.log('Backend sync (expected if already exists):', e);
++      } catch {
++        // Firebase remains authoritative; backend registration may already exist.
+       }
++      setUser(await withServerSocial(newUser));
+ 
+       // Profile picture chosen from the device gallery: shrink, upload, then save it on the profile.
+       if (data.avatarFile) {
+@@ -404,7 +426,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
+     setUser(prev => (prev ? { ...prev, ...updated } : updated));
+   };
+ 
+-  const isDeveloper = Boolean(user && user.email?.toLowerCase().trim() === ADMIN_EMAIL);
++  const isDeveloper = Boolean(user && user.role === 'developer' && user.isOfficialDeveloper);
+ 
+   return (
+     <AuthContext.Provider value={{ 
+@@ -430,4 +452,4 @@ export const useAuth = () => {
+   const context = useContext(AuthContext);
+   if (!context) throw new Error('useAuth must be used within an AuthProvider');
+   return context;
+-};
+\ No newline at end of file
++};
+diff --git a/src/context/SocketContext.tsx b/src/context/SocketContext.tsx
+index f4047aa..f52e823 100644
+--- a/src/context/SocketContext.tsx
++++ b/src/context/SocketContext.tsx
+@@ -1,4 +1,5 @@
+ import { wsUrl } from '../services/apiBase';
++import { api } from '../services/api';
+ import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+ import { useAuth } from './AuthContext';
+ import { Message, Post, Story, LiveStream, LiveComment, Notification as AppNotification } from '../types';
+@@ -43,7 +44,6 @@ interface SocketContextType {
+   acceptCall: () => Promise<void>;
+   rejectCall: () => Promise<void>;
+   endCall: () => Promise<void>;
+-  simulatePartnerAnswer: () => Promise<void>;
+   sendTyping: (receiverId: string, isTyping: boolean) => void;
+   markSeen: (senderId: string) => void;
+   peerConnectionRef: React.MutableRefObject<RTCPeerConnection | null>;
+@@ -51,6 +51,7 @@ interface SocketContextType {
+   remoteStream: MediaStream | null;
+   socket: any;
+   onNewMessage: (cb: (msg: Message) => void) => () => void;
++  onMessageUpdated: (cb: (msg: Message) => void) => () => void;
+   onPostUpdated: (cb: (post: Post) => void) => () => void;
+   onPostDeleted: (cb: (postId: string) => void) => () => void;
+   onNotification: (cb: (notification: AppNotification) => void) => () => void;
+@@ -85,66 +86,14 @@ const ICE_CONFIG: RTCConfiguration = {
+           username: import.meta.env.VITE_TURN_USERNAME ?? '',
+           credential: import.meta.env.VITE_TURN_CREDENTIAL ?? ''
+         }]
+-      : [{
+-          urls: [
+-            'turn:openrelay.metered.ca:80',
+-            'turn:openrelay.metered.ca:443',
+-            'turn:openrelay.metered.ca:443?transport=tcp'
+-          ],
+-          username: 'openrelayproject',
+-          credential: 'openrelayproject'
+-        }])
++      : [])
+   ],
+   iceCandidatePoolSize: 4
+ };
+ 
+-// Generates fallback media stream with real audio and video tracks if camera/mic is denied or unavailable in iframe
+-function createFallbackMediaStream(callType: 'audio' | 'video'): MediaStream {
+-  const stream = new MediaStream();
+-
+-  // Create subtle audio tone track
+-  try {
+-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+-    if (AudioCtx) {
+-      const audioCtx = new AudioCtx();
+-      const dest = audioCtx.createMediaStreamDestination();
+-      const osc = audioCtx.createOscillator();
+-      const gain = audioCtx.createGain();
+-      gain.gain.value = 0.001; // barely audible tone
+-      osc.connect(gain);
+-      gain.connect(dest);
+-      osc.start();
+-      dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
+-    }
+-  } catch (err) {
+-    console.warn('AudioContext fallback warning:', err);
+-  }
+-
+-  // Create synthetic video track
+-  if (callType === 'video') {
+-    try {
+-      const canvas = document.createElement('canvas');
+-      canvas.width = 640;
+-      canvas.height = 480;
+-      const ctx = canvas.getContext('2d');
+-      if (ctx) {
+-        ctx.fillStyle = '#1877F2';
+-        ctx.fillRect(0, 0, 640, 480);
+-        ctx.fillStyle = '#FFFFFF';
+-        ctx.font = 'bold 28px sans-serif';
+-        ctx.textAlign = 'center';
+-        ctx.fillText('Echat HD Stream', 320, 240);
+-      }
+-      if ((canvas as any).captureStream) {
+-        const vStream = (canvas as any).captureStream(25);
+-        vStream.getVideoTracks().forEach((track: MediaStreamTrack) => stream.addTrack(track));
+-      }
+-    } catch (err) {
+-      console.warn('Canvas capture fallback warning:', err);
+-    }
+-  }
+-
+-  return stream;
++async function getCallIceConfig(): Promise<RTCConfiguration> {
++  try { return await api.getCallIceConfig(); }
++  catch { return ICE_CONFIG; }
+ }
+ 
+ function startSynthRingtone(ringtoneId = 'classic'): () => void {
+@@ -226,6 +175,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+ 
+   // Subscriptions
+   const messageListeners = useRef<Set<(msg: Message) => void>>(new Set());
++  const messageUpdatedListeners = useRef<Set<(msg: Message) => void>>(new Set());
+   const postUpdateListeners = useRef<Set<(post: Post) => void>>(new Set());
+   const postDeleteListeners = useRef<Set<(postId: string) => void>>(new Set());
+   const notificationListeners = useRef<Set<(n: AppNotification) => void>>(new Set());
+@@ -421,6 +371,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+             messageListeners.current.forEach(cb => cb(data.message));
+             break;
+ 
++          case 'message_updated':
++            messageUpdatedListeners.current.forEach(cb => cb(data.message));
++            break;
++
+           case 'new_notification':
+             if (data.notification) notificationListeners.current.forEach(cb => cb(data.notification));
+             break;
+@@ -622,20 +576,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+ 
+     try {
+       // 2. Ask for camera/mic permission
+-      let stream: MediaStream;
+-      try {
+-        stream = await navigator.mediaDevices.getUserMedia({
+-          audio: true,
+-          video: callType === 'video'
+-        });
+-      } catch (mediaErr) {
+-        console.warn('getUserMedia failed, trying audio fallback or synthetic stream:', mediaErr);
+-        try {
+-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+-        } catch {
+-          stream = createFallbackMediaStream(callType);
+-        }
+-      }
++      const stream = await navigator.mediaDevices.getUserMedia({
++        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
++        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
++      });
+ 
+       if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
+         stream.getTracks().forEach(t => t.stop());
+@@ -646,7 +590,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       localStreamRef.current = stream;
+ 
+       // 3. Create WebRTC PeerConnection with STUN server stun:stun.l.google.com:19302
+-      const pc = new RTCPeerConnection(ICE_CONFIG);
++      const pc = new RTCPeerConnection(await getCallIceConfig());
+       peerConnectionRef.current = pc;
+ 
+       // Attach the ICE handler NOW, before any description is set. Candidates are produced as soon as
+@@ -799,6 +743,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       }
+     } catch (err) {
+       console.error('Failed to initiate call:', err);
++      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to start this call.' : 'Could not start the call. Check your microphone, camera, and network, then try again.');
+       cleanUpCallMedia();
+     } finally {
+       isSettingUpCallRef.current = false;
+@@ -835,20 +780,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+ 
+     try {
+       // 1. Ask for microphone/camera permission
+-      let stream: MediaStream;
+-      try {
+-        stream = await navigator.mediaDevices.getUserMedia({
+-          audio: true,
+-          video: callType === 'video'
+-        });
+-      } catch (mediaErr) {
+-        console.warn('getUserMedia failed on receiver:', mediaErr);
+-        try {
+-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+-        } catch {
+-          stream = createFallbackMediaStream(callType);
+-        }
+-      }
++      const stream = await navigator.mediaDevices.getUserMedia({
++        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
++        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
++      });
+ 
+       if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
+         stream.getTracks().forEach(t => t.stop());
+@@ -858,7 +793,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       localStreamRef.current = stream;
+ 
+       // 2. Setup RTCPeerConnection with STUN server stun:stun.l.google.com:19302
+-      const pc = new RTCPeerConnection(ICE_CONFIG);
++      const pc = new RTCPeerConnection(await getCallIceConfig());
+       peerConnectionRef.current = pc;
+ 
+       // Send our candidates from the very first one (see startCall): the caller needs them to reach us.
+@@ -961,6 +896,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       }
+     } catch (err) {
+       console.error('Failed to answer call:', err);
++      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to accept this call.' : 'Could not connect the call. Check your devices and network, then try again.');
+       cleanUpCallMedia();
+     }
+   };
+@@ -1017,27 +953,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+     cleanUpCallMedia();
+   };
+ 
+-  // Helper for single-tab developer demo testing: simulates partner answering
+-  const simulatePartnerAnswer = async () => {
+-    if (!activeCall || !peerConnectionRef.current) return;
+-    if (stopRingtoneRef.current) {
+-      stopRingtoneRef.current();
+-      stopRingtoneRef.current = null;
+-    }
+-
+-    // Set remote stream with synthetic stream so caller sees video/audio immediately
+-    const simStream = createFallbackMediaStream(activeCall.callType);
+-    setRemoteStream(simStream);
+-    setActiveCall(prev => prev ? { ...prev, status: 'connected' } : null);
+-
+-    const docId = currentCallDocIdRef.current;
+-    if (docId) {
+-      try {
+-        await updateDoc(doc(firestore, 'calls', docId), { status: 'connected' });
+-      } catch {}
+-    }
+-  };
+-
+   const sendTyping = (receiverId: string, isTyping: boolean) => {
+     if (!socketRef.current || !user || socketRef.current.readyState !== WebSocket.OPEN) return;
+     socketRef.current.send(JSON.stringify({
+@@ -1070,6 +985,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+     return () => { messageListeners.current.delete(cb); };
+   };
+ 
++  const onMessageUpdated = (cb: (msg: Message) => void) => {
++    messageUpdatedListeners.current.add(cb);
++    return () => { messageUpdatedListeners.current.delete(cb); };
++  };
++
+   const onNotification = (cb: (n: AppNotification) => void) => {
+     notificationListeners.current.add(cb);
+     return () => { notificationListeners.current.delete(cb); };
+@@ -1142,7 +1062,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+         acceptCall,
+         rejectCall,
+         endCall,
+-        simulatePartnerAnswer,
+         sendTyping,
+         markSeen,
+         peerConnectionRef,
+@@ -1150,6 +1069,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+         remoteStream,
+         socket: mockSocket,
+         onNewMessage,
++        onMessageUpdated,
+         onPostUpdated,
+         onPostDeleted,
+         onNotification,
+diff --git a/src/pages/Reels.tsx b/src/pages/Reels.tsx
+index 37bc01a..2735ed2 100644
+--- a/src/pages/Reels.tsx
++++ b/src/pages/Reels.tsx
+@@ -64,6 +64,7 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
+           onPostUpdated={updated => setPosts(current => current.map(item => item.id === updated.id ? updated : item))}
+           onPostDeleted={id => setPosts(current => current.filter(item => item.id !== id))}
+           onViewProfile={onViewProfile}
++          reelMode
+         />
+       ))}
+ 
+diff --git a/src/services/api.ts b/src/services/api.ts
+index 91f25a3..8505908 100644
+--- a/src/services/api.ts
++++ b/src/services/api.ts
+@@ -5,6 +5,7 @@ import type {
+   Post,
+   Story,
+   Message,
++  MessageAttachment,
+   Notification,
+   AdminStats,
+   GlobalSearchResults,
+@@ -64,6 +65,10 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
+ }
+ 
+ export const api = {
++  async getCallIceConfig(): Promise<RTCConfiguration> {
++    const res = await fetch(apiUrl('/api/calls/ice-config'), { headers: getHeaders(), cache: 'no-store' });
++    return readResponse<RTCConfiguration>(res, 'Could not load call network configuration');
++  },
+   // File upload (profile photos, cover photos, media). Returns a loadable URL.
+   async uploadFile(file: File): Promise<string> {
+     const dataUrl = await new Promise<string>((resolve, reject) => {
+@@ -255,6 +260,7 @@ export const api = {
+   async createPost(data: {
+     content: string;
+     mediaUrl?: string;
++    mediaUrls?: string[];
+     mediaType?: 'image' | 'video';
+     feeling?: string;
+     privacy?: 'public' | 'friends' | 'only_me';
+@@ -276,6 +282,10 @@ export const api = {
+     const res = await fetch(apiUrl(`/api/posts/${postId}/view`), { method: 'POST', headers: getHeaders() });
+     return readResponse<{ viewsCount: number }>(res, 'Could not record post view');
+   },
++  async getPostViewers(postId: string): Promise<{ id: string; name: string; avatar: string; viewedAt: number }[]> {
++    const res = await fetch(apiUrl(`/api/posts/${postId}/viewers`), { headers: getHeaders() });
++    return readResponse<{ id: string; name: string; avatar: string; viewedAt: number }[]>(res, 'Could not load post viewers');
++  },
+   async getSavedPosts(): Promise<Post[]> {
+     const res = await fetch(apiUrl('/api/saved'), { headers: getHeaders() });
+     return readResponse<Post[]>(res, 'Could not load saved posts');
+@@ -393,6 +403,7 @@ export const api = {
+     mediaUrl?: string;
+     mediaType?: 'image' | 'video' | 'audio';
+     audioDuration?: number;
++    attachments?: MessageAttachment[];
+   }): Promise<Message> {
+     const res = await fetch(apiUrl('/api/messages'), {
+       method: 'POST',
+@@ -402,6 +413,11 @@ export const api = {
+     return readResponse<Message>(res);
+   },
+ 
++  async editMessage(messageId: string, text: string): Promise<Message> {
++    const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'PUT', headers: getHeaders(), body: JSON.stringify({ text }) });
++    return readResponse<Message>(res, 'Could not edit this message');
++  },
++
+   async markMessagesSeen(partnerId: string) {
+     const res = await fetch(apiUrl('/api/messages/seen'), {
+       method: 'POST',
+@@ -539,11 +555,11 @@ export const api = {
+     return readResponse<{ live: LiveStream | null }>(res);
+   },
+ 
+-  async startLive(title?: string): Promise<{ success: boolean; live: LiveStream }> {
++  async startLive(title?: string, taggedPageIds: string[] = []): Promise<{ success: boolean; live: LiveStream }> {
+     const res = await fetch(apiUrl('/api/live/start'), {
+       method: 'POST',
+       headers: getHeaders(),
+-      body: JSON.stringify({ title })
++      body: JSON.stringify({ title, taggedPageIds })
+     });
+     return readResponse(res, 'Failed to start live stream');
+   },
+diff --git a/src/services/db.ts b/src/services/db.ts
+index 6d3b5c1..566067f 100644
+--- a/src/services/db.ts
++++ b/src/services/db.ts
+@@ -34,8 +34,6 @@ import type {
+   AdminStats 
+ } from '../types';
+ 
+-export const ADMIN_EMAIL = 'eldermoses89@gmail.com';
+-
+ export function hashPassword(password: string): string {
+   return 'hashed_' + btoa(password || '');
+ }
+@@ -150,7 +148,6 @@ export async function createUser(data: {
+   // 1. FIRST call createUserWithEmailAndPassword in Firebase Auth
+   const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+   const uid = userCredential.user.uid;
+-  const isDeveloper = cleanEmail === ADMIN_EMAIL;
+ 
+   const newUser: User = {
+     id: uid,
+@@ -164,10 +161,10 @@ export async function createUser(data: {
+     location: data.location || 'Global',
+     work: data.work || '',
+     education: data.education || '',
+-    role: isDeveloper ? 'developer' : 'user',
+-    isVerified: isDeveloper,
+-    isOfficialDeveloper: isDeveloper,
+-    boostsCount: isDeveloper ? 420 : 0,
++    role: 'user',
++    isVerified: false,
++    isOfficialDeveloper: false,
++    boostsCount: 0,
+     boostedBy: [],
+     isBlocked: false,
+     isOnline: true,
+@@ -195,7 +192,6 @@ export async function loginUser(email: string, password: string): Promise<User>
+       await setDoc(doc(db, 'users', uid), { ...user, id: uid }, { merge: true });
+       user = { ...user, id: uid };
+     } else {
+-      const isDeveloper = cleanEmail === ADMIN_EMAIL;
+       user = {
+         id: uid,
+         name: userCredential.user.displayName || cleanEmail.split('@')[0],
+@@ -208,10 +204,10 @@ export async function loginUser(email: string, password: string): Promise<User>
+         location: 'Global',
+         work: '',
+         education: '',
+-        role: isDeveloper ? 'developer' : 'user',
+-        isVerified: isDeveloper,
+-        isOfficialDeveloper: isDeveloper,
+-        boostsCount: isDeveloper ? 420 : 0,
++        role: 'user',
++        isVerified: false,
++        isOfficialDeveloper: false,
++        boostsCount: 0,
+         boostedBy: [],
+         isBlocked: false,
+         isOnline: true,
+@@ -250,62 +246,6 @@ export async function updateUser(id: string, updates: Partial<User>): Promise<Us
+   return getUserById(id);
+ }
+ 
+-// Ensure SEED user eldermoses89@gmail.com exists
+-export async function ensureSeedAdminUser(): Promise<void> {
+-  try {
+-    const existing = await getUserByEmail(ADMIN_EMAIL);
+-    if (!existing) {
+-      console.log('Seed user not found in Firestore, ensuring existence...');
+-      try {
+-        await createUser({
+-          name: 'Elder Moses',
+-          email: ADMIN_EMAIL,
+-          password: 'admin123',
+-          dob: '1995-06-15',
+-          bio: 'Founder & Super Admin at Echat.',
+-          location: 'Sierra Leone, SL',
+-          work: 'Lead Architect @ Echat Network',
+-          education: 'Computer Science'
+-        });
+-        console.log('Seed admin user created successfully.');
+-      } catch (authErr: any) {
+-        if (authErr?.code === 'auth/email-already-in-use') {
+-          console.log('Seed user already in Auth, creating firestore doc.');
+-          const seedUid = 'user_admin_elder';
+-          const seedUser: User = {
+-            id: seedUid,
+-            name: 'Elder Moses',
+-            email: ADMIN_EMAIL,
+-            dob: '1995-06-15',
+-            passwordHash: '', // never store a password hash (or a known demo password) in Firestore
+-            avatar: initialsAvatar('Elder Moses'),
+-            coverPhoto: gradientCover('Elder Moses'),
+-            bio: 'Founder & Super Admin at Echat.',
+-            location: 'Sierra Leone, SL',
+-            work: 'Lead Architect @ Echat Network',
+-            education: 'Computer Science',
+-            role: 'developer',
+-            isVerified: true,
+-            isOfficialDeveloper: true,
+-            boostsCount: 420,
+-            boostedBy: [],
+-            isBlocked: false,
+-            isOnline: true,
+-            lastSeen: Date.now(),
+-            createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+-            friends: [],
+-            friendRequestsSent: [],
+-            friendRequestsReceived: []
+-          };
+-          await setDoc(doc(db, 'users', seedUid), seedUser, { merge: true });
+-        }
+-      }
+-    }
+-  } catch (err) {
+-    console.error('ensureSeedAdminUser check failed:', err);
+-  }
+-}
+-
+ // ----------------- POSTS -----------------
+ 
+ export async function getPosts(): Promise<Post[]> {
+@@ -713,7 +653,6 @@ export const firestoreDb = {
+   rejectFriendRequest,
+   unfriend,
+   getAdminStats,
+-  ensureSeedAdminUser
+ };
+ 
+ export default firestoreDb;
+diff --git a/src/types/index.ts b/src/types/index.ts
+index 3f32d6f..773c493 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -25,10 +25,11 @@ export interface Comment {
+ 
+ export interface Post {
+   id: string; authorId: string; author?: User; // FIX: optional
+-  content: string; mediaUrl?: string; mediaType?: 'image' | 'video';
++  content: string; mediaUrl?: string; mediaUrls?: string[]; mediaType?: 'image' | 'video';
+   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
+   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
+   viewsCount?: number; views?: string[]; isReported: boolean;
++  viewRecords?: { userId: string; viewedAt: number }[];
+   reportReason?: string; createdAt: number; editedAt?: number;
+   taggedUserIds?: string[];
+   taggedUsers?: { id: string; name: string; avatar: string }[];
+@@ -44,16 +45,17 @@ export interface Story {
+   createdAt: number; expiresAt: number;
+ }
+ 
++export interface MessageAttachment { url: string; name: string; mimeType: string; size: number; }
+ export interface Message {
+   id: string; conversationId?: string; // Optional
+   senderId: string; receiverId: string;
+   text?: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio';
+-  audioDuration?: number; status: 'sent' | 'delivered' | 'seen'; createdAt: number;
++  audioDuration?: number; attachments?: MessageAttachment[]; status: 'sent' | 'delivered' | 'seen'; createdAt: number; editedAt?: number;
+ }
+ 
+ export interface Notification {
+   id: string; userId: string; actorId: string; actor?: User | null;
+-  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'announcement'; // FIX: Added
++  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement'; // FIX: Added
+   targetId?: string; message: string; read: boolean; createdAt: number;
+   callType?: 'audio' | 'video';
+ }
+@@ -62,7 +64,7 @@ export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUs
+ export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; appName?: string; }
+ export interface GlobalSearchResults { users: User[]; posts: Post[]; }
+ export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
+-export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
++export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; taggedPageIds?: string[]; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; }
+ 
+ export interface PagePost {
+   id: string;
+diff --git a/src/utils/liveRtc.ts b/src/utils/liveRtc.ts
+index 0e523fb..352ef73 100644
+--- a/src/utils/liveRtc.ts
++++ b/src/utils/liveRtc.ts
+@@ -7,11 +7,7 @@ export const liveRtcConfig: RTCConfiguration = {
+       urls: turnUrl,
+       username: import.meta.env.VITE_TURN_USERNAME ?? '',
+       credential: import.meta.env.VITE_TURN_CREDENTIAL ?? ''
+-    }] : [{
+-      urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'],
+-      username: 'openrelayproject',
+-      credential: 'openrelayproject'
+-    }])
++    }] : [])
+   ],
+   iceCandidatePoolSize: 4
+ };
