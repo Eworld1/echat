@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { assetUrl } from '../services/apiBase';
 import { VerifiedBadge } from './VerifiedBadge';
+import { VideoLinkCard } from './VideoLinkCard';
 import confetti from 'canvas-confetti';
 import {
   ThumbsUp,
@@ -450,6 +451,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           </p>
         </div>
       )}
+      {!isEditing && post.content && <VideoLinkCard text={post.content} />}
 
       {/* Re-shared post: the original is embedded */}
       {post.sharedPostId && (

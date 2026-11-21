@@ -632,6 +632,7 @@ function populateNotification(n: any) {
 
 function populatePost(post: any) {
   const author = db.getUserById(post.authorId);
+  const pageIdentity = post.pageId ? db.getPageById(post.pageId) : null;
   const populatedComments = post.comments.map((c: any) => {
     const cAuthor = db.getUserById(c.authorId);
     return {
@@ -665,7 +666,7 @@ function populatePost(post: any) {
 
   return {
     ...post,
-    author: author ? db.sanitizeUser(author) : { name: 'Former User', avatar: '' },
+    author: pageIdentity ? { id: post.authorId, name: pageIdentity.name, avatar: pageIdentity.avatar || '', isVerified: true, isPage: true, pageId: pageIdentity.id } : author ? db.sanitizeUser(author) : { name: 'Former User', avatar: '' },
     comments: populatedComments,
     taggedUsers,
     sharedPost
@@ -730,7 +731,10 @@ app.get('/api/posts', (req: Request, res: Response) => {
 app.get('/api/dashboard', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
-  const posts = db.getPosts(authUser.id).filter(post => post.authorId === authUser.id);
+  const identityPageId = String(req.get('x-page-id') || '');
+  const identityPage = identityPageId ? db.getPageById(identityPageId) : null;
+  if (identityPageId && identityPage?.ownerId !== authUser.id) return res.status(403).json({ error: 'You do not manage this Page' });
+  const posts = db.getPosts(authUser.id).filter(post => post.authorId === authUser.id && (identityPage ? post.pageId === identityPage.id : !post.pageId));
   const viewsByDay = Array.from({ length: 30 }, (_, index) => {
     const day = new Date();
     day.setHours(0, 0, 0, 0);
@@ -746,7 +750,7 @@ app.get('/api/dashboard', (req: Request, res: Response) => {
       views: posts.reduce((sum, post) => sum + (post.viewsCount || 0), 0),
       likes: posts.reduce((sum, post) => sum + post.reactions.length, 0),
       comments: posts.reduce((sum, post) => sum + post.comments.length, 0),
-      followers: user?.friends?.length || 0,
+    followers: identityPage ? identityPage.followers.length : user?.friends?.length || 0,
       posts: posts.length
     },
     viewsByDay,
@@ -787,6 +791,9 @@ app.post('/api/posts', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Post must contain text or media' });
   }
   const safePrivacy = privacy === 'friends' || privacy === 'only_me' ? privacy : 'public';
+  const requestedPageId = String(req.get('x-page-id') || '');
+  const actingPage = requestedPageId ? db.getPageById(requestedPageId) : null;
+  if (requestedPageId && actingPage?.ownerId !== authUser.id) return res.status(403).json({ error: 'You do not manage this Page' });
 
   // Only your own friends can be tagged (max 20, no duplicates, nobody who blocked you)
   const cleanTaggedIds: string[] = Array.isArray(taggedUserIds)
@@ -804,6 +811,7 @@ app.post('/api/posts', (req: Request, res: Response) => {
     safePrivacy,
     { taggedUserIds: cleanTaggedIds, mediaUrls }
   );
+  if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 
   // Tell each tagged friend (not for private "only me" posts)
   if (safePrivacy !== 'only_me') {
@@ -1486,14 +1494,17 @@ app.post('/api/live/start', (req: Request, res: Response) => {
   }
 
   const { title, taggedPageIds } = req.body;
+  const pageIdentityId = String(req.get('x-page-id') || '');
+  const pageIdentity = pageIdentityId ? db.getPageById(pageIdentityId) : null;
+  if (pageIdentityId && pageIdentity?.ownerId !== authUser.id) return res.status(403).json({ error: 'You do not manage this Page' });
   activeLiveSession = {
     id: 'live_' + crypto.randomBytes(6).toString('hex'),
     hostId: authUser.id,
-    hostName: authUser.name,
-    hostAvatar: authUser.avatar,
+    hostName: pageIdentity?.name || authUser.name,
+    hostAvatar: pageIdentity?.avatar || authUser.avatar,
     hostEmail: authUser.email,
     isHostVerified: authUser.isVerified ?? isDev,
-    title: title?.trim() || `${authUser.name} is Live on EChat!`,
+    title: title?.trim() || `${pageIdentity?.name || authUser.name} is Live on EChat!`,
     taggedPageIds: Array.isArray(taggedPageIds) ? [...new Set<string>(taggedPageIds.filter((id: unknown): id is string => typeof id === 'string' && Boolean(db.getPageById(id))))].slice(0, 22) : [],
     viewersCount: 1,
     reactionsCount: 0,
@@ -1642,6 +1653,12 @@ app.post('/api/live/leave', (_req: Request, res: Response) => {
 });
 
 // ----------------- PAGES ROUTES -----------------
+app.get('/api/my-pages', (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  res.json(db.getPages().filter(page => page.ownerId === authUser.id));
+});
+
 app.get('/api/pages', (_req: Request, res: Response) => {
   try {
     const pages = db.getPages();

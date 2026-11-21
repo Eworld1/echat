@@ -29,6 +29,7 @@ export interface Post {
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
   viewsCount?: number; views?: string[]; isReported: boolean;
+  pageId?: string;
   viewRecords?: { userId: string; viewedAt: number }[];
   reportReason?: string; createdAt: number; editedAt?: number;
   taggedUserIds?: string[];

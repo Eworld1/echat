@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { X, Image, Smile, Globe, Users, Lock, Sparkles, UserPlus } from 'lucide-react';
 import { TagFriendsPicker } from './TagFriendsPicker';
+import { parseVideoLink } from '../utils/embedVideo';
 import type { User } from '../types';
 import confetti from 'canvas-confetti';
 
@@ -247,6 +248,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             rows={4}
             className="w-full text-base sm:text-lg text-slate-800 placeholder-slate-400 focus:outline-hidden resize-none bg-transparent"
           />
+          {parseVideoLink(content) && <p className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">Video link detected. Your post will include an in-app player with an external fallback.</p>}
 
           {/* Media preview */}
           {error && (

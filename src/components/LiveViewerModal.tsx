@@ -30,7 +30,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   if (!currentStream) return null;
 
   const { user } = useAuth();
-  const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onLiveSignal, socket } = useSocket();
+  const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onLiveSignal, onLiveCaption, socket } = useSocket();
 
   const [liveData, setLiveData] = useState<LiveStream>(currentStream);
   const [commentInput, setCommentInput] = useState('');
@@ -38,6 +38,9 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   const [floatingReactions, setFloatingReactions] = useState<{ id: string; emoji: string; left: number }[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [remoteVideo, setRemoteVideo] = useState<MediaStream | null>(null);
+  const [showCaptions, setShowCaptions] = useState(true);
+  const [captionSize, setCaptionSize] = useState<'sm' | 'base' | 'lg'>('base');
+  const [liveCaption, setLiveCaption] = useState('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const queuedCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
@@ -141,6 +144,8 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     };
   }, [currentStream.id, onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onClose]);
 
+  useEffect(() => onLiveCaption(data => { if (data.streamId === currentStream.id) setLiveCaption(data.text); }), [onLiveCaption, currentStream.id]);
+
   // Scroll to latest comment
   useEffect(() => {
     commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -231,6 +236,8 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
           {/* Main Video Viewport */}
             <div className="absolute inset-0 w-full h-full relative bg-black overflow-hidden">
             <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 w-full h-full object-cover object-center ${remoteVideo ? 'block' : 'hidden'}`} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }} />
+            {showCaptions && liveCaption && <div className={`absolute bottom-20 left-1/2 z-30 line-clamp-2 max-w-[85%] -translate-x-1/2 rounded bg-black/80 px-3 py-1.5 text-center font-semibold text-white ${captionSize === 'sm' ? 'text-sm' : captionSize === 'lg' ? 'text-xl' : 'text-base'}`}>{liveCaption}</div>}
+            <div className="absolute bottom-4 right-4 z-40 flex gap-1 rounded-lg bg-black/75 p-1"><button onClick={() => setShowCaptions(value => !value)} className="px-2 py-1 text-xs font-bold text-white">CC {showCaptions ? 'On' : 'Off'}</button>{showCaptions && <select aria-label="Caption text size" value={captionSize} onChange={event => setCaptionSize(event.target.value as typeof captionSize)} className="bg-transparent text-xs text-white"><option value="sm">Small</option><option value="base">Medium</option><option value="lg">Large</option></select>}</div>
             {!remoteVideo && <div className="flex flex-col items-center justify-center p-8 text-center">
               <div className="relative mb-4">
                 <img

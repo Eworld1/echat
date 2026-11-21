@@ -17,7 +17,7 @@ import {
   Flag,
   Users2,
   Calendar
-  , Film, BarChart3
+  , Film, BarChart3, ChevronDown, Plus, X
 } from 'lucide-react';
 
 interface LeftSidebarProps {
@@ -26,9 +26,14 @@ interface LeftSidebarProps {
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigate }) => {
-  const { user, isDeveloper } = useAuth();
+  const { user, isDeveloper, myPages, activePage, switchIdentity, createIdentityPage } = useAuth();
   const { t } = usePreferences();
   const [showTerms, setShowTerms] = useState(false);
+  const [showIdentityPicker, setShowIdentityPicker] = useState(false);
+  const [showPageForm, setShowPageForm] = useState(false);
+  const [pageForm, setPageForm] = useState({ name: '', category: 'Business', bio: '', avatar: '', cover: '' });
+  const [pageError, setPageError] = useState('');
+  const [isCreatingPage, setIsCreatingPage] = useState(false);
 
   if (!user) return null;
 
@@ -36,19 +41,18 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
     <aside className="w-64 xl:w-72 flex-shrink-0 hidden lg:block sticky top-18 h-[calc(100vh-5rem)] overflow-y-auto pr-2 select-none">
       <div className="space-y-1">
         {/* Profile Shortcut */}
-        <button
-          onClick={() => onNavigate('profile', user.id)}
-          className="w-full p-2.5 hover:bg-slate-200/60 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left group"
-        >
-          <img
-            src={user.avatar}
-            alt={user.name}
-            className="w-9 h-9 rounded-full object-cover border border-slate-200"
-          />
-          <span className="text-sm font-bold text-slate-900 group-hover:text-blue-600 transition truncate">
-            {user.name}
-          </span>
-        </button>
+        <div className="relative">
+          <button onClick={() => setShowIdentityPicker(value => !value)} className="w-full p-2.5 hover:bg-slate-200/60 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left group">
+            <img src={activePage?.avatar || user.avatar} alt={activePage?.name || user.name} className="w-9 h-9 rounded-full object-cover border border-slate-200" />
+            <span className="flex-1 truncate text-sm font-bold text-slate-900 group-hover:text-blue-600">{activePage?.name || user.name}</span><ChevronDown size={15} />
+          </button>
+          {showIdentityPicker && <div className="absolute left-0 right-0 top-full z-40 mt-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+            <button onClick={() => { switchIdentity(null); setShowIdentityPicker(false); }} className="flex w-full items-center gap-2 rounded-xl p-2 text-left text-xs font-semibold hover:bg-slate-100"><img src={user.avatar} className="h-8 w-8 rounded-full object-cover" />My Personal Profile</button>
+            {myPages.map(page => <button key={page.id} onClick={() => { switchIdentity(page); setShowIdentityPicker(false); }} className="flex w-full items-center gap-2 rounded-xl p-2 text-left text-xs font-semibold hover:bg-slate-100"><img src={page.avatar || user.avatar} className="h-8 w-8 rounded-full object-cover" />{page.name}</button>)}
+            <button onClick={() => { setShowPageForm(true); setShowIdentityPicker(false); }} className="mt-1 flex w-full items-center gap-2 rounded-xl border-t border-slate-100 p-2 pt-3 text-left text-xs font-bold text-blue-700"><Plus size={16} />Create New Page</button>
+          </div>}
+        </div>
+        {activePage && <div className="mx-2 mb-2 rounded-xl bg-blue-50 px-3 py-2 text-[11px] text-blue-800">You are posting as <b>{activePage.name}</b> <button onClick={() => switchIdentity(null)} className="ml-1 underline">Switch back</button></div>}
 
         {/* Feeds / Home */}
         <button
@@ -231,6 +235,15 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
       </div>
 
       <TermsModal isOpen={showTerms} onClose={() => setShowTerms(false)} />
+      {showPageForm && <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 p-4"><form onSubmit={async event => { event.preventDefault(); setIsCreatingPage(true); setPageError(''); try { await createIdentityPage({ ...pageForm, cover: pageForm.cover }); setShowPageForm(false); setPageForm({ name: '', category: 'Business', bio: '', avatar: '', cover: '' }); } catch (error) { setPageError(error instanceof Error ? error.message : 'Could not create page'); } finally { setIsCreatingPage(false); } }} className="w-full max-w-md space-y-3 rounded-2xl bg-white p-5 shadow-2xl">
+        <div className="flex items-center justify-between"><h2 className="font-bold">Create a Page</h2><button type="button" onClick={() => setShowPageForm(false)}><X size={18} /></button></div>
+        <input required minLength={2} maxLength={80} placeholder="Page name" value={pageForm.name} onChange={event => setPageForm({ ...pageForm, name: event.target.value })} className="w-full rounded-xl border p-3 text-sm" />
+        <select value={pageForm.category} onChange={event => setPageForm({ ...pageForm, category: event.target.value })} className="w-full rounded-xl border p-3 text-sm"><option>Business</option><option>Creator</option><option>Community</option><option>Education</option><option>Entertainment</option><option>Other</option></select>
+        <textarea placeholder="Bio" maxLength={500} value={pageForm.bio} onChange={event => setPageForm({ ...pageForm, bio: event.target.value })} className="w-full rounded-xl border p-3 text-sm" />
+        <input placeholder="Profile picture URL (optional)" value={pageForm.avatar} onChange={event => setPageForm({ ...pageForm, avatar: event.target.value })} className="w-full rounded-xl border p-3 text-sm" />
+        <input placeholder="Cover picture URL (optional)" value={pageForm.cover} onChange={event => setPageForm({ ...pageForm, cover: event.target.value })} className="w-full rounded-xl border p-3 text-sm" />
+        {pageError && <p className="text-sm text-red-600">{pageError}</p>}<button disabled={isCreatingPage} className="w-full rounded-xl bg-blue-600 p-3 text-sm font-bold text-white disabled:opacity-60">{isCreatingPage ? 'Creating…' : 'Create Page and switch to it'}</button>
+      </form></div>}
     </aside>
   );
 };

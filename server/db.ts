@@ -539,6 +539,13 @@ class Database {
     return this.data.posts.find(p => p.id === id);
   }
 
+  assignPostPageIdentity(postId: string, pageId: string): void {
+    const post = this.getPostById(postId);
+    if (!post) return;
+    post.pageId = pageId;
+    this.save();
+  }
+
   createPost(
     authorId: string,
     content: string,

@@ -5,6 +5,7 @@ import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
 import { assetUrl } from '../services/apiBase';
 import { VoiceRecorder } from './VoiceRecorder';
+import { VideoLinkCard } from './VideoLinkCard';
 import {
   Phone,
   Video,
@@ -361,7 +362,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner,
                     <textarea value={editingMessageText} onChange={event => setEditingMessageText(event.target.value)} maxLength={4000} rows={3} className="w-full rounded-lg border border-white/30 bg-white/10 p-2 text-sm text-current outline-none" />
                     <div className="flex justify-end gap-2"><button onClick={() => setEditingMessageId(null)} className="rounded-lg px-2 py-1 text-xs">Cancel</button><button onClick={() => void handleEditMessage(msg.id)} disabled={!editingMessageText.trim()} className="rounded-lg bg-white/20 px-2 py-1 text-xs font-bold disabled:opacity-50">Save</button></div>
                   </div>
-                ) : msg.text && <p className="leading-relaxed break-words">{msg.text}{msg.editedAt && <span className="ml-1 text-[10px] opacity-70">Edited</span>}</p>}
+                ) : msg.text && <><p className="leading-relaxed break-words">{msg.text}{msg.editedAt && <span className="ml-1 text-[10px] opacity-70">Edited</span>}</p><VideoLinkCard text={msg.text} /></>}
               </div>
 
               {/* Status and Timestamp */}

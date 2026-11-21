@@ -24,11 +24,16 @@ import { Groups } from './pages/Groups';
 import { Events } from './pages/Events';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
+import { SplashScreen } from './components/SplashScreen';
 import type { AppView } from './components/Navbar';
 
 export function MainApp() {
-  const { user, isDeveloper, isLoading } = useAuth();
+  const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
   const { onLiveStarted, onLiveStopped, onLiveStreamUpdated } = useSocket();
+  const [splashElapsed, setSplashElapsed] = useState(false);
+  const [splashHidden, setSplashHidden] = useState(false);
+  useEffect(() => { const timer = window.setTimeout(() => setSplashElapsed(true), 2000); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => { if (!splashElapsed || isLoading) return; const timer = window.setTimeout(() => setSplashHidden(true), 500); return () => window.clearTimeout(timer); }, [splashElapsed, isLoading]);
 
   const [currentView, setCurrentView] = useState<AppView>('feed');
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
@@ -124,6 +129,8 @@ export function MainApp() {
     setActiveChatPartner(partner);
   };
 
+  if (!splashHidden) return <SplashScreen leaving={splashElapsed && !isLoading} />;
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#F0F2F5] flex flex-col items-center justify-center text-slate-500">
@@ -148,6 +155,8 @@ export function MainApp() {
         onNavigate={handleNavigate}
         onOpenMessenger={() => setIsMessengerDrawerOpen(true)}
       />
+
+      {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
 
       {/* Main Layout Container */}
       <div className="flex-1 max-w-7xl w-full mx-auto px-2 sm:px-4 py-4 flex gap-4 sm:gap-6 justify-center">

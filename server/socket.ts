@@ -181,6 +181,14 @@ export class SocketManager {
         break;
       }
 
+      case 'live-caption': {
+        const fromUserId = this.userIdOf(ws);
+        const { streamId, text } = payload;
+        if (!fromUserId || typeof streamId !== 'string' || this.liveHosts.get(streamId) !== fromUserId || typeof text !== 'string') break;
+        this.broadcast({ type: 'live_caption', streamId, text: text.slice(0, 300), createdAt: Date.now() });
+        break;
+      }
+
       // WebRTC Call Signaling (Supports call:initiate, call:offer, call:answer, call:ice-candidate, call:end, call:rejected)
       case 'call:initiate':
       case 'call_initiate': {

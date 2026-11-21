@@ -18,7 +18,7 @@ import {
   getUserById, 
   getUserByEmail
 } from '../services/db';
-import { User } from '../types';
+import { Page, User } from '../types';
 import { api } from '../services/api';
 
 interface AuthContextType {
@@ -45,6 +45,10 @@ interface AuthContextType {
   /** Merge an already-saved user object (e.g. the server's reply) into the signed-in user. */
   updateUser: (updated: User) => void;
   refreshUser: () => Promise<void>;
+  myPages: Page[];
+  activePage: Page | null;
+  switchIdentity: (page: Page | null) => void;
+  createIdentityPage: (data: { name: string; category: string; bio: string; avatar?: string; cover: string }) => Promise<Page>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -91,6 +95,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [devKey, setDevKeyState] = useState<string | null>(() => localStorage.getItem('echat_dev_key'));
+  const [myPages, setMyPages] = useState<Page[]>([]);
+  const [activePage, setActivePage] = useState<Page | null>(null);
+
+  useEffect(() => {
+    if (!user) { setMyPages([]); setActivePage(null); localStorage.removeItem('echat_active_page'); return; }
+    let cancelled = false;
+    api.getMyPages().then(pages => {
+      if (cancelled) return;
+      setMyPages(pages);
+      const id = localStorage.getItem('echat_active_page');
+      setActivePage(id ? pages.find(page => page.id === id) || null : null);
+    }).catch(() => { if (!cancelled) { setMyPages([]); setActivePage(null); } });
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  const switchIdentity = (page: Page | null) => {
+    setActivePage(page);
+    if (page) localStorage.setItem('echat_active_page', page.id);
+    else localStorage.removeItem('echat_active_page');
+  };
+  const createIdentityPage = async (data: { name: string; category: string; bio: string; avatar?: string; cover: string }) => {
+    const page = await api.createPage(data);
+    setMyPages(current => [page, ...current]);
+    switchIdentity(page);
+    return page;
+  };
 
   const setDevKey = (key: string | null) => {
     if (key) localStorage.setItem('echat_dev_key', key);
@@ -441,7 +471,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       quickSwitchUser, 
       updateCurrentUser, 
       updateUser, 
-      refreshUser 
+      refreshUser,
+      myPages,
+      activePage,
+      switchIdentity,
+      createIdentityPage
     }}>
       {children}
     </AuthContext.Provider>

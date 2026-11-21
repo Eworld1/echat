@@ -56,10 +56,12 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
   const storage = typeof window !== 'undefined' ? window.localStorage : null;
   const currentUserId = storage?.getItem('echat_user_id') || '';
   const devKey = storage?.getItem('echat_dev_key') || '';
+  const pageIdentity = storage?.getItem('echat_active_page') || '';
   return {
     'Content-Type': 'application/json',
     ...(currentUserId ? { 'x-user-id': currentUserId } : {}),
     ...(devKey ? { 'x-developer-key': devKey } : {}),
+    ...(pageIdentity ? { 'x-page-id': pageIdentity } : {}),
     ...customHeaders
   };
 }
@@ -625,6 +627,10 @@ export const api = {
   async getPage(id: string): Promise<Page> {
     const res = await fetch(apiUrl(`/api/pages/${id}`), { headers: getHeaders() });
     return readResponse<Page>(res, 'Page not found');
+  },
+  async getMyPages(): Promise<Page[]> {
+    const res = await fetch(apiUrl('/api/my-pages'), { headers: getHeaders() });
+    return readResponse<Page[]>(res, 'Could not load your pages');
   },
 
   async createPage(data: { name: string; category: string; bio: string; cover: string; avatar?: string }): Promise<Page> {

@@ -67,7 +67,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onNavigate,
   onOpenMessenger
 }) => {
-  const { user, isDeveloper, logout } = useAuth();
+  const { user, isDeveloper, logout, activePage, myPages, switchIdentity } = useAuth();
   const { t } = usePreferences();
   const { onlineUserIds, onNotification, startCall } = useSocket();
   const { canInstall, install } = useInstallPrompt();
@@ -426,12 +426,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => onNavigate('feed')}
             className="flex items-center gap-2 cursor-pointer group flex-shrink-0"
           >
-            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-md group-hover:scale-105 transition">
-              <MessageSquare size={22} />
-            </div>
-            <span className="text-2xl font-black text-blue-600 tracking-tight hidden sm:inline">
-              Echat
-            </span>
+            <img src="/logo.png" alt="EchatSl" className="h-10 w-10 rounded-full object-cover shadow-md group-hover:scale-105 transition" />
+            <span className="text-2xl font-black text-amber-600 tracking-tight hidden sm:inline">EchatSl</span>
           </div>
 
           {/* Global Search Bar */}
@@ -1050,6 +1046,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <p className="font-bold text-slate-900 text-sm truncate">{user?.name}</p>
                     <p className="text-xs text-slate-500">{t('see_profile')}</p>
                   </div>
+                </div>
+
+                <div className="mb-2 rounded-xl border border-slate-100 p-2">
+                  <p className="px-2 pb-1 text-[10px] font-bold uppercase text-slate-400">Switch identity</p>
+                  <button onClick={() => { switchIdentity(null); setShowProfileMenu(false); }} className="w-full rounded-lg p-2 text-left text-xs hover:bg-slate-50">{user?.name} · Personal</button>
+                  {myPages.map(page => <button key={page.id} onClick={() => { switchIdentity(page); setShowProfileMenu(false); }} className="flex w-full items-center gap-2 rounded-lg p-2 text-left text-xs hover:bg-slate-50"><img src={page.avatar || '/logo-192.png'} className="h-7 w-7 rounded-full object-cover" />{page.name}</button>)}
+                  <button onClick={() => { onNavigate('pages'); setShowProfileMenu(false); }} className="w-full rounded-lg p-2 text-left text-xs font-bold text-blue-700 hover:bg-slate-50">+ Create or manage Pages</button>
+                  {activePage && <p className="px-2 pt-1 text-[10px] text-blue-700">Currently using {activePage.name}</p>}
                 </div>
 
                 {([

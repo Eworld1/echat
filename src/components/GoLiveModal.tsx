@@ -24,6 +24,7 @@ import {
   ThumbsUp,
   Smile,
   Check
+  , Captions
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -45,7 +46,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   onStreamEnded
 }) => {
   const { user, isDeveloper } = useAuth();
-  const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveSignal, socket } = useSocket();
+  const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveSignal, sendLiveCaption, socket } = useSocket();
 
   const [streamTitle, setStreamTitle] = useState(`${user?.name || 'User'} is Live on EChat! 🔥`);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
@@ -66,12 +67,66 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [availablePages, setAvailablePages] = useState<{ id: string; name: string }[]>([]);
   const [taggedPageIds, setTaggedPageIds] = useState<string[]>([]);
   const [pageSearch, setPageSearch] = useState('');
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [captionLanguage, setCaptionLanguage] = useState('en-US');
+  const [liveCaption, setLiveCaption] = useState('');
+  const [sourceError, setSourceError] = useState('');
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const livePeersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const livePendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const lastCaptionSentRef = useRef(0);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    if (!isBroadcasting || !currentSession || !captionsEnabled) { recognitionRef.current?.stop?.(); recognitionRef.current = null; return; }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new SpeechRecognition(); recognitionRef.current = recognition;
+    recognition.continuous = true; recognition.interimResults = true; recognition.lang = captionLanguage === 'auto' ? navigator.language || 'en-US' : captionLanguage;
+    recognition.onresult = (event: any) => {
+      const text = String(event.results[event.results.length - 1]?.[0]?.transcript || '').trim();
+      if (!text) return;
+      setLiveCaption(text);
+      const now = Date.now();
+      if (now - lastCaptionSentRef.current >= 1000 && event.results[event.results.length - 1]?.isFinal) { lastCaptionSentRef.current = now; sendLiveCaption(currentSession.id, text); }
+    };
+    recognition.onend = () => { if (recognitionRef.current === recognition && captionsEnabled) { try { recognition.start(); } catch {} } };
+    try { recognition.start(); } catch {}
+    return () => { recognitionRef.current = null; try { recognition.stop(); } catch {} };
+  }, [isBroadcasting, currentSession?.id, captionsEnabled, captionLanguage, sendLiveCaption]);
+
+  const startScreenShare = async () => {
+    try {
+      const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const screenVideo = screen.getVideoTracks()[0];
+      if (!screenVideo) throw new Error('No screen video source was selected');
+      const current = mediaStreamRef.current;
+      if (current) {
+        current.getVideoTracks().forEach(track => { current.removeTrack(track); track.stop(); });
+        current.addTrack(screenVideo);
+        const screenAudio = screen.getAudioTracks()[0];
+        if (screenAudio) current.addTrack(screenAudio);
+        if (videoPreviewRef.current) { videoPreviewRef.current.srcObject = current; videoPreviewRef.current.play().catch(() => {}); }
+      } else mediaStreamRef.current = screen;
+      screenStreamRef.current = screen;
+      setHasCameraPermission(true);
+      screenVideo.onended = async () => {
+        screenStreamRef.current = null;
+        try {
+          const camera = await navigator.mediaDevices.getUserMedia({ video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : true, audio: false });
+          const track = camera.getVideoTracks()[0]; const active = mediaStreamRef.current;
+          if (active && track) { active.getVideoTracks().forEach(old => { active.removeTrack(old); old.stop(); }); active.addTrack(track); if (videoPreviewRef.current) { videoPreviewRef.current.srcObject = active; videoPreviewRef.current.play().catch(() => {}); } }
+        } catch { setSourceError('Capture card not found - check USB / OBS Virtual Camera is running.'); }
+      };
+    } catch (error) {
+      const e = error as DOMException;
+      if (e.name !== 'NotAllowedError') console.warn('Screen share source unavailable; choose a camera or capture card instead.', error);
+    }
+  };
 
   // Calculate account age in days
   const userCreatedAt = user?.createdAt || Date.now();
@@ -85,7 +140,9 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
     let isMounted = true;
     async function startCamera() {
+      if (screenStreamRef.current && !selectedCameraId) return;
       try {
+        setSourceError('');
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             ...(selectedCameraId ? { deviceId: { exact: selectedCameraId } } : {}),
@@ -104,8 +161,17 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         }
       } catch (err) {
         console.warn('Camera or microphone access is unavailable:', err);
+        if (selectedCameraId) {
+          setSourceError('Capture card not found - check USB / OBS Virtual Camera is running. Switching to your phone camera.');
+          try {
+            const fallback = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            if (isMounted) { mediaStreamRef.current?.getTracks().forEach(track => track.stop()); mediaStreamRef.current = fallback; if (videoPreviewRef.current) videoPreviewRef.current.srcObject = fallback; setHasCameraPermission(true); setSelectedCameraId(''); }
+            return;
+          } catch { }
+        }
         if (isMounted) {
           setHasCameraPermission(false);
+          setSourceError('Camera or microphone access is unavailable.');
         }
       }
     }
@@ -496,6 +562,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               )}
 
               {/* Floating Live Badge Over Video */}
+              {liveCaption && captionsEnabled && <div className="absolute bottom-20 left-1/2 z-30 max-w-[85%] -translate-x-1/2 rounded bg-black/80 px-3 py-1.5 text-center text-sm font-semibold text-white">{liveCaption}</div>}
+              <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex items-center gap-1 rounded bg-black/50 px-2 py-1 text-[10px] font-bold text-white"><img src="/logo-192.png" alt="" className="h-5 w-5 rounded-full" />EchatSl</div>
               {isBroadcasting && (
                 <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
                   <span className="bg-rose-600 text-white text-xs font-black uppercase px-2.5 py-1 rounded-md tracking-wider flex items-center gap-1 shadow-lg animate-pulse">
@@ -589,6 +657,11 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                       <option value="">Default camera</option>{devices.filter(device => device.kind === 'videoinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Camera'}</option>)}
                     </select>
                   </label>
+                  <button type="button" onClick={() => void startScreenShare()} className="w-full rounded-lg border border-sky-700 bg-sky-950/60 px-3 py-2 text-left text-xs font-bold text-sky-200 hover:bg-sky-900">Share screen or capture card</button>
+                  <p className="text-[10px] text-slate-500">External webcams, Elgato and OBS Virtual Camera appear in the Camera list.</p>
+                  {sourceError && <p role="alert" className="rounded-lg bg-rose-950/70 p-2 text-[10px] text-rose-200">{sourceError}</p>}
+                  <label className="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={captionsEnabled} onChange={event => setCaptionsEnabled(event.target.checked)} />Auto-captions</label>
+                  {captionsEnabled && <select value={captionLanguage} onChange={event => setCaptionLanguage(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white"><option value="en-US">English</option><option value="auto">Auto (browser default)</option><option value="es-ES">Spanish</option><option value="fr-FR">French</option></select>}
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Microphone
                     <select value={selectedMicrophoneId} onChange={event => setSelectedMicrophoneId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
                       <option value="">Default microphone</option>{devices.filter(device => device.kind === 'audioinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Microphone'}</option>)}

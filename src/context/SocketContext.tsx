@@ -68,6 +68,8 @@ interface SocketContextType {
   onLiveReaction: (cb: (data: { emoji: string; userName?: string; userId?: string }) => void) => () => void;
   onLiveViewersUpdated: (cb: (count: number) => void) => () => void;
   onLiveSignal: (cb: (data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void) => () => void;
+  onLiveCaption: (cb: (data: { streamId: string; text: string; createdAt: number }) => void) => () => void;
+  sendLiveCaption: (streamId: string, text: string) => void;
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
@@ -249,6 +251,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const liveReactionListeners = useRef<Set<(data: { emoji: string; userName?: string; userId?: string }) => void>>(new Set());
   const liveViewersUpdatedListeners = useRef<Set<(count: number) => void>>(new Set());
   const liveSignalListeners = useRef<Set<(data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void>>(new Set());
+  const liveCaptionListeners = useRef<Set<(data: { streamId: string; text: string; createdAt: number }) => void>>(new Set());
 
   // WebRTC teardown helper
   const cleanUpCallMedia = useCallback(() => {
@@ -485,6 +488,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
           case 'live:signal':
             liveSignalListeners.current.forEach(cb => cb(data));
+            break;
+
+          case 'live_caption':
+            liveCaptionListeners.current.forEach(cb => cb(data));
             break;
 
           // WebRTC Call Signaling (Supports call:initiate, call:offer, call:answer, call:ice-candidate, call:end, call:rejected)
@@ -1121,6 +1128,14 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => { liveSignalListeners.current.delete(cb); };
   };
 
+  const onLiveCaption = useCallback((cb: (data: { streamId: string; text: string; createdAt: number }) => void) => {
+    liveCaptionListeners.current.add(cb);
+    return () => { liveCaptionListeners.current.delete(cb); };
+  }, []);
+  const sendLiveCaption = useCallback((streamId: string, text: string) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'live-caption', streamId, text }));
+  }, []);
+
   return (
     <SocketContext.Provider
       value={{
@@ -1155,7 +1170,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         onLiveComment,
         onLiveReaction,
         onLiveViewersUpdated,
-        onLiveSignal
+        onLiveSignal,
+        onLiveCaption,
+        sendLiveCaption
       }}
     >
       {children}
