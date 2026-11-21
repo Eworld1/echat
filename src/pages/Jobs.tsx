@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Search, MapPin, Clock, Briefcase, Plus, Pencil, Trash2, X } from "lucide-react";
 
 // --- ADMIN CHECK ---
@@ -31,10 +31,16 @@ const initialJobs: Job[] = [
 ];
 
 export default function Jobs() {
-  const [jobs, setJobs] = useState<Job[]>(initialJobs);
-  const [search, setSearch] = useState("");
+  const [jobs, setJobs] = useState<Job[]>(() => {
+  const saved = localStorage.getItem("echat_jobs");
+  return saved ? JSON.parse(saved) : initialJobs;
+});
+useEffect(() => {
+  localStorage.setItem("echat_jobs", JSON.stringify(jobs));
+}, [jobs]);
   const [locationFilter, setLocationFilter] = useState("All");
   const [typeFilter, setTypeFilter] = useState("All");
+  const [search, setSearch] = useState("");
   const [applied, setApplied] = useState<number[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingJob, setEditingJob] = useState<Job | null>(null);
