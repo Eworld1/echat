@@ -15,6 +15,7 @@ import {
   BarChart3,
   ShoppingBag,
   Package,
+  Briefcase,
   Video,
   X
 } from 'lucide-react';
@@ -41,6 +42,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
       { label: 'Messages', icon: <MessageSquare size={20}/>, action: onOpenMessenger },
       { label: 'Pages', icon: <Flag size={20}/>, action: () => onNavigate('pages'), active: currentView === 'pages' },
       { label: 'Groups', icon: <Users2 size={20}/>, action: () => onNavigate('groups'), active: currentView === 'groups' },
+      { label: 'Jobs', icon: <Briefcase size={20}/>, action: () => onNavigate('jobs'), active: currentView === 'jobs' },
       { label: 'Events', icon: <Calendar size={20}/>, action: () => onNavigate('events'), active: currentView === 'events' },
       { label: 'Dashboard', icon: <BarChart3 size={20}/>, action: () => onNavigate('dashboard'), active: currentView === 'dashboard' },
       { label: 'Saved Posts', icon: <Bookmark size={20}/>, action: () => onNavigate('saved'), active: currentView === 'saved' },
@@ -123,6 +125,18 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
             <Users2 size={20} />
           </div>
           <span className="flex-1 truncate">{t('groups')}</span>
+        </button>
+
+        <button
+          onClick={() => onNavigate('jobs')}
+          className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${
+            currentView === 'jobs' ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
+          }`}
+        >
+          <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
+            <Briefcase size={20} />
+          </div>
+          <span className="flex-1 truncate">Jobs</span>
         </button>
 
         {/* Events */}
