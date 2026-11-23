@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { cloudinaryVideoPoster } from '../../services/upload';
 import { ArrowLeft, Bookmark, Check, ImagePlus, Music2, Pause, Play, Plus, Scissors, Smile, Sparkles, Trash2, Type, Upload, Users, Wand2, X, Zap } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../services/firebase';
@@ -241,11 +242,12 @@ export const CreateStudio: React.FC<CreateStudioProps> = ({ mode, preset, onClos
       const mediaUpload = uploadMedia(folder, uid, file, percent => setProgress(Math.round(percent * 0.85)));
       cancelUpload.current = mediaUpload.cancel;
       const mediaUrl = await mediaUpload.promise;
-      let coverUrl = mediaType === 'image' ? mediaUrl : '';
+      // Videos without a chosen cover get Cloudinary's first frame as the cover image.
+      let coverUrl = mediaType === 'image' ? mediaUrl : cloudinaryVideoPoster(mediaUrl);
       if (coverFile && mediaType === 'video') {
         const coverUpload = uploadMedia('covers', uid, coverFile, percent => setProgress(85 + Math.round(percent * 0.1)));
         cancelUpload.current = coverUpload.cancel;
-        coverUrl = await coverUpload.promise.catch(error => { console.error('[EChat upload] cover upload failed (reel still posts)', error); return ''; });
+        coverUrl = await coverUpload.promise.catch(error => { console.error('[EChat upload] cover upload failed (reel still posts)', error); return cloudinaryVideoPoster(mediaUrl); });
       }
       setProgress(96);
       const finalEdit: MediaEdit = { ...edit, trimEnd: mediaType === 'image' ? IMAGE_SECONDS : (edit.trimEnd || Math.min(duration, maxSeconds)) };

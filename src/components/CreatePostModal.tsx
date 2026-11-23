@@ -152,9 +152,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setError('Choose one video or up to 12 images in a post.');
       return;
     }
-    const maxVideoSize = 2 * 1024 * 1024;
+    const maxVideoSize = 30 * 1024 * 1024;
     if (pickedFiles.some(file => isVideo(file) && file.size > maxVideoSize)) {
-      setError('Video too large. Choose a video under 2 MB.');
+      setError('Video must be 30MB or less');
       return;
     }
     if (videoOnly && pickedFiles.some(file => {
@@ -166,8 +166,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       return;
     }
     const newFiles = await Promise.all(pickedFiles.map(file => isVideo(file) ? file : compressImage(file)));
-    if (newFiles.some(file => !isVideo(file) && file.size > 2 * 1024 * 1024)) {
-      setError('A photo is still larger than 2 MB after compression. Choose a smaller photo.');
+    if (newFiles.some(file => !isVideo(file) && file.size > 10 * 1024 * 1024)) {
+      setError('A photo is still larger than 10 MB after compression. Choose a smaller photo.');
       return;
     }
     const files = appendImages ? [...existingFiles, ...newFiles] : newFiles;
@@ -507,7 +507,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                 </div>
             </div>
           )}
-          {videoOnly && mediaFile && <div className="mt-2 px-1 text-xs font-semibold text-slate-500">{formatFileSize(mediaFile.size)} / 2 MB{mediaDuration > 0 && ` · ${Math.floor(mediaDuration / 60)}:${String(Math.floor(mediaDuration % 60)).padStart(2, '0')}`}{videoResolution && ` · ${videoResolution}`}</div>}
+          {videoOnly && mediaFile && <div className="mt-2 px-1 text-xs font-semibold text-slate-500">{formatFileSize(mediaFile.size)} / 30 MB{mediaDuration > 0 && ` · ${Math.floor(mediaDuration / 60)}:${String(Math.floor(mediaDuration % 60)).padStart(2, '0')}`}{videoResolution && ` · ${videoResolution}`}</div>}
           {videoOnly && showCompressionPrompt && mediaFile && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
             <p className="font-bold">This video is large ({formatFileSize(mediaFile.size)}). Compress it for faster upload?</p>
             <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => { setCompressLargeVideo(true); setShowCompressionPrompt(false); setError(''); }} className="min-h-10 rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-white">Compress &amp; Upload</button><button type="button" onClick={() => { setCompressLargeVideo(false); setShowCompressionPrompt(false); setError(''); }} className="min-h-10 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold">Upload Original</button></div>

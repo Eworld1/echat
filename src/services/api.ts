@@ -1,4 +1,7 @@
-import { API_URL, LEGACY_API_URL, apiUrl, assetUrl } from './apiBase';
+import { LEGACY_API_URL, apiUrl } from './apiBase';
+import { MAX_VIDEO_UPLOAD_BYTES, UploadCancelledError, uploadToCloudinary } from './upload';
+
+const cloudinaryFolderFor = (file: File) => file.type.startsWith('video/') ? 'echat/videos' : file.type.startsWith('image/') ? 'echat/images' : 'echat/files';
 import type { AdminAnalytics, AdminSystemInfo, AuditEntry } from '../types/admin';
 import type {
   User,
@@ -148,26 +151,6 @@ async function fetchWithTimeout(
   }
 }
 
-function waitForReelRetry(ms: number, signal?: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(reelUploadAbortError());
-      return;
-    }
-    const finish = () => {
-      signal?.removeEventListener('abort', abort);
-      resolve();
-    };
-    const timer = setTimeout(finish, ms);
-    const abort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', abort);
-      reject(reelUploadAbortError());
-    };
-    signal?.addEventListener('abort', abort, { once: true });
-  });
-}
-
 function getHeaders(customHeaders: Record<string, string> = {}) {
   const storage = typeof window !== 'undefined' ? window.localStorage : null;
   const currentUserId = storage?.getItem('echat_user_id') || '';
@@ -265,219 +248,40 @@ export const api = {
     return readResponse<RTCConfiguration>(res, 'Could not load call network configuration');
   },
   // File upload (profile photos, cover photos, media). Returns a loadable URL.
+  /** Uploads any file (photo, video, attachment) to Cloudinary and returns its https URL. */
   async uploadFile(file: File, signal?: AbortSignal): Promise<string> {
-    if (file.size > 2 * 1024 * 1024) throw new Error('File too large. Choose a file under 2 MB.');
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      const abort = () => reader.abort();
-      const cleanup = () => signal?.removeEventListener('abort', abort);
-      reader.onload = () => { cleanup(); resolve(String(reader.result)); };
-      reader.onerror = () => { cleanup(); reject(new Error('Could not read the selected file')); };
-      reader.onabort = () => { cleanup(); reject(new DOMException('Upload cancelled', 'AbortError')); };
-      if (signal?.aborted) {
-        reject(new DOMException('Upload cancelled', 'AbortError'));
-        return;
-      }
-      signal?.addEventListener('abort', abort, { once: true });
-      reader.readAsDataURL(file);
-    });
-    const res = await fetchWithTimeout(apiUrl('/api/upload'), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ dataUrl, filename: file.name }),
-      signal
-    }, signal, 60_000);
-    const data = await readResponse<{ url: string }>(res, 'Upload failed');
-    return assetUrl(data.url);
+    try {
+      return await uploadToCloudinary(file, { folder: cloudinaryFolderFor(file), signal }).promise;
+    } catch (error) {
+      if (error instanceof UploadCancelledError) throw reelUploadAbortError();
+      throw error;
+    }
   },
 
+  /**
+   * Video upload with progress (posts / reels / old stories / chat videos), now via Cloudinary.
+   * Same signature as before so every caller keeps working; uploadId is no longer used.
+   */
   async uploadReelFile(
     file: File,
     onProgress: (percent: number, status?: string) => void,
     options: { signal?: AbortSignal; maxBytes?: number; maxAttempts?: number; chunkTimeoutMs?: number } = {}
   ): Promise<{ url: string; uploadId: string }> {
-    const maxBytes = Math.min(options.maxBytes ?? 2 * 1024 * 1024, 2 * 1024 * 1024);
-    if (file.size > maxBytes) throw new Error('Video too large. Choose a video under 2 MB.');
-    if (!API_URL && typeof window !== 'undefined' && window.location.hostname.endsWith('.vercel.app')) {
-      throw new Error('Reel uploads need the backend URL. Set VITE_API_URL to your deployed backend in Vercel, then redeploy the frontend.');
-    }
+    if (file.size > Math.min(options.maxBytes ?? MAX_VIDEO_UPLOAD_BYTES, MAX_VIDEO_UPLOAD_BYTES)) throw new Error('Video must be 30MB or less');
     if (options.signal?.aborted) throw reelUploadAbortError();
-    const resumeKey = `echat_reel_upload:${file.name}:${file.size}:${file.lastModified}`;
-    const savedId = typeof window !== 'undefined' ? window.localStorage.getItem(resumeKey) : null;
-    const headers = getHeaders();
-    let uploadId = savedId || '';
-    let uploadState: { uploadId: string; fileName: string; mimeType: string; size: number; chunkSize: number; totalChunks: number; receivedChunks: number[]; completedUrl?: string } | null = null;
-
-    if (uploadId) {
-      let response: Response;
-      try {
-        response = await fetchWithTimeout(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}`), { headers }, options.signal, 30_000);
-      } catch {
-        if (options.signal?.aborted) throw reelUploadAbortError();
-        throw new Error(typeof navigator !== 'undefined' && !navigator.onLine ? 'You are offline. Check your connection and tap Retry.' : 'Could not check saved Reel progress. Your upload is preserved; tap Retry when your connection is stable.');
-      }
-      if (response.ok) uploadState = await response.json();
-      else if (response.status === 404) uploadId = '';
-      else if (response.status === 401) throw new Error('Your session expired. Sign in again, then tap Retry to resume.');
-      else if (response.status === 413) throw new Error('Video too large. Choose a video under 2 MB.');
-      else throw new Error(response.status >= 500 ? 'Server error while checking Reel upload progress. Please try again in 1 min.' : `Could not check Reel upload progress (HTTP ${response.status}). Tap Retry to resume.`);
-      if (uploadState && (uploadState.size !== file.size || uploadState.fileName !== file.name)) uploadId = '';
-      if (!uploadId && typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
-      if (uploadState?.completedUrl) {
-        if (typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
-        onProgress(100);
-        return { url: assetUrl(uploadState.completedUrl), uploadId };
-      }
-    }
-
-    const startUpload = async () => {
-      const fileMimeType = file.type || (file.name.toLowerCase().endsWith('.mov')
-        ? 'video/quicktime'
-        : file.name.toLowerCase().endsWith('.webm') ? 'video/webm' : 'video/mp4');
-      const response = await fetchWithTimeout(apiUrl('/api/reels/upload/init'), {
-        method: 'POST', headers,
-        body: JSON.stringify({ fileName: file.name, mimeType: fileMimeType, size: file.size })
-      }, options.signal, 30_000);
-      const init = await readResponse<{ uploadId: string; chunkSize: number; totalChunks: number }>(response, 'Could not start Reel upload');
-      uploadId = init.uploadId;
-      if (typeof window !== 'undefined') window.localStorage.setItem(resumeKey, uploadId);
-      uploadState = { uploadId, fileName: file.name, mimeType: fileMimeType, size: file.size, chunkSize: init.chunkSize, totalChunks: init.totalChunks, receivedChunks: [] };
-    };
-    if (!uploadId) await startUpload();
-
-    if (!uploadState) throw new Error('Upload session unavailable. Tap Retry to resume.');
-    let received = new Set(uploadState.receivedChunks || []);
-    console.info('[Echat] Resuming Reel upload', { uploadId, lastSuccessfulChunk: received.size ? Math.max(...received) : -1 });
-    let completedBytes = Array.from(received).reduce((sum, index) => sum + Math.min(uploadState!.chunkSize, file.size - index * uploadState!.chunkSize), 0);
-    const progressStatus = (bytes: number) => `Uploading ${(bytes / (1024 * 1024)).toFixed(1)} MB / ${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-    onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), progressStatus(completedBytes));
-    const uploadChunk = (index: number): Promise<void> => new Promise((resolve, reject) => {
-      const start = index * uploadState!.chunkSize;
-      const chunk = file.slice(start, Math.min(file.size, start + uploadState!.chunkSize));
-      const xhr = new XMLHttpRequest();
-      xhr.open('PUT', apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}/chunk/${index}`));
-      xhr.timeout = options.chunkTimeoutMs ?? 10 * 60 * 1000;
-      const abort = () => xhr.abort();
-      const cleanup = () => options.signal?.removeEventListener('abort', abort);
-      if (options.signal?.aborted) {
-        reject(reelUploadAbortError());
-        return;
-      }
-      options.signal?.addEventListener('abort', abort, { once: true });
-      Object.entries(getHeaders({ 'Content-Type': 'application/octet-stream' })).forEach(([name, value]) => xhr.setRequestHeader(name, value));
-      xhr.upload.onprogress = event => {
-        if (event.lengthComputable) {
-          const loadedBytes = completedBytes + event.loaded;
-          onProgress(Math.min(99, Math.round((loadedBytes / file.size) * 100)), progressStatus(loadedBytes));
-        }
-      };
-      xhr.onerror = () => {
-        cleanup();
-        const message = typeof navigator !== 'undefined' && !navigator.onLine ? 'You are offline. Check your connection and retry this chunk.' : `Connection dropped while sending chunk ${index + 1}. Its progress is saved; tap Retry to resume.`;
-        console.error('[Echat] Reel chunk transport error', { uploadId, chunkIndex: index, status: xhr.status, error: message });
-        reject(new Error(message));
-      };
-      xhr.ontimeout = () => {
-        cleanup();
-        const message = 'Upload timed out - your connection is slow. Tap Retry to resume.';
-        console.error('[Echat] Reel chunk timeout', { uploadId, chunkIndex: index, status: xhr.status, error: message });
-        reject(new Error(message));
-      };
-      xhr.onload = () => {
-        cleanup();
-        let payload: { error?: string } = {};
-        try { payload = JSON.parse(xhr.responseText); } catch { /* use fallback below */ }
-        if (xhr.status < 200 || xhr.status >= 300) {
-          const message = payload.error || (xhr.status === 413 ? 'File too large - Max 2 MB.' : xhr.status >= 500 ? 'Server error while uploading. Please try again in 1 min.' : `Upload chunk failed (HTTP ${xhr.status}). Tap Retry to resume.`);
-          console.error('[Echat] Reel chunk response error', { uploadId, chunkIndex: index, status: xhr.status, error: message });
-          reject(Object.assign(new Error(message), { status: xhr.status }));
-        }
-        else resolve();
-      };
-      xhr.onabort = () => {
-        cleanup();
-        reject(reelUploadAbortError());
-      };
-      xhr.send(chunk);
-    });
-
-    let index = 0;
-    let sessionRestarts = 0;
-    while (index < uploadState.totalChunks) {
-      if (received.has(index)) { index++; continue; }
-      let lastError: unknown;
-      let restartSession = false;
-      for (let attempt = 0; attempt < (options.maxAttempts ?? 9); attempt++) {
-        try { await uploadChunk(index); lastError = null; break; }
-        catch (error) {
-          if (options.signal?.aborted) throw reelUploadAbortError();
-          const statusCode = error instanceof Error ? (error as Error & { status?: number }).status : undefined;
-          if (statusCode && statusCode < 500 && statusCode !== 408 && statusCode !== 429) throw error;
-          lastError = error;
-          const message = error instanceof Error ? error.message : String(error);
-          console.error('[Echat] Reel chunk upload failed', { uploadId, chunkIndex: index, attempt: attempt + 1, error: message });
-          // The server may have stored the chunk even when its response was
-          // lost (common on mobile networks). Check durable progress before
-          // retrying, so we don't report a false failure or resend it forever.
-          try {
-            const statusResponse = await fetchWithTimeout(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}`), { headers }, options.signal, 30_000);
-            if (statusResponse.ok) {
-              const status = await statusResponse.json() as { receivedChunks?: number[] };
-              if (status.receivedChunks?.includes(index)) {
-                lastError = null;
-                break;
-              }
-            } else if (statusResponse.status === 401) {
-              throw new Error('Your session expired. Sign in again, then tap Retry to resume.');
-            } else if (statusResponse.status === 404) {
-              if (sessionRestarts >= 2) throw new Error('The upload session keeps disappearing. Confirm the backend uses one shared persistent upload disk, then retry.');
-              await startUpload();
-              sessionRestarts++;
-              received = new Set<number>();
-              completedBytes = 0;
-              index = 0;
-              onProgress(0, 'Reconnecting upload session…');
-              restartSession = true;
-              lastError = null;
-              break;
-            }
-          } catch (statusError) {
-            if (options.signal?.aborted) throw reelUploadAbortError();
-            if (statusError instanceof Error && statusError.message.startsWith('Your session expired')) throw statusError;
-            if (statusError instanceof Error && statusError.message.startsWith('Could not start Reel upload')) throw statusError;
-            if (statusError instanceof Error && statusError.message.startsWith('The upload session keeps disappearing')) throw statusError;
-          }
-          if (attempt < (options.maxAttempts ?? 9) - 1) {
-            const delay = Math.min(20_000, 1000 * (2 ** Math.min(attempt, 4))) + Math.floor(Math.random() * 500);
-            onProgress(Math.min(99, Math.round((completedBytes / file.size) * 100)), `Reconnecting and resuming chunk ${index + 1}/${uploadState!.totalChunks}…`);
-            await waitForReelRetry(delay, options.signal);
-          }
-        }
-      }
-      if (restartSession) continue;
-      if (lastError) throw lastError instanceof Error ? lastError : new Error('Reel upload failed. Progress is saved; tap Retry to resume.');
-      received.add(index);
-      const sentBytes = Array.from(received).reduce((sum, part) => sum + Math.min(uploadState!.chunkSize, file.size - part * uploadState!.chunkSize), 0);
-      onProgress(Math.min(99, Math.round((sentBytes / file.size) * 100)), progressStatus(sentBytes));
-      index++;
-    }
-
-    let completeResponse: Response;
+    const toMb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
     try {
-      completeResponse = await fetchWithTimeout(apiUrl(`/api/reels/upload/${encodeURIComponent(uploadId)}/complete`), { method: 'POST', headers, body: '{}' }, options.signal, 30_000);
-    } catch {
-      if (options.signal?.aborted) throw reelUploadAbortError();
-      throw new Error(typeof navigator !== 'undefined' && !navigator.onLine ? 'You are offline. The uploaded chunks are saved; reconnect and tap Retry to finish.' : 'Connection dropped while finalizing. The uploaded chunks are saved; tap Retry to finish.');
+      const url = await uploadToCloudinary(file, {
+        folder: 'echat/videos',
+        signal: options.signal,
+        onProgress: percent => onProgress(percent, percent >= 100 ? 'Upload complete' : `Uploading ${toMb((file.size * percent) / 100)} / ${toMb(file.size)} MB (${percent}%)`)
+      }).promise;
+      onProgress(100, 'Upload complete');
+      return { url, uploadId: '' };
+    } catch (error) {
+      if (error instanceof UploadCancelledError) throw reelUploadAbortError();
+      throw error;
     }
-    if (!completeResponse.ok) {
-      const details = await completeResponse.json().catch(() => ({})) as { error?: string };
-      const message = completeResponse.status === 413 ? 'Video too large. Choose a video under 2 MB.' : completeResponse.status >= 500 ? 'Server error while finishing the upload. Please try again in 1 min.' : details.error || 'Could not finish Reel upload. Tap Retry to resume.';
-      throw new Error(message);
-    }
-    const result = await completeResponse.json() as { url: string };
-    if (typeof window !== 'undefined') window.localStorage.removeItem(resumeKey);
-    onProgress(100, 'Upload complete');
-    return { url: assetUrl(result.url), uploadId };
   },
 
   // Global Search

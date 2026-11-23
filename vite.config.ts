@@ -5,6 +5,8 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // NEXT_PUBLIC_* too, so the Cloudinary settings already in Vercel (NEXT_PUBLIC_CLOUDINARY_*) reach the app.
+  envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, '.'),

@@ -17,13 +17,13 @@ import {
   type Query,
   type Unsubscribe
 } from 'firebase/firestore';
-import { getDownloadURL, ref as storageRef, uploadBytesResumable } from 'firebase/storage';
-import { db, storage } from '../firebase';
+import { uploadToCloudinary } from '../upload';
+import { db } from '../firebase';
 import { ALL_CATALOG_SOUNDS, type SoundInfo } from './soundCatalog';
 
 /**
  * Reels / Stories / Sounds on Firebase (Firestore + Storage).
- * Security is enforced by firestore.rules and storage.rules: counters only move together with the
+ * Security is enforced by firestore.rules (media files live on Cloudinary): counters only move together with the
  * matching like / comment document, and media uploads are limited to 30 MB per file.
  */
 
@@ -248,116 +248,16 @@ export function validateMediaFile(file: File, kind: 'reel' | 'story'): { mediaTy
 
 export interface UploadHandle { promise: Promise<string>; cancel: () => void }
 
-/** Seconds before we check *why* an upload has not sent its first byte yet. */
-const FIRST_BYTE_PROBE_MS = 8_000;
-/** No progress at all for this long = give up with a clear error + Retry (the SDK would retry for 10 min). */
-const STALL_TIMEOUT_MS = 60_000;
-
-const STORAGE_ERROR_TEXT: Record<string, string> = {
-  'storage/unauthorized': 'Permission denied - Storage Rules. Sign in again; if it keeps happening, the Storage rules are not deployed yet.',
-  'storage/unauthenticated': 'You are signed out of Firebase. Sign in again and retry.',
-  'storage/bucket-not-found': 'Storage bucket not found. Firebase Storage is not enabled for this project yet.',
-  'storage/project-not-found': 'Firebase project not found. Check the Firebase config.',
-  'storage/quota-exceeded': 'Storage is full. Please contact EChat.',
-  'storage/retry-limit-exceeded': 'Upload timed out. Check your connection and retry.',
-  'storage/invalid-checksum': 'The file got corrupted while uploading. Please retry.',
-  'storage/server-file-wrong-size': 'The file got corrupted while uploading. Please retry.',
-  'storage/canceled': 'Upload cancelled.'
-};
-
 /**
- * Asks the Storage API directly whether the bucket exists. A missing bucket makes the SDK retry silently
- * for ~10 minutes (looks like "stuck at 0%"), so we detect it ourselves. 401/403 = bucket exists.
+ * Uploads reel / story / cover media to Cloudinary with real progress (0 → 100).
+ * Only the returned https URL is saved in Firestore. Size limits are checked before sending.
  */
-async function probeBucket(bucket: string): Promise<'missing' | 'ok' | 'offline'> {
-  try {
-    const response = await fetch(`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o?maxResults=1`, { method: 'GET', cache: 'no-store' });
-    return response.status === 404 ? 'missing' : 'ok';
-  } catch {
-    return 'offline';
-  }
-}
-
-/** Upload straight from the device to Firebase Storage with real progress. Never hangs silently. */
 export function uploadMedia(folder: 'reels' | 'stories' | 'covers', uid: string, file: Blob & { name?: string }, onProgress: (percent: number) => void): UploadHandle {
-  const extension = (file.name?.split('.').pop() || (file.type.split('/')[1] || 'bin')).replace('quicktime', 'mov').replace('jpeg', 'jpg').slice(0, 5);
-  // Some phones give .MOV files an empty type; Storage rules need a real content type.
-  const byExtension: Record<string, string> = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
-  const contentType = file.type || byExtension[extension.toLowerCase()] || 'application/octet-stream';
-  const isImage = contentType.startsWith('image/');
-  // Size limits are checked BEFORE anything is sent.
+  const isImage = (file.type || '').startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.name || '');
   if (isImage && file.size > MAX_IMAGE_BYTES) return { promise: Promise.reject(new Error('Image must be 10MB or less')), cancel: () => {} };
   if (!isImage && file.size > MAX_MEDIA_BYTES) return { promise: Promise.reject(new Error('Video must be 30MB or less')), cancel: () => {} };
-  if (!uid) return { promise: Promise.reject(new Error('You are signed out of Firebase. Sign in again and retry.')), cancel: () => {} };
-
-  const bucket = String(storage.app.options.storageBucket || '');
-  if (!bucket) {
-    console.error('[EChat upload] No storageBucket in the Firebase config (VITE_FIREBASE_STORAGE_BUCKET / firebase-applet-config.json).');
-    return { promise: Promise.reject(new Error('Storage bucket not configured. Set VITE_FIREBASE_STORAGE_BUCKET.')), cancel: () => {} };
-  }
-
-  const path = `${folder}/${uid}/${Date.now()}_${Math.random().toString(36).slice(2, 10)}.${extension}`;
-  const task = uploadBytesResumable(storageRef(storage, path), file, { contentType, cacheControl: 'public, max-age=31536000' });
-  let settled = false;
-  let overrideError: Error | null = null;
-  let lastBytes = 0;
-  let lastProgressAt = Date.now();
-  const timers: number[] = [];
-  const clearTimers = () => timers.splice(0).forEach(id => window.clearTimeout(id));
-
-  const promise = new Promise<string>((resolve, reject) => {
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimers();
-      reject(error);
-    };
-
-    const abortWith = (message: string, detail: unknown) => {
-      if (settled || overrideError) return;
-      console.error(`[EChat upload] ${message}`, detail);
-      overrideError = new Error(message);
-      task.cancel(); // the error handler below rejects with overrideError
-    };
-
-    timers.push(window.setTimeout(() => {
-      if (settled || lastBytes > 0) return;
-      void probeBucket(bucket).then(result => {
-        if (result === 'missing') abortWith(`Storage bucket not found ("${bucket}"). Enable Firebase Storage in the Firebase console, then deploy storage.rules.`, { bucket, path });
-        else if (result === 'offline' && !navigator.onLine) abortWith('You are offline. Check your connection and retry.', { bucket, path });
-      });
-    }, FIRST_BYTE_PROBE_MS));
-
-    const watchStall = () => {
-      timers.push(window.setTimeout(() => {
-        if (settled) return;
-        if (Date.now() - lastProgressAt >= STALL_TIMEOUT_MS) abortWith('Upload is not moving. Check your connection and retry.', { bucket, path, bytesTransferred: lastBytes });
-        else watchStall();
-      }, 5_000));
-    };
-    watchStall();
-
-    task.on('state_changed',
-      snapshot => {
-        if (snapshot.bytesTransferred !== lastBytes) { lastBytes = snapshot.bytesTransferred; lastProgressAt = Date.now(); }
-        onProgress(snapshot.totalBytes ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100) : 0);
-      },
-      error => {
-        const code = (error as { code?: string }).code || '';
-        if (overrideError) { fail(overrideError); return; }
-        // Log the REAL error (code + server response) so it can be diagnosed from the browser console.
-        if (code !== 'storage/canceled') console.error('[EChat upload] failed', { code, message: error.message, serverResponse: (error as { serverResponse?: string }).serverResponse, bucket, path });
-        fail(new Error(STORAGE_ERROR_TEXT[code] || `Upload failed: ${error.message || code || 'unknown error'}`));
-      },
-      () => {
-        clearTimers();
-        void getDownloadURL(task.snapshot.ref).then(url => { settled = true; resolve(url); }, error => {
-          console.error('[EChat upload] uploaded but could not get the download URL', error);
-          fail(new Error(`Upload finished but the link could not be created: ${error instanceof Error ? error.message : 'unknown error'}`));
-        });
-      });
-  });
-  return { promise, cancel: () => { if (!settled) task.cancel(); } };
+  if (!uid) return { promise: Promise.reject(new Error('Please sign in again, then retry.')), cancel: () => {} };
+  return uploadToCloudinary(file, { folder: `echat/${folder}`, onProgress });
 }
 
 // ---------------- reels ----------------
