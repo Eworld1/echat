@@ -72,7 +72,7 @@ export interface AdminStats { totalUsers: number; onlineUsers: number; blockedUs
 export interface SiteConfig { welcomeTitle?: string; welcomeSubtitle?: string; welcomeBgImage?: string; welcomeLogo?: string; primaryButtonText?: string; secondaryText?: string; appName?: string; liveAccessMode?: LiveAccessMode; }
 export interface GlobalSearchResults { users: User[]; posts: Post[]; }
 export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
-export type LiveCategory = 'Church' | 'Music' | 'Education' | 'Market / Selling' | 'News' | 'Sports' | 'Just Chatting';
+export type LiveCategory = 'Just Chatting' | 'Music' | 'Gaming' | 'News' | 'Sports' | 'Church' | 'Education' | 'Market / Selling';
 export type LiveLocation = 'Freetown' | 'Bo' | 'Kenema' | 'Makeni' | 'Other';
 export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; category?: LiveCategory; location?: LiveLocation; reportCount?: number; underReview?: boolean; taggedPageIds?: string[]; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; liveKitRoom?: string; }
 export interface LiveAccessRequest { id: string; userId: string; name: string; avatar: string; reason: string; status: 'pending' | 'approved' | 'rejected' | 'blocked' | 'cancelled'; createdAt: number; reviewedBy?: string; }

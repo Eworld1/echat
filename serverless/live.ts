@@ -23,7 +23,7 @@ export function applyLiveCors(req: ApiRequest, res: ApiResponse): void {
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-firebase-id-token, x-live-auth-token, x-user-id');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-firebase-id-token, x-live-auth-token, x-user-id, x-developer-key, x-page-id');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
@@ -53,6 +53,52 @@ if (rawCredential) {
   }
 } else {
   console.warn('[Vercel Live API] FIREBASE_SERVICE_ACCOUNT_JSON is unset; ADC is disabled and Firestore live APIs are unavailable.');
+}
+
+/** True when FIREBASE_SERVICE_ACCOUNT_JSON loaded successfully (never exposes the credential). */
+export function isFirestoreConfigured(): boolean {
+  return Boolean(firestoreInstance);
+}
+
+/** Which live-video settings are present. Booleans only; secrets are never returned. */
+export function liveConfigStatus() {
+  const missing: string[] = [];
+  if (!liveKitUrl) missing.push('LIVEKIT_URL');
+  if (!liveKitApiKey) missing.push('LIVEKIT_API_KEY');
+  if (!liveKitApiSecret) missing.push('LIVEKIT_API_SECRET');
+  if (!firestoreInstance) missing.push('FIREBASE_SERVICE_ACCOUNT_JSON');
+  return {
+    liveKitUrl: Boolean(liveKitUrl),
+    liveKitApiKey: Boolean(liveKitApiKey),
+    liveKitApiSecret: Boolean(liveKitApiSecret),
+    liveKitUrlLooksValid: /^wss?:\/\//i.test(liveKitUrl),
+    firebaseAdmin: Boolean(firestoreInstance),
+    missing,
+    ready: missing.length === 0
+  };
+}
+
+/** Allowed categories/locations for every live source (phone camera and streaming software). */
+export const LIVE_CATEGORY_VALUES = ['Just Chatting', 'Music', 'Gaming', 'News', 'Sports', 'Church', 'Education', 'Market / Selling'];
+export const LIVE_LOCATION_VALUES = ['Freetown', 'Bo', 'Kenema', 'Makeni', 'Other'];
+
+/** Recount unique viewers (presence docs) and store the result on the live document. */
+export async function recountLiveViewers(streamId: string): Promise<number> {
+  const ref = requireFirestore().collection('liveStreams').doc(streamId);
+  const aggregate = await ref.collection('viewers').count().get();
+  const count = aggregate.data().count;
+  const snapshot = await ref.get();
+  const peak = Math.max(Number(snapshot.data()?.peakViewers || 0), count);
+  if (snapshot.exists) await ref.update({ viewersCount: count, peakViewers: peak });
+  return count;
+}
+
+/** Mark a live stream as ended (idempotent). */
+export async function markLiveEnded(streamId: string, reason: string): Promise<void> {
+  const ref = requireFirestore().collection('liveStreams').doc(streamId);
+  const snapshot = await ref.get();
+  if (!snapshot.exists || snapshot.data()?.isActive !== true) return;
+  await ref.update({ isActive: false, endedAt: Date.now(), endedReason: reason });
 }
 
 function requireFirestore(): Firestore {

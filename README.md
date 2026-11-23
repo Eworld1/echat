@@ -42,8 +42,25 @@ See `.env.example`. Key ones:
 - `VITE_API_URL` — backend base URL; empty = same origin
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` — backend-only credentials used to mint temporary TURN tokens
 - `VITE_FIREBASE_*` — Firebase client config
-- `LIVE_STREAM_KEY_SECRET` — server-only random secret (32+ characters), set on the API host and Vercel; owner keys are derived on demand while only a hash is stored in Firestore. Vercel also needs `FIREBASE_SERVICE_ACCOUNT_JSON` and `FIREBASE_DATABASE_ID` for the key API.
-- `RTMP_INGEST_URL` — optional RTMP publishing URL. The Stream Key tab is available, but this repository does not include an RTMP ingest service; setting the URL alone does not enable OBS publishing. Connect an ingest provider to the owner-key validation helper in `serverless/live-stream-key.ts`.
+- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — Go Live video (server-only). See **Go Live setup** below.
+
+## Go Live setup
+
+Go Live runs in the Vercel functions under `api/live/` (`serverless/live-routes/`), using LiveKit for video and
+Firestore (Firebase Admin) for live streams, stream keys, viewer counts, comments and hearts.
+
+1. **LiveKit Cloud** (free tier works): create a project, then copy from Settings → API Keys.
+2. **Vercel → Settings → Environment Variables (Production)**, then redeploy:
+   - `LIVEKIT_URL` — `wss://<project>.livekit.cloud`
+   - `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
+   - `FIREBASE_SERVICE_ACCOUNT_JSON` (+ `FIREBASE_PROJECT_ID`, `FIREBASE_DATABASE_ID` if not the defaults)
+3. **LiveKit Cloud → Settings → Webhooks**: add `https://<your-vercel-domain>/api/live/webhook`.
+   Needed for Streaming Software lives to appear in Live Now / show Live Ended automatically.
+4. Check: open `https://<your-vercel-domain>/api/live/status`. It lists any missing variable (booleans only, no secrets).
+
+**Streaming software:** each user gets one standard RTMP Server URL + Stream Key (a LiveKit RTMP Ingress), which works
+in any app with a Custom RTMP server (OBS, Streamlabs, vMix, XSplit, Prism, Larix, Restream/StreamYard RTMP out).
+Reset Key deletes the old ingress, so the old key stops working everywhere.
 
 ## Project structure
 

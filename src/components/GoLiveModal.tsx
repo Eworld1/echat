@@ -5,7 +5,8 @@ import { liveRtcConfig } from '../utils/liveRtc';
 import { api } from '../services/api';
 import { auth } from '../services/firebase';
 import { LiveStream, LiveComment, LiveCategory, LiveLocation } from '../types';
-import { addLiveComment, blockLiveUser, deleteLiveComment, LIVE_CATEGORIES, LIVE_LOCATIONS, timeoutLiveUser } from '../services/liveDiscovery';
+import { addLiveComment, blockLiveUser, deleteLiveComment, listenLiveComments, LIVE_CATEGORIES, LIVE_LOCATIONS, timeoutLiveUser } from '../services/liveDiscovery';
+import { collection, query, where } from 'firebase/firestore';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { VerifiedBadge } from './VerifiedBadge';
@@ -35,13 +36,21 @@ import {
   Ban,
   MoreVertical,
   Captions,
-  RotateCcw
+  RotateCcw,
+  SwitchCamera
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
 import { GO_LIVE, getGoLiveEligibility } from '../config/featureFlags';
 // @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
 import { Room, Track } from 'livekit-client';
+
+type VideoQuality = '720p' | '480p' | '360p';
+const QUALITY_DIMENSIONS: Record<VideoQuality, { width: number; height: number }> = {
+  '720p': { width: 1280, height: 720 },
+  '480p': { width: 854, height: 480 },
+  '360p': { width: 640, height: 360 }
+};
 
 interface GoLiveModalProps {
   isOpen: boolean;
@@ -80,7 +89,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [endSummary, setEndSummary] = useState<{ duration: number; viewers: number; comments: number; message: string } | null>(null);
   const [studioMode, setStudioMode] = useState<'camera' | 'software'>('camera');
   const [streamKey, setStreamKey] = useState('');
-  const [streamKeyServerUrl, setStreamKeyServerUrl] = useState('rtmp://live.echat.com/live');
+  const [streamKeyServerUrl, setStreamKeyServerUrl] = useState('');
   const [streamKeyIngestConfigured, setStreamKeyIngestConfigured] = useState(false);
   const [streamKeyLoading, setStreamKeyLoading] = useState(false);
   const [streamKeyVisible, setStreamKeyVisible] = useState(false);
@@ -94,7 +103,17 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [isVideoMuted, setIsVideoMuted] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
-  const [videoQuality, setVideoQuality] = useState<'360p' | '720p' | '1080p' | '4k'>('720p');
+  const [videoQuality, setVideoQuality] = useState<VideoQuality>('720p');
+  const videoQualityRef = useRef<VideoQuality>('720p');
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+  const facingModeRef = useRef<'user' | 'environment'>('user');
+  const [switchingCamera, setSwitchingCamera] = useState(false);
+  const [liveConfig, setLiveConfig] = useState<{ ready: boolean; missing: string[]; liveKitUrlLooksValid: boolean; webhookUrl: string } | null>(null);
+  const [rtmpDetails, setRtmpDetails] = useState<{ title: string; category: string; location: string }>({ title: '', category: 'Just Chatting', location: '' });
+  const [rtmpDetailsNotice, setRtmpDetailsNotice] = useState('');
+  const [rtmpDetailsSaving, setRtmpDetailsSaving] = useState(false);
+  const [softwareLive, setSoftwareLive] = useState<LiveStream | null>(null);
+  const lastReactionCountRef = useRef<number | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [selectedMicrophoneId, setSelectedMicrophoneId] = useState('');
@@ -297,9 +316,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         setSourceError('');
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            ...(selectedCameraId ? { deviceId: { exact: selectedCameraId } } : {}),
-            width: { ideal: ({ '360p': 640, '720p': 1280, '1080p': 1920, '4k': 3840 } as const)[videoQuality] },
-            height: { ideal: ({ '360p': 360, '720p': 720, '1080p': 1080, '4k': 2160 } as const)[videoQuality] }
+            ...(selectedCameraId ? { deviceId: { exact: selectedCameraId } } : { facingMode: { ideal: facingModeRef.current } }),
+            width: { ideal: QUALITY_DIMENSIONS[videoQualityRef.current].width },
+            height: { ideal: QUALITY_DIMENSIONS[videoQualityRef.current].height },
+            frameRate: { ideal: 30 }
           },
           audio: { ...(selectedMicrophoneId ? { deviceId: { exact: selectedMicrophoneId } } : {}), echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
@@ -349,7 +369,9 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       screenStreamRef.current = null;
       if (videoPreviewRef.current) videoPreviewRef.current.srcObject = null;
     };
-  }, [isOpen, hasLivePermission, studioMode, videoQuality, selectedCameraId, selectedMicrophoneId, cameraRetry]);
+    // Quality changes resize the running track (changeVideoQuality) instead of restarting the camera,
+    // so switching quality while live no longer drops the published LiveKit track.
+  }, [isOpen, hasLivePermission, studioMode, selectedCameraId, selectedMicrophoneId, cameraRetry]);
 
   useEffect(() => {
     if (!isOpen || studioMode !== 'software') return;
@@ -483,27 +505,75 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     };
   }, [isBroadcasting]);
 
-  const toggleVideo = () => {
-    if (mediaStreamRef.current) {
-      const track = mediaStreamRef.current.getVideoTracks()[0];
-      if (track) {
-        track.enabled = !track.enabled;
-        setIsVideoMuted(!track.enabled);
+  /** Turn camera or mic on/off. While live, the LiveKit publication is muted too so viewers see/hear the change. */
+  const setTrackMuted = async (kind: 'video' | 'audio', muted: boolean) => {
+    const track = kind === 'video' ? mediaStreamRef.current?.getVideoTracks()[0] : mediaStreamRef.current?.getAudioTracks()[0];
+    const publication = liveKitRoomRef.current?.localParticipant.getTrackPublication(kind === 'video' ? Track.Source.Camera : Track.Source.Microphone);
+    try {
+      if (publication?.track) await (muted ? publication.track.mute() : publication.track.unmute());
+    } catch (error) {
+      console.warn('[Go Live] Could not update the LiveKit track mute state', error);
+    }
+    if (track) track.enabled = !muted;
+    if (kind === 'video') setIsVideoMuted(muted); else setIsAudioMuted(muted);
+  };
+
+  const toggleVideo = () => { void setTrackMuted('video', !isVideoMuted); };
+  const toggleAudio = () => { void setTrackMuted('audio', !isAudioMuted); };
+
+  /** Front/back camera. Works before and during a live: the new track replaces the published one. */
+  const switchCamera = async () => {
+    if (switchingCamera) return;
+    const stream = mediaStreamRef.current;
+    const oldTrack = stream?.getVideoTracks()[0];
+    const next = facingModeRef.current === 'user' ? 'environment' : 'user';
+    setSwitchingCamera(true);
+    setSourceError('');
+    const dims = QUALITY_DIMENSIONS[videoQualityRef.current];
+    const getCamera = (facing: 'user' | 'environment') => navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facing }, width: { ideal: dims.width }, height: { ideal: dims.height }, frameRate: { ideal: 30 } },
+      audio: false
+    });
+    try {
+      // Many phones can only open one camera at a time, so release the current one first.
+      oldTrack?.stop();
+      let camera: MediaStream;
+      try {
+        camera = await getCamera(next);
+      } catch (error) {
+        // Restore the previous camera so the preview/broadcast keeps going, then report the failure.
+        const restored = await getCamera(facingModeRef.current).catch(() => null);
+        if (restored) await applyNewVideoTrack(restored.getVideoTracks()[0], oldTrack);
+        throw error;
       }
-    } else {
-      setIsVideoMuted(!isVideoMuted);
+      const newTrack = camera.getVideoTracks()[0];
+      await applyNewVideoTrack(newTrack, oldTrack);
+      facingModeRef.current = next;
+      setFacingMode(next);
+      setSelectedCameraId('');
+    } catch (error) {
+      console.warn('[Go Live] Could not switch camera', error);
+      setSourceError('Could not switch camera. This device may have only one camera.');
+    } finally {
+      setSwitchingCamera(false);
     }
   };
 
-  const toggleAudio = () => {
-    if (mediaStreamRef.current) {
-      const track = mediaStreamRef.current.getAudioTracks()[0];
-      if (track) {
-        track.enabled = !track.enabled;
-        setIsAudioMuted(!track.enabled);
-      }
-    } else {
-      setIsAudioMuted(!isAudioMuted);
+  const applyNewVideoTrack = async (newTrack: MediaStreamTrack | undefined, oldTrack: MediaStreamTrack | undefined) => {
+    const stream = mediaStreamRef.current;
+    if (!newTrack || !stream) return;
+    newTrack.enabled = !isVideoMuted;
+    if (oldTrack) stream.removeTrack(oldTrack);
+    stream.addTrack(newTrack);
+    const publication = liveKitRoomRef.current?.localParticipant.getTrackPublication(Track.Source.Camera);
+    if (publication?.track) await publication.track.replaceTrack(newTrack, { userProvidedTrack: true });
+    for (const peer of livePeersRef.current.values()) {
+      const sender = peer.getSenders().find(item => item.track?.kind === 'video');
+      if (sender) await sender.replaceTrack(newTrack).catch(() => {});
+    }
+    if (videoPreviewRef.current) {
+      videoPreviewRef.current.srcObject = stream;
+      videoPreviewRef.current.play().catch(() => {});
     }
   };
 
@@ -534,16 +604,19 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         }
         liveKitRoomRef.current = newRoom;
         setCurrentSession(res.live);
-        setComments(res.live.comments || []);
-        setPeakViewers(res.live.viewersCount || 1);
+        setComments([]);
+        setPeakViewers(0);
         setIsBroadcasting(true);
         onLiveStarted?.(res.live);
         onStreamStarted?.(res.live);
         confetti({ particleCount: 50, spread: 70 });
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to start live stream';
-      setLiveStartError(`${message}. Check your connection and try Go Live again.`);
+      // Show the server's real reason. Only a network failure gets the connection hint.
+      const message = err instanceof Error ? err.message : 'Failed to start live stream.';
+      const isNetwork = err instanceof TypeError && /fetch|network/i.test(err.message);
+      setLiveStartError(isNetwork ? 'Could not reach the live server. Check your connection and try Go Live again.' : /[.!?]$/.test(message) ? message : `${message}.`);
+      if (!isNetwork) void api.getLiveConfigStatus().then(setLiveConfig).catch(() => {});
       newRoom?.disconnect();
       liveKitRoomRef.current?.disconnect();
       liveKitRoomRef.current = null;
@@ -643,11 +716,75 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
   useEffect(() => {
     if (!isBroadcasting || !currentSession?.id) { setStreamUnderReview(false); return; }
-    return onSnapshot(doc(db, 'liveStreams', currentSession.id), snapshot => {
-      const underReview = snapshot.data()?.underReview === true;
-      setStreamUnderReview(underReview);
-    }, error => console.warn('[Go Live] Could not update review status:', error.code));
+    lastReactionCountRef.current = null;
+    const stopDoc = onSnapshot(doc(db, 'liveStreams', currentSession.id), snapshot => {
+      const data = snapshot.data();
+      setStreamUnderReview(data?.underReview === true);
+      const viewers = Number(data?.viewersCount || 0);
+      setCurrentSession(prev => prev ? { ...prev, viewersCount: viewers } : prev);
+      setPeakViewers(prev => Math.max(prev, viewers));
+      const reactions = Number(data?.reactionsCount || 0);
+      const previous = lastReactionCountRef.current;
+      lastReactionCountRef.current = reactions;
+      if (previous !== null && reactions > previous) burstReactions(String(data?.lastReaction?.emoji || '❤️'), reactions - previous);
+    }, error => console.warn('[Go Live] Could not update live status:', error.code));
+    const stopComments = listenLiveComments(currentSession.id, items => setComments(items), error => console.warn('[Go Live] Could not load live comments:', error.message));
+    return () => { stopDoc(); stopComments(); };
   }, [isBroadcasting, currentSession?.id]);
+
+  // Streaming-software tab: show when this user's RTMP broadcast is live (created by the LiveKit webhook).
+  useEffect(() => {
+    const hostId = firebaseUser?.uid || '';
+    if (!isOpen || studioMode !== 'software' || !hostId) { setSoftwareLive(null); return; }
+    return onSnapshot(query(collection(db, 'liveStreams'), where('hostId', '==', hostId), where('isActive', '==', true)), snapshot => {
+      const live = snapshot.docs.map(item => ({ ...item.data(), id: item.id } as LiveStream & { source?: string })).find(item => item.source === 'rtmp');
+      setSoftwareLive(live || null);
+    }, () => setSoftwareLive(null));
+  }, [isOpen, studioMode, firebaseUser?.uid]);
+
+  useEffect(() => {
+    if (!isOpen || studioMode !== 'software' || !signedIn) return;
+    let active = true;
+    void api.getLiveConfigStatus().then(status => { if (active) setLiveConfig(status); }).catch(() => {});
+    void api.getRtmpStreamDetails().then(details => {
+      if (!active) return;
+      const profileCity = (user?.location || '').toLowerCase();
+      setRtmpDetails({
+        title: details.title || `${user?.name || 'User'} is Live on EChat!`,
+        category: details.category || 'Just Chatting',
+        location: details.location || LIVE_LOCATIONS.find(city => city !== 'Other' && profileCity.includes(city.toLowerCase())) || ''
+      });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [isOpen, studioMode, signedIn, user?.name, user?.location]);
+
+  const burstReactions = (emoji: string, amount: number) => {
+    const bursts = Math.min(amount, 8);
+    for (let index = 0; index < bursts; index += 1) {
+      const id = `react_${Date.now()}_${index}_${Math.random()}`;
+      setFloatingReactions(prev => [...prev.slice(-15), { id, emoji, left: Math.floor(Math.random() * 70) + 15 }]);
+      setTimeout(() => setFloatingReactions(prev => prev.filter(r => r.id !== id)), 2500);
+    }
+  };
+
+  const saveRtmpDetails = async () => {
+    setRtmpDetailsSaving(true);
+    setRtmpDetailsNotice('');
+    try {
+      const saved = await api.saveRtmpStreamDetails(rtmpDetails);
+      setRtmpDetails({ title: saved.title, category: saved.category, location: saved.location });
+      setRtmpDetailsNotice('Saved. These details are used the next time you start streaming.');
+    } catch (error) {
+      setRtmpDetailsNotice(error instanceof Error ? error.message : 'Could not save your stream details.');
+    } finally {
+      setRtmpDetailsSaving(false);
+    }
+  };
+
+  const endSoftwareLive = async () => {
+    if (!softwareLive || !window.confirm('End this live? Viewers will see Live Ended. Also stop streaming in your app.')) return;
+    try { await api.stopLive(softwareLive.id); } catch (error) { alert(error instanceof Error ? error.message : 'Could not end the live.'); }
+  };
 
   const formatDuration = (sec: number) => {
     const mins = Math.floor(sec / 60);
@@ -685,18 +822,21 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     );
   }
 
-  const changeVideoQuality = async (quality: '360p' | '720p' | '1080p' | '4k') => {
+  /** Resizes the camera track in place. The same track is published to LiveKit, so viewers get the new quality. */
+  const changeVideoQuality = async (quality: VideoQuality) => {
+    const previous = videoQualityRef.current;
+    videoQualityRef.current = quality;
     setVideoQuality(quality);
     const track = mediaStreamRef.current?.getVideoTracks()[0];
     if (!track) return;
-    const dimensions = ({
-      '360p': { width: 640, height: 360 },
-      '720p': { width: 1280, height: 720 },
-      '1080p': { width: 1920, height: 1080 },
-      '4k': { width: 3840, height: 2160 }
-    } as const)[quality];
-    try { await track.applyConstraints({ width: { ideal: dimensions.width }, height: { ideal: dimensions.height } }); }
-    catch { alert('This camera or device cannot provide that quality. Choose a lower option.'); }
+    const dimensions = QUALITY_DIMENSIONS[quality];
+    try {
+      await track.applyConstraints({ width: { ideal: dimensions.width }, height: { ideal: dimensions.height }, frameRate: { ideal: 30 } });
+    } catch {
+      videoQualityRef.current = previous;
+      setVideoQuality(previous);
+      setSourceError('This camera cannot provide that quality. Choose another option.');
+    }
   };
 
   const handleSendComment = async (e: React.FormEvent) => {
@@ -785,7 +925,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
             <label className="flex items-center gap-2 text-xs text-slate-300">
               Quality
               <select value={videoQuality} onChange={e => void changeVideoQuality(e.target.value as typeof videoQuality)} className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-white">
-                <option value="360p">360p</option><option value="720p">720p</option><option value="1080p">1080p</option><option value="4k">4K</option>
+                <option value="720p">720p</option><option value="480p">480p</option><option value="360p">360p</option>
               </select>
             </label>
 
@@ -793,7 +933,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               {isBroadcasting && (
                 <div className="flex items-center gap-1 bg-slate-800/80 px-2.5 py-1 rounded-full text-xs font-semibold text-slate-300">
                   <Users size={12} className="text-rose-400" />
-                  <span>{currentSession?.viewersCount || 1} watching</span>
+                  <span>{currentSession?.viewersCount ?? 0} watching</span>
                 </div>
               )}
               {!isBroadcasting && (
@@ -900,6 +1040,16 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                   >
                     {isAudioMuted ? <MicOff size={18} /> : <Mic size={18} />}
                   </button>
+
+                  <button
+                    onClick={() => void switchCamera()}
+                    disabled={switchingCamera || !hasCameraPermission}
+                    className="p-2 rounded-xl transition cursor-pointer bg-white/15 text-white hover:bg-white/25 disabled:opacity-50"
+                    title={facingMode === 'user' ? 'Switch to back camera' : 'Switch to front camera'}
+                    aria-label="Switch camera"
+                  >
+                    <SwitchCamera size={18} />
+                  </button>
                 </div>
 
               </div>
@@ -945,7 +1095,6 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
 
               {!isBroadcasting && (
                 <div className="max-h-[25vh] shrink-0 space-y-2 overflow-y-auto border-b border-slate-800 p-3">
-                  {liveStartError && <p role="alert" className="rounded-lg border border-rose-800 bg-rose-950/70 p-2 text-xs leading-5 text-rose-200">{liveStartError}</p>}
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Camera
                     <select value={selectedCameraId} onChange={event => setSelectedCameraId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs normal-case text-white">
                       <option value="">Default camera</option>{devices.filter(device => device.kind === 'videoinput').map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Camera'}</option>)}
@@ -1018,42 +1167,79 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           {!isBroadcasting && studioMode === 'software' && <section role="tabpanel" aria-label="Streaming Software" className="flex-1 min-h-0 overflow-y-auto bg-slate-950 p-4 text-white">
             <div className="mx-auto max-w-2xl space-y-4">
               <div>
-                <h2 className="text-lg font-extrabold">Stream with OBS or other software</h2>
-                <p className="mt-1 text-sm text-slate-400">Your key is private to your account. Copy it into your streaming software and keep it secret.</p>
+                <h2 className="text-lg font-extrabold">Stream from any streaming app</h2>
+                <p className="mt-1 text-sm text-slate-400">One Server URL and one Stream Key work in any app that supports a Custom RTMP server. Your key is private to your account.</p>
               </div>
-              {!streamKeyLoading && !streamKeyIngestConfigured && streamKeyError && <div role="status" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-sm leading-5 text-amber-200">
-                LiveKit RTMP ingest is unavailable. Check the LiveKit server configuration and try again.
+
+              {softwareLive ? (
+                <div role="status" className="flex flex-wrap items-center gap-3 rounded-xl border border-rose-700 bg-rose-950/60 p-3">
+                  <span className="flex items-center gap-1.5 rounded-md bg-rose-600 px-2 py-1 text-xs font-black uppercase"><span className="h-2 w-2 animate-ping rounded-full bg-white"/>Live</span>
+                  <div className="min-w-0 flex-1 text-sm">
+                    <p className="truncate font-bold">{softwareLive.title}</p>
+                    <p className="text-xs text-rose-200">You are live from your streaming app · {softwareLive.viewersCount ?? 0} watching</p>
+                  </div>
+                  <button type="button" onClick={() => void endSoftwareLive()} className="min-h-10 rounded-xl bg-white px-3 text-sm font-extrabold text-rose-700">End Live</button>
+                </div>
+              ) : (
+                <p className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-400">Status: <strong className="text-slate-200">Waiting for your stream.</strong> When your app starts streaming, you appear in Live Now automatically. When it stops, viewers see Live Ended.</p>
+              )}
+
+              {liveConfig && !liveConfig.ready && <div role="alert" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-sm leading-5 text-amber-200">
+                <p className="font-bold">Live server setup is incomplete.</p>
+                <p className="mt-1">Missing on the server: <code className="font-mono">{liveConfig.missing.join(', ')}</code>. An admin must add these in Vercel → Project → Settings → Environment Variables, then redeploy.</p>
               </div>}
+              {liveConfig?.ready && !liveConfig.liveKitUrlLooksValid && <p role="alert" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-sm text-amber-200">LIVEKIT_URL should start with wss:// (for example wss://your-project.livekit.cloud).</p>}
+
               <label className="block text-xs font-bold uppercase tracking-wide text-slate-400">RTMP Server URL
                 <div className="mt-1 flex gap-2">
-                  <input readOnly value={streamKeyServerUrl} className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm normal-case text-white"/>
-                  <button type="button" onClick={() => void copyStreamValue(streamKeyServerUrl, 'Server URL')} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-slate-700 px-3 text-sm font-bold text-white hover:bg-slate-800"><Copy size={16}/>Copy</button>
+                  <input readOnly value={streamKeyServerUrl || (streamKeyLoading ? 'Loading…' : '')} placeholder="Not available yet" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 font-mono text-sm normal-case text-white"/>
+                  <button type="button" disabled={!streamKeyServerUrl} onClick={() => void copyStreamValue(streamKeyServerUrl, 'Server URL')} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-slate-700 px-3 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-40"><Copy size={16}/>Copy URL</button>
                 </div>
               </label>
               <div>
-                <label htmlFor="live-stream-key" className="block text-xs font-bold uppercase tracking-wide text-slate-400">Your Stream Key</label>
+                <label htmlFor="live-stream-key" className="block text-xs font-bold uppercase tracking-wide text-slate-400">Stream Key</label>
                 {streamKeyLoading && !streamKey && <p role="status" className="mt-2 text-sm text-slate-400">Loading your private key…</p>}
                 {streamKey && <div className="mt-1 flex min-w-0 gap-2">
                   <input id="live-stream-key" readOnly type={streamKeyVisible ? 'text' : 'password'} value={streamKey} autoComplete="off" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 font-mono text-sm text-white"/>
                   <button type="button" onClick={() => setStreamKeyVisible(value => !value)} aria-label={streamKeyVisible ? 'Hide stream key' : 'Show stream key'} className="grid min-h-11 w-11 shrink-0 place-items-center rounded-xl border border-slate-700 hover:bg-slate-800">{streamKeyVisible ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
-                  <button type="button" onClick={() => void copyStreamValue(streamKey, 'Stream key')} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-slate-700 px-3 text-sm font-bold text-white hover:bg-slate-800"><Copy size={16}/>Copy</button>
+                  <button type="button" onClick={() => void copyStreamValue(streamKey, 'Stream key')} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-slate-700 px-3 text-sm font-bold text-white hover:bg-slate-800"><Copy size={16}/>Copy Key</button>
                 </div>}
-                <button type="button" onClick={() => void handleResetStreamKey()} disabled={streamKeyLoading} className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-700 px-3 text-sm font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50"><RotateCcw size={15}/>{streamKeyLoading ? 'Please wait…' : 'Reset key'}</button>
+                <button type="button" onClick={() => void handleResetStreamKey()} disabled={streamKeyLoading} className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-700 px-3 text-sm font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50"><RotateCcw size={15}/>{streamKeyLoading ? 'Please wait…' : 'Reset Key'}</button>
+                <p className="mt-1 text-xs text-slate-500">Reset Key makes a new key. The old key stops working in every app.</p>
               </div>
               <p className="rounded-xl border border-rose-900/70 bg-rose-950/50 p-3 text-sm font-semibold text-rose-200">Never share your stream key. Anyone who has it can stream as you.</p>
               {streamKeyError && <p role="alert" className="rounded-xl bg-rose-950/70 p-3 text-sm text-rose-200">{streamKeyError}</p>}
               {streamKeyNotice && <p role="status" className="rounded-xl bg-emerald-950/70 p-3 text-sm text-emerald-200">{streamKeyNotice}</p>}
-              <ol className="list-inside list-decimal space-y-2 rounded-xl border border-slate-800 bg-slate-900 p-4 text-sm leading-6 text-slate-300">
-                <li>In OBS, open Settings → Stream → Custom.</li>
-                <li>Paste the Server URL and Stream Key above.</li>
-                <li>Start streaming in OBS. LiveKit Ingress receives the stream using this URL and key.</li>
-              </ol>
-              <p className="text-xs leading-5 text-slate-500">Your RTMP connection is provisioned for your account through LiveKit Ingress. This tab does not expose another account’s key.</p>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <h3 className="text-sm font-extrabold">How to stream</h3>
+                <ol className="mt-2 list-inside list-decimal space-y-1.5 text-sm leading-6 text-slate-300">
+                  <li>In your streaming app, choose <strong>Custom RTMP</strong> (may be called “Custom server” or “RTMP”).</li>
+                  <li>Paste the <strong>Server URL</strong>.</li>
+                  <li>Paste the <strong>Stream Key</strong>.</li>
+                  <li>Press <strong>Start Streaming</strong>. You appear in Live Now within a few seconds.</li>
+                </ol>
+                <p className="mt-3 text-xs text-slate-400"><strong className="text-slate-300">Works with:</strong> OBS Studio, Streamlabs, vMix, XSplit, Prism Live Studio, Restream / StreamYard (RTMP out), Larix Broadcaster and any app with a Custom RTMP server.</p>
+                <p className="mt-1 text-xs text-slate-500">Tip: use H.264 video + AAC audio, 2-second keyframe interval, 2,500–4,500 kbps for 720p.</p>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-2">
+                <h3 className="text-sm font-extrabold">Stream details</h3>
+                <p className="text-xs text-slate-400">Shown in Live Now when your app starts streaming.</p>
+                <input value={rtmpDetails.title} onChange={event => setRtmpDetails(value => ({ ...value, title: event.target.value }))} maxLength={120} placeholder="Stream title" className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"/>
+                <div className="grid grid-cols-2 gap-2">
+                  <select aria-label="Category" value={rtmpDetails.category} onChange={event => setRtmpDetails(value => ({ ...value, category: event.target.value }))} className="rounded-xl border border-slate-700 bg-slate-800 px-2 py-2 text-sm text-white">{LIVE_CATEGORIES.map(item => <option key={item} value={item}>{item}</option>)}</select>
+                  <select aria-label="Location" value={rtmpDetails.location} onChange={event => setRtmpDetails(value => ({ ...value, location: event.target.value }))} className="rounded-xl border border-slate-700 bg-slate-800 px-2 py-2 text-sm text-white"><option value="">Choose city</option>{LIVE_LOCATIONS.map(item => <option key={item} value={item}>{item}</option>)}</select>
+                </div>
+                <button type="button" onClick={() => void saveRtmpDetails()} disabled={rtmpDetailsSaving} className="min-h-10 rounded-xl bg-rose-600 px-4 text-sm font-bold text-white disabled:opacity-50">{rtmpDetailsSaving ? 'Saving…' : 'Save details'}</button>
+                {rtmpDetailsNotice && <p role="status" className="text-xs text-slate-300">{rtmpDetailsNotice}</p>}
+              </div>
             </div>
           </section>}
 
           {!isBroadcasting && studioMode === 'camera' && <div className="sticky bottom-0 z-40 shrink-0 border-t border-slate-800 bg-slate-950 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             {liveStartError && <p role="alert" className="mb-2 rounded-lg border border-rose-800 bg-rose-950/70 p-2 text-xs leading-5 text-rose-200">{liveStartError}</p>}
+            {liveStartError && liveConfig && !liveConfig.ready && <p className="mb-2 rounded-lg border border-amber-700/70 bg-amber-950/60 p-2 text-xs leading-5 text-amber-200">Live server setup is incomplete. Missing: <code className="font-mono">{liveConfig.missing.join(', ')}</code></p>}
             <div className="flex gap-2">
             <button type="button" onClick={onClose} className="rounded-xl border border-slate-700 px-5 py-3 font-bold text-slate-200">Cancel</button>
             <button type="button" onClick={handleStartBroadcast} disabled={!mediaStreamRef.current?.getVideoTracks().length || hasCameraPermission === false} className="flex-1 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-5 py-3 text-base font-extrabold text-white shadow-lg disabled:cursor-not-allowed disabled:opacity-50"><Radio size={18} className="mr-2 inline" />Go Live</button>

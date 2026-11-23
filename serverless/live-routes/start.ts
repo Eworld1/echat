@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { GO_LIVE, getGoLiveEligibility } from '../../src/config/featureFlags.js';
 import type { ApiRequest, ApiResponse } from '../live.js';
-import { applyLiveCors, canStartLive, createRoomToken, firestore, handleError, handleLiveOptions, liveKitUrl, lives, requireLiveKit, sendJson, verifyLiveUser } from '../live.js';
+import { applyLiveCors, canStartLive, createRoomToken, firestore, handleError, handleLiveOptions, liveKitUrl, lives, requireLiveKit, sendJson, verifyLiveUser, LIVE_CATEGORY_VALUES, LIVE_LOCATION_VALUES } from '../live.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   console.info('[Vercel Live API] invocation', { route: '/api/live/start', method: req.method, origin: req.headers.origin || null });
@@ -19,10 +19,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
     const id = `live_${randomUUID()}`;
     const title = typeof req.body?.title === 'string' ? req.body.title.trim().slice(0, 120) : '';
-    const categories = ['Church', 'Music', 'Education', 'Market / Selling', 'News', 'Sports', 'Just Chatting'];
-    const locations = ['Freetown', 'Bo', 'Kenema', 'Makeni', 'Other'];
-    const category = categories.includes(req.body?.category) ? req.body.category : 'Just Chatting';
-    const location = locations.includes(req.body?.location) ? req.body.location : '';
+    const category = LIVE_CATEGORY_VALUES.includes(req.body?.category) ? req.body.category : 'Just Chatting';
+    const location = LIVE_LOCATION_VALUES.includes(req.body?.location) ? req.body.location : '';
     if (!location) return sendJson(res, 400, { error: 'Choose a location before starting your live broadcast.', code: 'live-location-required' });
     const roomName = `echat-${user.uid}-${randomUUID().slice(0, 8)}`;
     await liveKit.rooms.createRoom({ name: roomName, emptyTimeout: 60, maxParticipants: 10000 });
@@ -40,8 +38,10 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       reportCount: 0,
       underReview: false,
       taggedPageIds: Array.isArray(req.body?.taggedPageIds) ? req.body.taggedPageIds.filter((value: unknown): value is string => typeof value === 'string').slice(0, 22) : [],
-      viewersCount: 1,
+      viewersCount: 0,
+      peakViewers: 0,
       reactionsCount: 0,
+      source: 'camera',
       startedAt: Date.now(),
       isActive: true,
       comments: [],

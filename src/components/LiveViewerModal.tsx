@@ -6,7 +6,9 @@ import { api } from '../services/api';
 import { LiveStream, LiveComment } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
-import { addLiveComment, blockLiveUser, deleteLiveComment, timeoutLiveUser } from '../services/liveDiscovery';
+import { addLiveComment, blockLiveUser, deleteLiveComment, listenLiveComments, timeoutLiveUser } from '../services/liveDiscovery';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../services/firebase';
 import { LiveUserActions } from './LiveUserActions';
 import { Ban, MoreVertical, Trash2 } from 'lucide-react';
 // @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
@@ -53,14 +55,66 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   const queuedCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   const commentsEndRef = useRef<HTMLDivElement | null>(null);
+  const [liveEnded, setLiveEnded] = useState(false);
+  const [connectError, setConnectError] = useState('');
+  const pendingReactionsRef = useRef<{ emoji: string; count: number } | null>(null);
+  const reactionTimerRef = useRef<number | null>(null);
+  const lastReactionCountRef = useRef<number | null>(null);
+  const isLiveKitStream = Boolean(currentStream?.liveKitRoom);
 
-  // Notify server we joined
+  // Count this viewer. LiveKit lives use per-stream presence on the live server; older socket lives use the legacy counter.
   useEffect(() => {
-    api.joinLive();
+    if (!currentStream) return;
+    if (!isLiveKitStream) {
+      api.joinLive();
+      return () => { api.leaveLive(); };
+    }
+    const streamId = currentStream.id;
+    void api.joinLiveStream(streamId).then(result => setLiveData(prev => prev ? { ...prev, viewersCount: result.viewersCount } : prev)).catch(error => {
+      if ((error as { code?: string })?.code === 'live-ended') setLiveEnded(true);
+    });
+    const leave = () => { void api.leaveLiveStream(streamId); };
+    window.addEventListener('pagehide', leave);
     return () => {
-      api.leaveLive();
+      window.removeEventListener('pagehide', leave);
+      leave();
     };
+  }, [currentStream?.id, isLiveKitStream]);
+
+  // Realtime live document: viewer count, hearts from everyone, and Live Ended.
+  useEffect(() => {
+    if (!currentStream || !isLiveKitStream) return;
+    lastReactionCountRef.current = null;
+    return onSnapshot(doc(db, 'liveStreams', currentStream.id), snapshot => {
+      const data = snapshot.data();
+      if (!snapshot.exists() || data?.isActive !== true) { setLiveEnded(true); return; }
+      setLiveData(prev => prev ? { ...prev, viewersCount: Number(data.viewersCount || 0), title: String(data.title || prev.title) } : prev);
+      const reactions = Number(data.reactionsCount || 0);
+      const previous = lastReactionCountRef.current;
+      lastReactionCountRef.current = reactions;
+      const last = data.lastReaction as { emoji?: string; userId?: string } | undefined;
+      // Our own taps already burst locally.
+      if (previous !== null && reactions > previous && last?.userId !== user?.id) burstReactions(String(last?.emoji || '❤️'), reactions - previous);
+    }, error => console.warn('[Live] Could not follow live status:', error.message));
+  }, [currentStream?.id, isLiveKitStream, user?.id]);
+
+  // Realtime comments (Firestore) for LiveKit lives.
+  useEffect(() => {
+    if (!currentStream || !isLiveKitStream || liveEnded) return;
+    return listenLiveComments(currentStream.id, items => setComments(items), error => console.warn('[Live] Could not load comments:', error.message));
+  }, [currentStream?.id, isLiveKitStream, liveEnded]);
+
+  useEffect(() => () => {
+    if (reactionTimerRef.current) window.clearTimeout(reactionTimerRef.current);
   }, []);
+
+  const burstReactions = (emoji: string, amount: number) => {
+    for (let index = 0; index < Math.min(amount, 8); index += 1) {
+      const id = `react_${Date.now()}_${index}_${Math.random()}`;
+      setFloatingReactions(prev => [...prev.slice(-20), { id, emoji, left: Math.floor(Math.random() * 70) + 15 }]);
+      setTimeout(() => setFloatingReactions(prev => prev.filter(r => r.id !== id)), 2500);
+    }
+  };
 
   useEffect(() => {
     if (!currentStream) return;
@@ -69,6 +123,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     const liveKitAudio: HTMLAudioElement[] = [];
     let peer: RTCPeerConnection | null = null;
     if (currentStream.liveKitRoom) {
+      if (liveEnded) return;
       const connectLiveKit = async () => {
         try {
           const credentials = await api.getLiveKitViewerToken(currentStream.id);
@@ -95,6 +150,9 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
           await liveKitRoom.connect(credentials.url, credentials.token);
         } catch (error) {
           console.warn('Could not connect to the LiveKit broadcast:', error);
+          const code = (error as { code?: string })?.code;
+          if (code === 'live-not-found') setLiveEnded(true);
+          else if (!cancelled) setConnectError(error instanceof Error ? error.message : 'Could not connect to the live video.');
         }
       };
       void connectLiveKit();
@@ -154,7 +212,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       queuedCandidatesRef.current = [];
       setRemoteVideo(null);
     };
-  }, [currentStream?.id, currentStream?.hostId, onLiveSignal, socket]);
+  }, [currentStream?.id, currentStream?.hostId, onLiveSignal, socket, liveEnded]);
 
   // Socket listeners for real-time live events
   useEffect(() => {
@@ -179,9 +237,9 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       setLiveData(prev => ({ ...prev, viewersCount: count }));
     });
 
-    const unsubEnded = onLiveStopped((_streamId) => {
-      alert('The host has ended this live broadcast. Thank you for watching!');
-      onClose();
+    // Legacy socket lives end via the socket event; LiveKit lives end via their Firestore document.
+    const unsubEnded = onLiveStopped(() => {
+      if (!currentStream.liveKitRoom) setLiveEnded(true);
     });
 
     return () => {
@@ -190,7 +248,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       unsubViewers();
       unsubEnded();
     };
-  }, [currentStream?.id, onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onClose]);
+  }, [currentStream?.id, onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped]);
 
   useEffect(() => currentStream ? onLiveCaption(data => { if (data.streamId === currentStream.id) setLiveCaption(data.text); }) : undefined, [onLiveCaption, currentStream?.id]);
 
@@ -232,13 +290,33 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       setFloatingReactions(prev => prev.filter(r => r.id !== id));
     }, 2500);
 
-    // Broadcast through server
-    api.sendLiveReaction(emoji);
+    if (!currentStream.liveKitRoom) { api.sendLiveReaction(emoji); return; }
+    // Batch rapid taps into one request (max 20 per batch).
+    const pending = pendingReactionsRef.current;
+    pendingReactionsRef.current = pending && pending.emoji === emoji ? { emoji, count: Math.min(pending.count + 1, 20) } : { emoji, count: 1 };
+    if (pending && pending.emoji !== emoji) void api.sendLiveStreamReaction(currentStream.id, pending.emoji, pending.count).catch(() => {});
+    if (reactionTimerRef.current) return;
+    reactionTimerRef.current = window.setTimeout(() => {
+      reactionTimerRef.current = null;
+      const batch = pendingReactionsRef.current;
+      pendingReactionsRef.current = null;
+      if (batch) void api.sendLiveStreamReaction(currentStream.id, batch.emoji, batch.count).catch(() => {});
+    }, 1200);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-stretch justify-stretch bg-black animate-in fade-in duration-200">
       <div className="bg-black w-full h-full min-w-0 min-h-0 shadow-2xl overflow-hidden flex flex-col">
+        {liveEnded && (
+          <div role="status" className="absolute inset-0 z-[60] grid place-items-center bg-black/90 p-6 text-center text-white">
+            <div className="max-w-sm">
+              <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-slate-800"><Radio size={28} className="text-rose-500"/></div>
+              <h2 className="text-2xl font-black">Live Ended</h2>
+              <p className="mt-2 text-sm text-slate-300">{liveData?.hostName || 'The host'} has ended this live video. Thanks for watching!</p>
+              <button type="button" onClick={onClose} className="mt-5 min-h-12 w-full rounded-xl bg-rose-600 px-4 font-extrabold text-white">Close</button>
+            </div>
+          </div>
+        )}
         
         {/* Stream Header */}
         <div className="absolute top-0 left-0 right-0 z-40 p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/70 text-white">
@@ -271,7 +349,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
             <LiveUserActions targetUserId={liveData.hostId} targetName={liveData.hostName} streamId={liveData.id} compact actionsOnly onBlocked={onClose}/>
             <div className="flex items-center gap-1 bg-slate-800/80 px-2.5 py-1 rounded-full text-xs font-semibold text-slate-200 border border-slate-700">
               <Users size={13} className="text-rose-400" />
-              <span>{liveData.viewersCount || 1} watching</span>
+              <span>{liveData.viewersCount ?? 0} watching</span>
             </div>
 
             <button
@@ -313,8 +391,9 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
                 <VerifiedBadge size={16} />
               </h3>
               <p className="text-xs text-rose-400 font-bold uppercase tracking-wider mt-1">
-                Connecting to live video…
+                {connectError ? 'Could not load the live video' : 'Connecting to live video…'}
               </p>
+              {connectError && <p role="alert" className="mt-2 max-w-sm text-xs text-rose-200">{connectError}</p>}
               <p className="text-xs text-slate-400 mt-2 max-w-sm">
                 "{liveData.title}"
               </p>

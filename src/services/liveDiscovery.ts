@@ -19,7 +19,7 @@ import {
 import { db } from './firebase';
 import type { LiveComment, LiveStream } from '../types';
 
-export const LIVE_CATEGORIES = ['Church', 'Music', 'Education', 'Market / Selling', 'News', 'Sports', 'Just Chatting'] as const;
+export const LIVE_CATEGORIES = ['Just Chatting', 'Music', 'Gaming', 'News', 'Sports', 'Church', 'Education', 'Market / Selling'] as const;
 export const LIVE_LOCATIONS = ['Freetown', 'Bo', 'Kenema', 'Makeni', 'Other'] as const;
 export type LiveReportReason = 'Spam' | 'Harassment' | 'Inappropriate / Sexual Content' | 'Violence' | 'False Information';
 export const LIVE_REPORT_REASONS: LiveReportReason[] = ['Spam', 'Harassment', 'Inappropriate / Sexual Content', 'Violence', 'False Information'];

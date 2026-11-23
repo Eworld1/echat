@@ -1141,6 +1141,42 @@ export const api = {
     return readResponse(res, 'Could not publish your live broadcast');
   },
 
+  /** Which live settings the server has (booleans only). */
+  async getLiveConfigStatus(): Promise<{ ready: boolean; missing: string[]; liveKitUrlLooksValid: boolean; webhookUrl: string }> {
+    const res = await fetch(apiUrl('/api/live/status'), { cache: 'no-store' });
+    return readResponse(res, 'Could not check the live server configuration');
+  },
+
+  /** Count this user as a viewer of a LiveKit live (one per account). */
+  async joinLiveStream(streamId: string): Promise<{ success: boolean; viewersCount: number }> {
+    const res = await fetch(apiUrl('/api/live/viewer/join'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify({ streamId }), cache: 'no-store' });
+    return readResponse(res, 'Could not join this live stream');
+  },
+
+  /** Leave a live. keepalive lets it finish while the page closes. */
+  async leaveLiveStream(streamId: string): Promise<void> {
+    // Cached Firebase ID token (no extra round trip), so this also works while the page is closing.
+    const idToken = await auth.currentUser?.getIdToken().catch(() => '') || '';
+    if (!idToken) return;
+    await fetch(apiUrl('/api/live/viewer/leave'), { method: 'POST', headers: getHeaders({ 'x-firebase-id-token': idToken }), body: JSON.stringify({ streamId }), keepalive: true }).catch(() => undefined);
+  },
+
+  /** Send a batch of hearts / reactions for a LiveKit live. */
+  async sendLiveStreamReaction(streamId: string, emoji: string, count: number): Promise<void> {
+    const res = await fetch(apiUrl('/api/live/react'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify({ streamId, emoji, count }) });
+    await readResponse(res, 'Could not send reaction');
+  },
+
+  async getRtmpStreamDetails(): Promise<{ title: string; category: string; location: string }> {
+    const res = await fetch(apiUrl('/api/live/rtmp-details'), { headers: await getVercelLiveHeaders(), cache: 'no-store' });
+    return readResponse(res, 'Could not load your stream details');
+  },
+
+  async saveRtmpStreamDetails(details: { title: string; category: string; location: string }): Promise<{ title: string; category: string; location: string }> {
+    const res = await fetch(apiUrl('/api/live/rtmp-details'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify(details) });
+    return readResponse(res, 'Could not save your stream details');
+  },
+
   async sendLiveComment(text: string): Promise<{ success: boolean; comment: LiveComment }> {
     const res = await fetch(LEGACY_API_URL + '/api/live/comment', {
       method: 'POST',

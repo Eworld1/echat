@@ -1,4 +1,5 @@
 import { IngressClient, IngressInput } from 'livekit-server-sdk';
+import type { DocumentData } from 'firebase-admin/firestore';
 import { firestore, requireLiveKit } from './live.js';
 
 export interface LiveStreamIngress {
@@ -17,7 +18,7 @@ function getIngressClient(): IngressClient {
   return new IngressClient(apiHost, liveKit.apiKey, liveKit.apiSecret);
 }
 
-function storedIngress(data: FirebaseFirestore.DocumentData | undefined): StoredLiveStreamIngress | null {
+function storedIngress(data: DocumentData | undefined): StoredLiveStreamIngress | null {
   if (!data) return null;
   const streamKey = String(data.streamKey || '');
   const serverUrl = String(data.streamServerUrl || '');
@@ -32,10 +33,10 @@ async function createLiveStreamIngress(uid: string) {
   const roomName = `echat-obs-${uid}`;
   const participantIdentity = `obs-${uid}`;
   const ingress = await ingressClient.createIngress(IngressInput.RTMP_INPUT, {
-    name: `Echat OBS ${uid}`,
+    name: `Echat RTMP ${uid}`,
     roomName,
     participantIdentity,
-    participantName: 'Echat OBS',
+    participantName: 'Echat Streaming Software',
     enableTranscoding: true
   });
   if (!ingress.ingressId || !ingress.url || !ingress.streamKey) {
