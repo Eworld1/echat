@@ -18,7 +18,8 @@ import type {
   PagePost,
   Group,
   GroupPost,
-  EventItem
+  EventItem,
+  JobItem
 } from '../types';
 import { auth } from './firebase';
 
@@ -179,6 +180,28 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
     ...(pageIdentity ? { 'x-page-id': pageIdentity } : {}),
     ...customHeaders
   };
+}
+
+/** Same auth headers, but without Content-Type so the browser sets the multipart boundary. */
+function getMultipartHeaders() {
+  const { 'Content-Type': _json, ...rest } = getHeaders();
+  void _json;
+  return rest;
+}
+
+/** Text fields + optional photo for Jobs / Events. `removeImage` clears the current photo on edit. */
+export interface ListingFormInput {
+  fields: Record<string, string>;
+  image?: File | null;
+  removeImage?: boolean;
+}
+
+function toListingFormData({ fields, image, removeImage }: ListingFormInput): FormData {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  if (image) form.append('image', image, image.name || 'photo.jpg');
+  else if (removeImage) form.append('removeImage', 'true');
+  return form;
 }
 
 async function fetchDmRequest(path: string, init: RequestInit): Promise<Response> {
@@ -1314,6 +1337,43 @@ export const api = {
       headers: getHeaders()
     });
     return readResponse<EventItem>(res, 'Failed to update interest');
+  },
+
+  async createEventWithPhoto(input: ListingFormInput): Promise<EventItem> {
+    const res = await fetch(apiUrl('/api/events'), { method: 'POST', headers: getMultipartHeaders(), body: toListingFormData(input) });
+    return readResponse<EventItem>(res, 'Failed to create event');
+  },
+
+  async updateEvent(eventId: string, input: ListingFormInput): Promise<EventItem> {
+    const res = await fetch(apiUrl(`/api/events/${eventId}`), { method: 'PUT', headers: getMultipartHeaders(), body: toListingFormData(input) });
+    return readResponse<EventItem>(res, 'Failed to update event');
+  },
+
+  async deleteEvent(eventId: string): Promise<{ success: boolean }> {
+    const res = await fetch(apiUrl(`/api/events/${eventId}`), { method: 'DELETE', headers: getHeaders() });
+    return readResponse<{ success: boolean }>(res, 'Failed to delete event');
+  },
+
+  // Jobs
+  async getJobs(): Promise<JobItem[]> {
+    const res = await fetch(apiUrl('/api/jobs'), { headers: getHeaders() });
+    const data = await readResponse<JobItem[]>(res, 'Could not load jobs');
+    return Array.isArray(data) ? data : [];
+  },
+
+  async createJob(input: ListingFormInput): Promise<JobItem> {
+    const res = await fetch(apiUrl('/api/jobs'), { method: 'POST', headers: getMultipartHeaders(), body: toListingFormData(input) });
+    return readResponse<JobItem>(res, 'Failed to post job');
+  },
+
+  async updateJob(jobId: string, input: ListingFormInput): Promise<JobItem> {
+    const res = await fetch(apiUrl(`/api/jobs/${jobId}`), { method: 'PUT', headers: getMultipartHeaders(), body: toListingFormData(input) });
+    return readResponse<JobItem>(res, 'Failed to update job');
+  },
+
+  async deleteJob(jobId: string): Promise<{ success: boolean }> {
+    const res = await fetch(apiUrl(`/api/jobs/${jobId}`), { method: 'DELETE', headers: getHeaders() });
+    return readResponse<{ success: boolean }>(res, 'Failed to delete job');
   },
 
   // Account Settings

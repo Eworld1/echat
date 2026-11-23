@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { WriteThroughSync, type DirectMessageRecord, type PersistenceDriver, type Snapshot } from './persistence.js';
-import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem, SiteConfig, LiveAccessRequest, LiveAccessMode } from './types.js';
+import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem, JobItem, SiteConfig, LiveAccessRequest, LiveAccessMode } from './types.js';
 
 // FIX: Try multiple locations because AI Studio wipes process.cwd()/data on Republish
 const POSSIBLE_DATA_DIRS = [
@@ -24,6 +24,7 @@ export interface DatabaseSchema {
   pages: Page[];
   groups: Group[];
   events: EventItem[];
+  jobs: JobItem[];
   siteConfig: (SiteConfig & { id: string })[];
   auditLogs: AuditLog[];
   liveRequests: LiveAccessRequest[];
@@ -125,6 +126,7 @@ class Database {
               pages: (Array.isArray(parsed.pages) && parsed.pages.length > 0) ? parsed.pages : SEED_PAGES,
               groups: (Array.isArray(parsed.groups) && parsed.groups.length > 0) ? parsed.groups : SEED_GROUPS,
               events: (Array.isArray(parsed.events) && parsed.events.length > 0) ? parsed.events : SEED_EVENTS,
+              jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [],
               siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.', liveAccessMode: 'approved_only' }]
             },
             path: found.path
@@ -155,6 +157,7 @@ class Database {
       pages: SEED_PAGES,
       groups: SEED_GROUPS,
       events: SEED_EVENTS,
+      jobs: [],
       siteConfig: [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.', liveAccessMode: 'approved_only' }]
     };
     this.saveToAll(initial);
@@ -304,6 +307,7 @@ class Database {
       pages: Array.isArray(parsed.pages) && parsed.pages.length > 0 ? parsed.pages : SEED_PAGES,
       groups: Array.isArray(parsed.groups) && parsed.groups.length > 0 ? parsed.groups : SEED_GROUPS,
       events: Array.isArray(parsed.events) && parsed.events.length > 0 ? parsed.events : SEED_EVENTS,
+      jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [],
       siteConfig: Array.isArray(parsed.siteConfig) && parsed.siteConfig.length > 0 ? parsed.siteConfig : [{ id: 'site', welcomeTitle: 'Welcome to EChat', welcomeSubtitle: 'Connect with friends, share 24-hour stories, and make calls with the people in your life.', liveAccessMode: 'approved_only' }]
     };
   }
@@ -1416,20 +1420,24 @@ class Database {
     return this.getEvents().find(e => e.id === id);
   }
 
-  createEvent(data: { title: string; date: string; location: string; cover: string; description: string; ownerId: string; ownerName?: string }): EventItem {
+  createEvent(data: { title: string; date: string; location: string; cover: string; description: string; ownerId: string; ownerName?: string; time?: string; organizer?: string; contactInfo?: string; keepEmptyCover?: boolean }): EventItem {
     if (!this.data.events) this.data.events = [];
     const newEvent: EventItem = {
       id: 'event_' + crypto.randomBytes(6).toString('hex'),
       title: data.title,
       date: data.date,
       location: data.location || 'Online',
-      cover: data.cover || 'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=1200&q=80',
+      // Legacy JSON callers get the stock cover; photo-upload callers keep an empty cover (letter tile fallback).
+      cover: data.cover || (data.keepEmptyCover ? '' : 'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=1200&q=80'),
       description: data.description || '',
       ownerId: data.ownerId,
       ownerName: data.ownerName || 'Host',
       going: [data.ownerId],
       interested: [],
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      ...(data.time ? { time: data.time } : {}),
+      ...(data.organizer ? { organizer: data.organizer } : {}),
+      ...(data.contactInfo ? { contactInfo: data.contactInfo } : {})
     };
     this.data.events.unshift(newEvent);
     this.save();
@@ -1464,6 +1472,59 @@ class Database {
     }
     this.save();
     return event;
+  }
+
+  updateEvent(eventId: string, updates: Partial<Pick<EventItem, 'title' | 'date' | 'time' | 'location' | 'cover' | 'description' | 'organizer' | 'contactInfo'>>): EventItem | null {
+    const event = this.getEventById(eventId);
+    if (!event) return null;
+    Object.assign(event, updates, { updatedAt: Date.now() });
+    this.save();
+    return event;
+  }
+
+  deleteEvent(eventId: string): boolean {
+    if (!this.data.events) return false;
+    const before = this.data.events.length;
+    this.data.events = this.data.events.filter(e => e.id !== eventId);
+    if (this.data.events.length === before) return false;
+    this.save();
+    return true;
+  }
+
+  // --- JOBS ---
+  getJobs(): JobItem[] {
+    if (!this.data.jobs) this.data.jobs = [];
+    return [...this.data.jobs].sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  getJobById(id: string): JobItem | undefined {
+    if (!this.data.jobs) this.data.jobs = [];
+    return this.data.jobs.find(j => j.id === id);
+  }
+
+  createJob(data: Omit<JobItem, 'id' | 'createdAt' | 'updatedAt'>): JobItem {
+    if (!this.data.jobs) this.data.jobs = [];
+    const job: JobItem = { ...data, id: 'job_' + crypto.randomBytes(6).toString('hex'), createdAt: Date.now() };
+    this.data.jobs.unshift(job);
+    this.save();
+    return job;
+  }
+
+  updateJob(jobId: string, updates: Partial<Omit<JobItem, 'id' | 'ownerId' | 'ownerName' | 'createdAt'>>): JobItem | null {
+    const job = this.getJobById(jobId);
+    if (!job) return null;
+    Object.assign(job, updates, { updatedAt: Date.now() });
+    this.save();
+    return job;
+  }
+
+  deleteJob(jobId: string): boolean {
+    if (!this.data.jobs) return false;
+    const before = this.data.jobs.length;
+    this.data.jobs = this.data.jobs.filter(j => j.id !== jobId);
+    if (this.data.jobs.length === before) return false;
+    this.save();
+    return true;
   }
 
   // --- ACCOUNT DELETION ---

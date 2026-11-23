@@ -99,6 +99,30 @@ export interface EventItem {
   going: string[];
   interested: string[];
   createdAt: number;
+  /** Optional extra fields (added with event editing). */
+  time?: string;
+  organizer?: string;
+  contactInfo?: string;
+  updatedAt?: number;
+}
+
+export type JobType = 'Full-time' | 'Part-time' | 'Remote' | 'Contract';
+
+export interface JobItem {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  type: JobType;
+  salary: string;
+  description: string;
+  contactInfo: string;
+  /** Server-relative uploaded image path (e.g. /uploads/<uuid>.jpg), or empty. */
+  image: string;
+  ownerId: string;
+  ownerName?: string;
+  createdAt: number;
+  updatedAt?: number;
 }
 export interface SavedItem { id: string; userId: string; postId: string; type: 'post' | 'page' | 'reel' | 'event'; title?: string; subtitle?: string; mediaUrl?: string; savedAt: number; }
 export interface ReelComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }

@@ -2888,6 +2888,241 @@ app.post('/api/groups/:id/posts/:postId/approve', (req: Request, res: Response) 
   }
 });
 
+// ----------------- LISTING IMAGE UPLOADS (Jobs + Events) -----------------
+// Jobs and Events accept one photo sent as multipart/form-data (field "image").
+// Stored exactly like /api/upload: local UPLOADS_DIR + durable copy via db.putFile.
+const LISTING_IMAGE_EXT: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const MAX_LISTING_IMAGE_BYTES = 5 * 1024 * 1024;
+const listingRawParser = express.raw({ type: 'multipart/form-data', limit: MAX_LISTING_IMAGE_BYTES + 512 * 1024 });
+const listingMultipart = (req: Request, res: Response, next: express.NextFunction) => {
+  listingRawParser(req, res, (err?: unknown) => {
+    if (err) return res.status(413).json({ error: 'Photo must be 5 MB or smaller' });
+    next();
+  });
+};
+
+class HttpError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+/** Detect the real image type from the file's first bytes (never trust the client-provided type). */
+function sniffListingImage(buf: Buffer): string | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+/** Reads text fields + optional image from a multipart body, or text fields from a JSON body. */
+async function readListingForm(req: Request): Promise<{ fields: Record<string, string>; image: File | null }> {
+  const contentType = String(req.headers['content-type'] || '');
+  const fields: Record<string, string> = {};
+  if (contentType.toLowerCase().startsWith('multipart/form-data') && Buffer.isBuffer(req.body)) {
+    let form: FormData;
+    try {
+      form = await new globalThis.Request('http://localhost/listing', {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+        body: new Uint8Array(req.body)
+      }).formData();
+    } catch {
+      throw new HttpError(400, 'Could not read the submitted form');
+    }
+    let image: File | null = null;
+    for (const [key, value] of form.entries()) {
+      if (typeof value === 'string') fields[key] = value;
+      else if (key === 'image' && value.size > 0) image = value;
+    }
+    return { fields, image };
+  }
+  const body = (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) ? req.body as Record<string, unknown> : {};
+  for (const [key, value] of Object.entries(body)) if (typeof value === 'string') fields[key] = value;
+  return { fields, image: null };
+}
+
+async function saveListingImage(file: File): Promise<string> {
+  if (file.size > MAX_LISTING_IMAGE_BYTES) throw new HttpError(413, 'Photo must be 5 MB or smaller');
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const mime = sniffListingImage(buffer);
+  if (!mime) throw new HttpError(415, 'Photo must be a JPG, PNG or WEBP image');
+  const fileName = `${crypto.randomUUID()}.${LISTING_IMAGE_EXT[mime]}`;
+  fs.writeFileSync(path.join(UPLOADS_DIR, fileName), buffer);
+  try {
+    await db.putFile(fileName, mime, buffer); // durable copy (MongoDB), if configured
+  } catch (err) {
+    console.error('[Echat] Could not store listing photo durably (kept on local disk only):', err);
+  }
+  return `/uploads/${fileName}`;
+}
+
+const clean = (value: string | undefined, max: number) => (value ?? '').trim().slice(0, max);
+const canManageListing = (user: { id: string } | null, ownerId: string) => Boolean(user && (user.id === ownerId || isAdminUser(user)));
+const sendListingError = (res: Response, e: unknown) => {
+  if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
+  res.status(500).json({ error: e instanceof Error ? e.message : 'Request failed' });
+};
+
+/** "2026-12-01" + "18:30" -> "2026-12-01T18:30". Also accepts a full datetime-local value. */
+function combineEventDate(date: string, time: string): string | null {
+  const d = date.trim();
+  const t = time.trim();
+  const value = /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d}T${/^\d{2}:\d{2}$/.test(t) ? t : '00:00'}` : d;
+  return value && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
+// ----------------- EVENTS: EDIT / DELETE -----------------
+app.put('/api/events/:id', listingMultipart, async (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+    const event = db.getEventById(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!canManageListing(authUser, event.ownerId)) return res.status(403).json({ error: 'Only the organizer or an admin can edit this event' });
+
+    const { fields, image } = await readListingForm(req);
+    const updates: Parameters<typeof db.updateEvent>[1] = {};
+    if (fields.title !== undefined) {
+      const title = clean(fields.title, 150);
+      if (!title) return res.status(400).json({ error: 'Event title is required' });
+      updates.title = title;
+    }
+    if (fields.date !== undefined) {
+      const date = combineEventDate(fields.date, fields.time ?? '');
+      if (!date) return res.status(400).json({ error: 'A valid event date is required' });
+      updates.date = date;
+      updates.time = clean(fields.time, 5);
+    }
+    if (fields.location !== undefined) updates.location = clean(fields.location, 200) || 'Online';
+    if (fields.description !== undefined) updates.description = clean(fields.description, 5000);
+    if (fields.organizer !== undefined) updates.organizer = clean(fields.organizer, 150);
+    if (fields.contactInfo !== undefined) updates.contactInfo = clean(fields.contactInfo, 300);
+    if (image) updates.cover = await saveListingImage(image);
+    else if (fields.removeImage === 'true') updates.cover = '';
+
+    const updated = db.updateEvent(event.id, updates);
+    socketManager.broadcast({ type: 'event_updated', event: updated });
+    res.json(updated);
+  } catch (e) {
+    sendListingError(res, e);
+  }
+});
+
+app.delete('/api/events/:id', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+    const event = db.getEventById(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!canManageListing(authUser, event.ownerId)) return res.status(403).json({ error: 'Only the organizer or an admin can delete this event' });
+    db.deleteEvent(event.id);
+    socketManager.broadcast({ type: 'event_deleted', eventId: event.id });
+    res.json({ success: true });
+  } catch (e) {
+    sendListingError(res, e);
+  }
+});
+
+// ----------------- JOBS ROUTES -----------------
+const JOB_TYPES = ['Full-time', 'Part-time', 'Remote', 'Contract'] as const;
+type JobTypeValue = typeof JOB_TYPES[number];
+const isJobType = (value: string): value is JobTypeValue => (JOB_TYPES as readonly string[]).includes(value);
+
+app.get('/api/jobs', (_req: Request, res: Response) => {
+  try {
+    res.json(db.getJobs());
+  } catch (e) {
+    sendListingError(res, e);
+  }
+});
+
+app.get('/api/jobs/:id', (req: Request, res: Response) => {
+  const job = db.getJobById(req.params.id);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
+app.post('/api/jobs', listingMultipart, async (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+    const { fields, image } = await readListingForm(req);
+    const title = clean(fields.title, 150);
+    const company = clean(fields.company, 150);
+    const type = clean(fields.type, 20);
+    if (!title) return res.status(400).json({ error: 'Job title is required' });
+    if (!company) return res.status(400).json({ error: 'Company is required' });
+    if (!isJobType(type)) return res.status(400).json({ error: 'Choose a job type: Full-time, Part-time, Remote or Contract' });
+
+    const job = db.createJob({
+      title,
+      company,
+      type,
+      location: clean(fields.location, 150) || 'Not specified',
+      salary: clean(fields.salary, 100) || 'Negotiable',
+      description: clean(fields.description, 5000),
+      contactInfo: clean(fields.contactInfo, 300),
+      image: image ? await saveListingImage(image) : '',
+      ownerId: authUser.id,
+      ownerName: authUser.name
+    });
+    res.status(201).json(job);
+  } catch (e) {
+    sendListingError(res, e);
+  }
+});
+
+app.put('/api/jobs/:id', listingMultipart, async (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+    const job = db.getJobById(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!canManageListing(authUser, job.ownerId)) return res.status(403).json({ error: 'Only the job owner or an admin can edit this job' });
+
+    const { fields, image } = await readListingForm(req);
+    const updates: Parameters<typeof db.updateJob>[1] = {};
+    if (fields.title !== undefined) {
+      const title = clean(fields.title, 150);
+      if (!title) return res.status(400).json({ error: 'Job title is required' });
+      updates.title = title;
+    }
+    if (fields.company !== undefined) {
+      const company = clean(fields.company, 150);
+      if (!company) return res.status(400).json({ error: 'Company is required' });
+      updates.company = company;
+    }
+    if (fields.type !== undefined) {
+      const type = clean(fields.type, 20);
+      if (!isJobType(type)) return res.status(400).json({ error: 'Choose a job type: Full-time, Part-time, Remote or Contract' });
+      updates.type = type;
+    }
+    if (fields.location !== undefined) updates.location = clean(fields.location, 150) || 'Not specified';
+    if (fields.salary !== undefined) updates.salary = clean(fields.salary, 100) || 'Negotiable';
+    if (fields.description !== undefined) updates.description = clean(fields.description, 5000);
+    if (fields.contactInfo !== undefined) updates.contactInfo = clean(fields.contactInfo, 300);
+    if (image) updates.image = await saveListingImage(image);
+    else if (fields.removeImage === 'true') updates.image = '';
+
+    res.json(db.updateJob(job.id, updates));
+  } catch (e) {
+    sendListingError(res, e);
+  }
+});
+
+app.delete('/api/jobs/:id', (req: Request, res: Response) => {
+  try {
+    const authUser = getAuthUser(req);
+    if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+    const job = db.getJobById(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!canManageListing(authUser, job.ownerId)) return res.status(403).json({ error: 'Only the job owner or an admin can delete this job' });
+    db.deleteJob(job.id);
+    res.json({ success: true });
+  } catch (e) {
+    sendListingError(res, e);
+  }
+});
+
 // ----------------- EVENTS ROUTES -----------------
 app.get('/api/events', (_req: Request, res: Response) => {
   try {
@@ -2908,10 +3143,34 @@ app.get('/api/events/:id', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/events', (req: Request, res: Response) => {
+app.post('/api/events', listingMultipart, async (req: Request, res: Response) => {
   try {
     const authUser = getAuthUser(req);
     if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+
+    // New Events form: multipart with an optional uploaded photo. Older clients keep sending JSON.
+    if (Buffer.isBuffer(req.body)) {
+      const { fields, image } = await readListingForm(req);
+      const title = clean(fields.title, 150);
+      if (!title) return res.status(400).json({ error: 'Event title is required' });
+      const date = combineEventDate(fields.date ?? '', fields.time ?? '');
+      if (!date) return res.status(400).json({ error: 'A valid event date is required' });
+      const created = db.createEvent({
+        title,
+        date,
+        time: clean(fields.time, 5),
+        location: clean(fields.location, 200) || 'Online',
+        description: clean(fields.description, 5000),
+        organizer: clean(fields.organizer, 150),
+        contactInfo: clean(fields.contactInfo, 300),
+        cover: image ? await saveListingImage(image) : '',
+        keepEmptyCover: true,
+        ownerId: authUser.id,
+        ownerName: authUser.name
+      });
+      socketManager.broadcast({ type: 'event_created', event: created });
+      return res.status(201).json(created);
+    }
 
     const { title, date, location, cover, description } = req.body;
     if (!title || !title.trim()) return res.status(400).json({ error: 'Event title is required' });
@@ -2929,8 +3188,8 @@ app.post('/api/events', (req: Request, res: Response) => {
 
     socketManager.broadcast({ type: 'event_created', event: newEvent });
     res.status(201).json(newEvent);
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    sendListingError(res, e);
   }
 });
 

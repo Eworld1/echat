@@ -146,4 +146,28 @@ export interface EventItem {
   going: string[];
   interested: string[];
   createdAt: number;
+  /** Optional extra fields (added with event editing). */
+  time?: string;
+  organizer?: string;
+  contactInfo?: string;
+  updatedAt?: number;
+}
+
+export type JobType = 'Full-time' | 'Part-time' | 'Remote' | 'Contract';
+
+export interface JobItem {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  type: JobType;
+  salary: string;
+  description: string;
+  contactInfo: string;
+  /** Server-relative uploaded image path (e.g. /uploads/<uuid>.jpg), or empty. */
+  image: string;
+  ownerId: string;
+  ownerName?: string;
+  createdAt: number;
+  updatedAt?: number;
 }
