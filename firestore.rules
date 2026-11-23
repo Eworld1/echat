@@ -59,7 +59,94 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions';
+    }
+
+    // ---------------- WALLET (Step 1: top-up + admin approval) ----------------
+    // Users can never change `balance`. A user may only raise `pendingBalance` by exactly the amount
+    // of a NEW Pending top-up written in the same batch. Only an admin moves a Pending top-up to
+    // Approved (balance += amount) or Rejected (balance unchanged), once, atomically with the wallet.
+    function walletDoc(uid) {
+      return /databases/$(database)/documents/wallets/$(uid);
+    }
+    function walletTxDoc(txId) {
+      return /databases/$(database)/documents/walletTransactions/$(txId);
+    }
+
+    function walletTopUpSubmitted(uid) {
+      let txId = request.resource.data.get('lastTxId', '');
+      return request.auth.uid == uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pendingBalance', 'lastTxId', 'updatedAt']) &&
+        txId is string && txId.size() > 0 &&
+        !exists(walletTxDoc(txId)) && existsAfter(walletTxDoc(txId)) &&
+        getAfter(walletTxDoc(txId)).data.userId == uid &&
+        getAfter(walletTxDoc(txId)).data.status == 'Pending' &&
+        request.resource.data.pendingBalance == resource.data.pendingBalance + getAfter(walletTxDoc(txId)).data.amount;
+    }
+
+    function walletTopUpReviewed(uid) {
+      let txId = request.resource.data.get('lastTxId', '');
+      let amount = get(walletTxDoc(txId)).data.amount;
+      let decision = getAfter(walletTxDoc(txId)).data.status;
+      return isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'pendingBalance', 'lastTxId', 'updatedAt']) &&
+        txId is string && txId.size() > 0 && exists(walletTxDoc(txId)) &&
+        get(walletTxDoc(txId)).data.userId == uid &&
+        get(walletTxDoc(txId)).data.status == 'Pending' &&
+        request.resource.data.pendingBalance == resource.data.pendingBalance - amount &&
+        ((decision == 'Approved' && request.resource.data.balance == resource.data.balance + amount) ||
+         (decision == 'Rejected' && request.resource.data.balance == resource.data.balance));
+    }
+
+    match /wallets/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if signedIn() && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly(['userId', 'balance', 'pendingBalance', 'lastTxId', 'updatedAt']) &&
+        request.resource.data.userId == uid &&
+        request.resource.data.balance == 0 &&
+        request.resource.data.pendingBalance == 0 &&
+        request.resource.data.lastTxId == '' &&
+        request.resource.data.updatedAt is int;
+      allow update: if signedIn() && request.resource.data.updatedAt is int &&
+        (walletTopUpSubmitted(uid) || walletTopUpReviewed(uid));
+      allow delete: if false;
+    }
+
+    match /walletTransactions/{txId} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if signedIn() &&
+        request.resource.data.keys().hasOnly(['id', 'userId', 'userName', 'type', 'amount', 'status', 'transactionId', 'proofUrl', 'createdAt']) &&
+        request.resource.data.id == txId &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.type == 'Top-up' &&
+        request.resource.data.status == 'Pending' &&
+        request.resource.data.amount is int &&
+        request.resource.data.amount >= 1000 && request.resource.data.amount <= 100000000 &&
+        request.resource.data.transactionId is string &&
+        request.resource.data.transactionId.size() >= 4 && request.resource.data.transactionId.size() <= 100 &&
+        request.resource.data.proofUrl is string &&
+        request.resource.data.proofUrl.size() > 0 && request.resource.data.proofUrl.size() <= 1000 &&
+        request.resource.data.proofUrl.matches('^(https?://|/uploads/).*') &&
+        request.resource.data.userName is string && request.resource.data.userName.size() <= 120 &&
+        request.resource.data.createdAt is int &&
+        exists(walletDoc(request.auth.uid)) &&
+        getAfter(walletDoc(request.auth.uid)).data.lastTxId == txId &&
+        getAfter(walletDoc(request.auth.uid)).data.pendingBalance == get(walletDoc(request.auth.uid)).data.pendingBalance + request.resource.data.amount;
+      allow update: if isAdmin() &&
+        resource.data.status == 'Pending' &&
+        request.resource.data.status in ['Approved', 'Rejected'] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewedBy', 'reason']) &&
+        request.resource.data.get('reason', '') is string &&
+        request.resource.data.get('reason', '').size() <= 300 &&
+        request.resource.data.get('reviewedBy', '') == request.auth.uid &&
+        getAfter(walletDoc(resource.data.userId)).data.lastTxId == txId &&
+        getAfter(walletDoc(resource.data.userId)).data.pendingBalance == get(walletDoc(resource.data.userId)).data.pendingBalance - resource.data.amount &&
+        ((request.resource.data.status == 'Approved' &&
+          getAfter(walletDoc(resource.data.userId)).data.balance == get(walletDoc(resource.data.userId)).data.balance + resource.data.amount) ||
+         (request.resource.data.status == 'Rejected' &&
+          getAfter(walletDoc(resource.data.userId)).data.balance == get(walletDoc(resource.data.userId)).data.balance));
+      allow delete: if false;
     }
 
     // ---------------- EVENTS + TICKETS ----------------

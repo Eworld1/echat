@@ -39,12 +39,13 @@ import {
   Film,
   BarChart3,
   Menu,
-  Ticket
+  Ticket,
+  Wallet as WalletIcon
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
 
-export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'myTickets' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
+export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'wallet' | 'adminWallet' | 'myTickets' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
 
 interface NavbarProps {
   currentView: AppView;
@@ -1114,6 +1115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ['pages', 'Pages', Flag],
                   ['groups', 'Groups', UsersRound],
                   ['events', 'Events', CalendarDays],
+                  ['wallet', 'Wallet', WalletIcon],
                   ['myTickets', 'My Tickets', Ticket],
                   ['dashboard', 'Dashboard', BarChart3],
                   ['saved', 'Saved Posts', Bookmark]
