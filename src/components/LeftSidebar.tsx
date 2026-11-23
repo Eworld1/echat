@@ -17,7 +17,8 @@ import {
   Package,
   Briefcase,
   Video,
-  X
+  X,
+  Ticket
 } from 'lucide-react';
 
 interface LeftSidebarProps {
@@ -44,6 +45,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
       { label: 'Groups', icon: <Users2 size={20}/>, action: () => onNavigate('groups'), active: currentView === 'groups' },
       { label: 'Jobs', icon: <Briefcase size={20}/>, action: () => onNavigate('jobs'), active: currentView === 'jobs' },
       { label: 'Events', icon: <Calendar size={20}/>, action: () => onNavigate('events'), active: currentView === 'events' },
+      { label: 'My Tickets', icon: <Ticket size={20}/>, action: () => onNavigate('myTickets'), active: currentView === 'myTickets' },
       { label: 'Dashboard', icon: <BarChart3 size={20}/>, action: () => onNavigate('dashboard'), active: currentView === 'dashboard' },
       { label: 'Saved Posts', icon: <Bookmark size={20}/>, action: () => onNavigate('saved'), active: currentView === 'saved' },
       { label: 'Marketplace', icon: <ShoppingBag size={20}/>, action: () => onNavigate('marketplace'), active: currentView === 'marketplace' },
@@ -150,6 +152,19 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
             <Calendar size={20} />
           </div>
           <span className="flex-1 truncate">{t('events')}</span>
+        </button>
+
+        {/* My Tickets */}
+        <button
+          onClick={() => onNavigate('myTickets')}
+          className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${
+            currentView === 'myTickets' ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'
+          }`}
+        >
+          <div className="w-9 h-9 rounded-full bg-blue-100 text-[#1877F2] flex items-center justify-center">
+            <Ticket size={20} />
+          </div>
+          <span className="flex-1 truncate">My Tickets</span>
         </button>
 
         <button onClick={() => onNavigate('dashboard')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'dashboard' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}><div className="w-9 h-9 rounded-full bg-slate-100 text-[#0A2A6B] flex items-center justify-center"><BarChart3 size={19}/></div><span>Dashboard</span></button>

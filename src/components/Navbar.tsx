@@ -38,12 +38,13 @@ import {
   Calendar,
   Film,
   BarChart3,
-  Menu
+  Menu,
+  Ticket
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
 
-export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
+export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'myTickets' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
 
 interface NavbarProps {
   currentView: AppView;
@@ -1113,6 +1114,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ['pages', 'Pages', Flag],
                   ['groups', 'Groups', UsersRound],
                   ['events', 'Events', CalendarDays],
+                  ['myTickets', 'My Tickets', Ticket],
                   ['dashboard', 'Dashboard', BarChart3],
                   ['saved', 'Saved Posts', Bookmark]
                 ] as const).map(([view, label, Icon]) => <button key={view} onClick={() => { onNavigate(view); closeProfileMenu(); }} className={`flex h-12 w-full items-center gap-4 rounded-lg px-4 text-left text-base font-semibold transition hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-white/10 ${currentView === view ? 'bg-slate-100 dark:bg-white/10' : ''}`}><Icon size={22} className="shrink-0 text-slate-500 dark:text-slate-300" />{label}</button>)}
