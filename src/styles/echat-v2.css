@@ -1,0 +1,79 @@
+/* Clean, solid Echat palette. The Classic app remains on its own route and shares these brand tokens only. */
+.echat-v2 { --v2-gold:#0A2A6B; --v2-gold-light:#1877F2; --v2-midnight:#0A2A6B; --v2-teal:#1877F2; --v2-cream:#F0F2F5; font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#111827; background:#F0F2F5; min-height:100dvh; }
+.echat-v2 * { box-sizing:border-box; }
+.echat-v2 button,.echat-v2 input,.echat-v2 textarea,.echat-v2 select { font:inherit; }
+.echat-v2 button { touch-action:manipulation; }
+.echat-v2-card { border:1px solid #D9DDE3; border-radius:12px; background:#fff; box-shadow:none; }
+.echat-v2-pill { border-radius:999px; }
+.echat-v2 [class*="bg-[#0F1B2D]"] { background-color:#0A2A6B!important; }
+.echat-v2 header[class*="bg-[#0F1B2D]"] { background:#fff!important; border:1px solid #D9DDE3; color:#111827!important; }
+.echat-v2 header[class*="bg-[#0F1B2D]"] .text-white { color:#111827!important; }
+.echat-v2 header[class*="bg-[#0F1B2D]"] [class*="text-[#FFC107]"] { color:#0A2A6B!important; }
+.echat-v2 [class*="text-[#0F1B2D]"],.echat-v2 [class*="text-[#735000]"],.echat-v2 [class*="text-[#8C6200]"],.echat-v2 [class*="text-[#9A6800]"] { color:#0A2A6B!important; }
+.echat-v2 [class*="bg-[#F5B301]"],.echat-v2 [class*="bg-[#FFC107]"] { background-color:#1877F2!important; color:#fff!important; }
+.echat-v2 [class*="bg-[#FFF2C7]"],.echat-v2 [class*="bg-[#FFF8E7]"],.echat-v2 [class*="bg-[#FFF8E7]/"] { background-color:#E8EEF7!important; }
+.echat-v2 [class*="bg-gradient"]:not([style*="backgroundImage"]) { background-image:none!important; background-color:#E8EEF7!important; }
+.echat-v2 [class*="bg-gradient"][class*="from-black"] { background-image:none!important; background-color:rgba(0,0,0,.68)!important; }
+.echat-v2 [class*="bg-violet-"],.echat-v2 [class*="bg-purple-"],.echat-v2 [class*="bg-fuchsia-"] { background-color:#E8EEF7!important; }
+.echat-v2 [class*="text-violet-"],.echat-v2 [class*="text-purple-"],.echat-v2 [class*="text-fuchsia-"] { color:#0A2A6B!important; }
+.echat-v2 [class*="backdrop-blur"] { backdrop-filter:none!important; }
+.echat-v2 [class*="shadow-"] { box-shadow:none!important; }
+.echat-v2 [style*="linear-gradient"] { background-image:none!important; background-color:#0A2A6B!important; }
+.echat-v2 input:not([type="checkbox"]),.echat-v2 textarea,.echat-v2 select { border-color:#D9DDE3; border-radius:10px; background-color:#F0F2F5; color:#111827; }
+@media(max-width:767px) { .echat-v2 { padding-bottom:calc(76px + env(safe-area-inset-bottom)); } }
+html.echat-v2-dark .echat-v2 { background:#091321; color:#f8fafc; }
+html.echat-v2-dark .echat-v2 .echat-v2-card { background:#142235; border-color:rgba(255,255,255,.1); color:#f8fafc; }
+html.echat-v2-dark .echat-v2 input:not([type="checkbox"]),html.echat-v2-dark .echat-v2 textarea,html.echat-v2-dark .echat-v2 select { background-color:#203149; color:#f8fafc; }
+html.echat-v2-dark .echat-v2 .bg-slate-50,html.echat-v2-dark .echat-v2 .bg-slate-100 { background-color:#203149; color:#f8fafc; }
+html.echat-v2-dark .echat-v2 .text-slate-500,html.echat-v2-dark .echat-v2 .text-slate-600 { color:#b8c5d6; }
+/* Games has a deliberately fixed light palette so board pieces and game labels stay readable. */
+.echat-v2-games-mode,.echat-v2-games-mode main { background:#F2F4F7!important; color:#111827!important; }
+.echat-v2-games-mode .echat-v2-card { background:#FFFFFF!important; border:1px solid #D9DEE5!important; color:#111827!important; box-shadow:0 2px 8px rgba(17,24,39,.08)!important; }
+.echat-v2-games-mode .text-slate-300,.echat-v2-games-mode .text-slate-400,.echat-v2-games-mode .text-slate-500,.echat-v2-games-mode .text-slate-600,.echat-v2-games-mode .text-slate-700 { color:#4B5563!important; }
+.echat-v2-games-mode .bg-slate-50,.echat-v2-games-mode .bg-slate-100 { background:#F2F4F7!important; color:#111827!important; }
+.echat-v2-games-mode aside button { color:#1F2937!important; }
+.echat-v2-games-mode aside button[class*="bg-[#E8EEF7]"] { background:#1E3A5F!important; color:#FFFFFF!important; }
+.echat-v2-games-mode .echat-v2-desktop-navigation button[class*="bg-[#1E3A5F]"] { background:#1E3A5F!important; color:#FFFFFF!important; }
+.echat-v2-games-mode .echat-v2-games-grid { grid-template-columns:240px minmax(0,1fr)!important; }
+.echat-v2-games-mode .echat-v2-desktop-navigation button { flex-direction:row!important; justify-content:flex-start!important; min-height:44px!important; gap:10px!important; padding:8px 12px!important; text-align:left!important; font-size:14px!important; font-weight:600!important; }
+.echat-v2-games-mode .echat-v2-games-page { color:#111827!important; }
+.echat-v2-games-mode .echat-v2-games-page .games-subtitle,.echat-v2-games-mode .echat-v2-games-page .game-description { color:#4B5563!important; }
+.echat-v2-games-mode .echat-v2-games-page .game-row { color:#111827!important; background:#FFFFFF!important; border:1px solid #D9DEE5!important; }
+.echat-v2-games-mode .echat-v2-games-page .game-row[aria-current="true"] { background:#DBEAFE!important; border-color:#1E40AF!important; }
+.echat-v2-games-mode .echat-v2-games-page .games-action { background:#1E3A5F!important; color:#FFFFFF!important; }
+.echat-v2-games-mode .echat-v2-games-page .ttt-cell { width:70px!important; height:70px!important; border:2px solid #1E3A5F!important; background:#FFFFFF!important; font-size:48px!important; font-weight:800!important; }
+.echat-v2-games-mode .echat-v2-games-page .ttt-cell:hover:empty { background:#EFF6FF!important; }
+.echat-v2-games-mode .echat-v2-games-page .ttt-mark-x { color:#DC2626!important; }
+.echat-v2-games-mode .echat-v2-games-page .ttt-mark-o { color:#2563EB!important; }
+html.echat-v2-dark .echat-v2-games-mode,html.echat-v2-dark .echat-v2-games-mode main { background:#F2F4F7!important; color:#111827!important; }
+html.echat-v2-dark .echat-v2-games-mode .echat-v2-card { background:#FFFFFF!important; border-color:#D9DEE5!important; color:#111827!important; box-shadow:0 2px 8px rgba(17,24,39,.08)!important; }
+html.echat-v2-dark .echat-v2-games-mode .text-slate-300,html.echat-v2-dark .echat-v2-games-mode .text-slate-400,html.echat-v2-dark .echat-v2-games-mode .text-slate-500,html.echat-v2-dark .echat-v2-games-mode .text-slate-600,html.echat-v2-dark .echat-v2-games-mode .text-slate-700 { color:#4B5563!important; }
+html.echat-v2-dark .echat-v2-games-mode .bg-slate-50,html.echat-v2-dark .echat-v2-games-mode .bg-slate-100 { background:#F2F4F7!important; color:#111827!important; }
+html.echat-v2-dark .echat-v2-games-mode .echat-v2-games-page .game-row { background:#FFFFFF!important; color:#111827!important; }
+html.echat-v2-dark .echat-v2-games-mode .echat-v2-games-page .game-row[aria-current="true"] { background:#DBEAFE!important; color:#111827!important; }
+html.echat-v2-dark .echat-v2-games-mode .echat-v2-games-page .ttt-cell { background:#FFFFFF!important; }
+html.echat-v2-dark .echat-v2-games-mode aside button { color:#1F2937!important; }
+html.echat-v2-dark .echat-v2-games-mode .echat-v2-desktop-navigation button[class*="bg-[#1E3A5F]"] { background:#1E3A5F!important; color:#FFFFFF!important; }
+@media(max-width:1023px) { .echat-v2-games-mode .echat-v2-games-grid { grid-template-columns:minmax(0,1fr)!important; } }
+
+/* V2 Games: end-of-round feedback */
+.echat-v2-games-mode .ttt-winning-cell { background: #22C55E !important; color: #FFFFFF !important; border-color: #15803D !important; }
+.echat-v2-games-page .games-action { background: #1E3A5F; color: #FFFFFF; }
+.echat-v2-games-page .games-action:hover { background: #16304F; }
+.games-result-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgb(15 23 42 / 65%); }
+.games-result-modal { position: relative; width: min(100%, 480px); max-height: min(90dvh, 760px); overflow-y: auto; border: 1px solid #D9DEE5; border-radius: 20px; background: #FFFFFF; padding: 28px 22px; text-align: center; color: #111827; box-shadow: 0 24px 80px rgb(0 0 0 / 30%); }
+.games-result-modal h2 { margin-top: 12px; font-size: clamp(22px, 6vw, 30px); font-weight: 900; }
+.games-result-callout { margin-top: 8px; font-size: 22px; font-weight: 900; }
+.games-result-score { margin: 14px 0 6px; font-size: 24px; font-weight: 900; }
+.games-result-close { position: absolute; top: 8px; right: 12px; width: 40px; height: 40px; border-radius: 999px; background: #F2F4F7; color: #111827; font-size: 28px; line-height: 1; }
+.games-confetti { position: fixed; inset: 0; z-index: 1001; overflow: hidden; pointer-events: none; }
+.games-confetti span { position: absolute; top: -48px; font-size: 26px; animation: games-confetti-fall 2.5s ease-in forwards; }
+@keyframes games-confetti-fall { to { transform: translateY(110dvh) rotate(540deg); opacity: .1; } }
+
+/* Add-on feature pages inherit the single Professional shell and palette. */
+.echat-professional-features { color:#111827; }
+.echat-professional-features .echat-v2-page header[class*="bg-[#0F1B2D]"] { background:#FFFFFF!important; border:1px solid #D9DDE5; color:#111827!important; }
+.echat-professional-features .echat-v2-page header[class*="bg-[#0F1B2D]"] .text-white { color:#111827!important; }
+.echat-professional-features .echat-v2-page [class*="text-[#FFC107]"],.echat-professional-features .echat-v2-page [class*="text-[#F5B301]"],.echat-professional-features .echat-v2-page [class*="text-[#0F1B2D]"] { color:#0A2A6B!important; }
+.echat-professional-features .echat-v2-page [class*="bg-[#F5B301]"],.echat-professional-features .echat-v2-page [class*="bg-[#FFC107]"] { background:#1877F2!important; color:#FFFFFF!important; }
+.echat-professional-features .echat-v2-page [class*="bg-gradient"] { background-image:none!important; background-color:#E8EEF7!important; }

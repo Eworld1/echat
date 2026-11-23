@@ -1,0 +1,111 @@
+{
+  "entities": {
+    "User": {
+      "collection": "users",
+      "fields": {
+        "id": "string",
+        "name": "string",
+        "email": "string",
+        "dob": "string",
+        "passwordHash": "string",
+        "avatar": "string",
+        "coverPhoto": "string",
+        "bio": "string",
+        "location": "string",
+        "work": "string",
+        "education": "string",
+        "role": "string",
+        "isVerified": "boolean",
+        "isOfficialDeveloper": "boolean",
+        "boostsCount": "number",
+        "boostedBy": "array",
+        "isBlocked": "boolean",
+        "isOnline": "boolean",
+        "lastSeen": "number",
+        "createdAt": "number",
+        "friends": "array",
+        "friendRequestsSent": "array",
+        "friendRequestsReceived": "array"
+      }
+    },
+    "Post": {
+      "collection": "posts",
+      "fields": {
+        "id": "string",
+        "userId": "string",
+        "userName": "string",
+        "userAvatar": "string",
+        "userRole": "string",
+        "isVerified": "boolean",
+        "content": "string",
+        "mediaUrl": "string",
+        "mediaType": "string",
+        "createdAt": "number",
+        "reactions": "object",
+        "reactionCounts": "object",
+        "comments": "array",
+        "sharesCount": "number",
+        "boostsCount": "number"
+      }
+    },
+    "Story": {
+      "collection": "stories",
+      "fields": {
+        "id": "string",
+        "userId": "string",
+        "userName": "string",
+        "userAvatar": "string",
+        "mediaUrl": "string",
+        "mediaType": "string",
+        "caption": "string",
+        "createdAt": "number",
+        "expiresAt": "number",
+        "viewers": "array"
+      }
+    },
+    "Message": {
+      "collection": "messages",
+      "fields": {
+        "id": "string",
+        "senderId": "string",
+        "receiverId": "string",
+        "text": "string",
+        "mediaUrl": "string",
+        "mediaType": "string",
+        "createdAt": "number",
+        "read": "boolean"
+      }
+    },
+    "Notification": {
+      "collection": "notifications",
+      "fields": {
+        "id": "string",
+        "userId": "string",
+        "fromUserId": "string",
+        "fromUserName": "string",
+        "fromUserAvatar": "string",
+        "type": "string",
+        "title": "string",
+        "message": "string",
+        "createdAt": "number",
+        "read": "boolean",
+        "link": "string"
+      }
+    },
+    "Call": {
+      "collection": "calls",
+      "fields": {
+        "id": "string",
+        "callerId": "string",
+        "receiverId": "string",
+        "callerName": "string",
+        "callerAvatar": "string",
+        "type": "string",
+        "status": "string",
+        "offer": "object",
+        "answer": "object",
+        "createdAt": "number"
+      }
+    }
+  }
+}

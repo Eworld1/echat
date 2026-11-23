@@ -1,0 +1,42 @@
+@import "tailwindcss" source(none);
+@source "./";
+@import "./dark.css";
+
+@layer utilities {
+  .mirror {
+    transform: scaleX(-1);
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+html, body, #root {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+header.sticky { padding-top: env(safe-area-inset-top); }
+
+@media (max-width: 768px) {
+  html, body, #root { overflow-x: clip; }
+  button, a, input, textarea, select { touch-action: manipulation; }
+  input:not([type="range"]), textarea, select { font-size: 16px !important; line-height: 1.5; }
+  textarea { max-width: 100%; }
+}
+
+/* Classic Echat keeps its routes and behavior while using the refreshed solid palette. */
+.echat-classic { color:#111827; background:#F0F2F5; }
+.echat-classic header.sticky { background:#fff; border-color:#D9DDE3; }
+.echat-classic aside button > div[class*="bg-"] { background-color:#F0F2F5!important; color:#0A2A6B!important; }
+.echat-classic [class*="bg-purple-"],.echat-classic [class*="bg-violet-"],.echat-classic [class*="bg-fuchsia-"],.echat-classic [class*="bg-indigo-"] { background-color:#E8EEF7!important; }
+.echat-classic [class*="text-purple-"],.echat-classic [class*="text-violet-"],.echat-classic [class*="text-fuchsia-"],.echat-classic [class*="text-indigo-"] { color:#0A2A6B!important; }
+.echat-classic [class*="border-purple-"],.echat-classic [class*="border-violet-"],.echat-classic [class*="border-fuchsia-"],.echat-classic [class*="border-indigo-"] { border-color:#B9C9E1!important; }

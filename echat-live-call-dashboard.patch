@@ -1,0 +1,1012 @@
+diff --git a/server.ts b/server.ts
+index 7261ae1..4e04a1e 100644
+--- a/server.ts
++++ b/server.ts
+@@ -727,6 +727,33 @@ app.get('/api/posts', (req: Request, res: Response) => {
+   res.json(populated);
+ });
+ 
++app.get('/api/dashboard', (req: Request, res: Response) => {
++  const authUser = getAuthUser(req);
++  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
++  const posts = db.getPosts(authUser.id).filter(post => post.authorId === authUser.id);
++  const viewsByDay = Array.from({ length: 30 }, (_, index) => {
++    const day = new Date();
++    day.setHours(0, 0, 0, 0);
++    day.setDate(day.getDate() - (29 - index));
++    const start = day.getTime();
++    const end = start + 24 * 60 * 60 * 1000;
++    return { date: day.toISOString().slice(0, 10), views: posts.reduce((sum, post) => sum + (post.viewRecords || []).filter(record => record.viewedAt >= start && record.viewedAt < end).length, 0) };
++  });
++  const user = db.getUserById(authUser.id);
++  const ranked = [...posts].sort((a, b) => (b.viewsCount || 0) - (a.viewsCount || 0));
++  res.json({
++    stats: {
++      views: posts.reduce((sum, post) => sum + (post.viewsCount || 0), 0),
++      likes: posts.reduce((sum, post) => sum + post.reactions.length, 0),
++      comments: posts.reduce((sum, post) => sum + post.comments.length, 0),
++      followers: user?.friends?.length || 0,
++      posts: posts.length
++    },
++    viewsByDay,
++    posts: ranked.map(populatePost)
++  });
++});
++
+ app.post('/api/posts/:id/view', (req: Request, res: Response) => {
+   const authUser = getAuthUser(req);
+   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+diff --git a/server/db.ts b/server/db.ts
+index 05f7b98..777f4c7 100644
+--- a/server/db.ts
++++ b/server/db.ts
+@@ -479,14 +479,13 @@ class Database {
+   recordPostView(postId: string, viewerId: string): Post | null {
+     const post = this.getPostById(postId);
+     if (!post || post.authorId === viewerId || !this.canViewPost(post, viewerId)) return post || null;
+-    if (!post.views) post.views = [];
+-    if (!post.views.includes(viewerId)) {
+-      post.views.push(viewerId);
+-      if (!post.viewRecords) post.viewRecords = [];
+-      post.viewRecords.push({ userId: viewerId, viewedAt: Date.now() });
+-      post.viewsCount = post.views.length;
+-      this.save();
+-    }
++    const now = Date.now();
++    if (!post.viewRecords) post.viewRecords = (post.views || []).map(userId => ({ userId, viewedAt: post.createdAt }));
++    if (post.viewRecords.some(record => record.userId === viewerId && now - record.viewedAt < 24 * 60 * 60 * 1000)) return post;
++    post.viewRecords.push({ userId: viewerId, viewedAt: now });
++    post.views = [...new Set(post.viewRecords.map(record => record.userId))];
++    post.viewsCount = post.viewRecords.length;
++    this.save();
+     return post;
+   }
+ 
+diff --git a/src/App.tsx b/src/App.tsx
+index db02a88..71202dd 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -22,6 +22,7 @@ import { InstallAppBanner } from './components/InstallAppBanner';
+ import { Pages } from './pages/Pages';
+ import { Groups } from './pages/Groups';
+ import { Events } from './pages/Events';
++import { Dashboard } from './pages/Dashboard';
+ import { Settings } from './pages/Settings';
+ import type { AppView } from './components/Navbar';
+ 
+@@ -193,6 +194,8 @@ export function MainApp() {
+ 
+           {currentView === 'events' && <Events />}
+ 
++          {currentView === 'dashboard' && <Dashboard />}
++
+           {currentView === 'settings' && (
+             <Settings onNavigateHome={() => handleNavigate('feed')} />
+           )}
+diff --git a/src/components/CallModal.tsx b/src/components/CallModal.tsx
+index 681998b..611a787 100644
+--- a/src/components/CallModal.tsx
++++ b/src/components/CallModal.tsx
+@@ -1,28 +1,28 @@
+ import { initialsAvatar } from '../utils/avatar';
+ import React, { useEffect, useRef, useState, useCallback } from 'react';
+ import { useSocket } from '../context/SocketContext';
+-import { 
+-  Phone, 
+-  PhoneOff, 
+-  Video, 
+-  Mic, 
+-  MicOff, 
+-  VideoOff, 
+-  Maximize2, 
+-  Minimize2, 
++import {
++  Phone,
++  PhoneOff,
++  Video,
++  Mic,
++  MicOff,
++  VideoOff,
++  Maximize2,
++  Minimize2,
+   SwitchCamera
+ } from 'lucide-react';
+ 
+ const CallModalView: React.FC = () => {
+-  const { 
+-    activeCall, 
+-    incomingCall, 
+-    acceptCall, 
+-    rejectCall, 
+-    endCall, 
+-    localStreamRef, 
+-    remoteStream, 
+-    peerConnectionRef 
++  const {
++    activeCall,
++    incomingCall,
++    acceptCall,
++    rejectCall,
++    endCall,
++    localStreamRef,
++    remoteStream,
++    peerConnectionRef
+   } = useSocket();
+ 
+   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+@@ -33,6 +33,7 @@ const CallModalView: React.FC = () => {
+   const [callDuration, setCallDuration] = useState(0);
+   const [isMinimized, setIsMinimized] = useState(false);
+   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
++  const [cameraToast, setCameraToast] = useState('');
+ 
+   // Call duration counter
+   useEffect(() => {
+@@ -100,31 +101,47 @@ const CallModalView: React.FC = () => {
+   };
+ 
+   // Control: Toggle Video (Camera On / Off)
+-  const toggleVideo = () => {
++  const toggleVideo = async () => {
+     const stream = localStreamRef?.current;
+-    if (!stream) return;
+-    const track = stream.getVideoTracks()[0];
+-    if (track) {
+-      track.enabled = !track.enabled;
+-      setIsVideoDisabled(!track.enabled);
++    const pc = peerConnectionRef?.current;
++    if (!stream || !pc) return;
++    const sender = pc.getSenders().find(item => item.track?.kind === 'video') || pc.getSenders().find(item => !item.track);
++    if (isVideoDisabled) {
++      let track = stream.getVideoTracks()[0];
++      if (!track || track.readyState === 'ended') {
++        const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facingMode } }, audio: false });
++        track = camera.getVideoTracks()[0];
++        stream.addTrack(track);
++      }
++      if (sender) await sender.replaceTrack(track);
++      else pc.addTrack(track, stream);
++      track.enabled = true;
++      setIsVideoDisabled(false);
++    } else {
++      if (sender) await sender.replaceTrack(null);
++      const track = stream.getVideoTracks()[0];
++      if (track) track.enabled = false;
++      setIsVideoDisabled(true);
+     }
+   };
+ 
+   // Control: Switch Camera (Front / Back on mobile/tablets or between webcams)
+   const switchCamera = async () => {
+     if (!navigator.mediaDevices?.getUserMedia) return;
+-    const nextMode = facingMode === 'user' ? 'environment' : 'user';
+-    setFacingMode(nextMode);
+-
+     try {
+-      const newStream = await navigator.mediaDevices.getUserMedia({
+-        video: { facingMode: { ideal: nextMode } },
+-        audio: !isMicMuted
+-      });
++      const devices = await navigator.mediaDevices.enumerateDevices();
++      const cameras = devices.filter(device => device.kind === 'videoinput');
++      const currentId = localStreamRef.current?.getVideoTracks()[0]?.getSettings().deviceId;
++      const currentIndex = cameras.findIndex(device => device.deviceId === currentId);
++      const nextMode = facingMode === 'user' ? 'environment' : 'user';
++      const nextCamera = cameras.length > 1 ? cameras[(currentIndex + 1 + cameras.length) % cameras.length] : undefined;
++      const newStream = await navigator.mediaDevices.getUserMedia({ video: nextCamera ? { deviceId: { exact: nextCamera.deviceId } } : { facingMode: { ideal: nextMode } }, audio: false });
+ 
+       const newVideoTrack = newStream.getVideoTracks()[0];
+       if (newVideoTrack && localStreamRef?.current) {
+         const oldTrack = localStreamRef.current.getVideoTracks()[0];
++        const sender = peerConnectionRef?.current?.getSenders().find((s: RTCRtpSender) => s.track?.kind === 'video');
++        if (sender) await sender.replaceTrack(newVideoTrack);
+         if (oldTrack) {
+           localStreamRef.current.removeTrack(oldTrack);
+           oldTrack.stop();
+@@ -132,17 +149,14 @@ const CallModalView: React.FC = () => {
+         localStreamRef.current.addTrack(newVideoTrack);
+ 
+         // Replace track in peer connection senders
+-        if (peerConnectionRef?.current) {
+-          const senders = peerConnectionRef.current.getSenders();
+-          const videoSender = senders.find((s: RTCRtpSender) => s.track?.kind === 'video');
+-          if (videoSender) {
+-            videoSender.replaceTrack(newVideoTrack).catch(() => {});
+-          }
+-        }
+-
+         if (localVideoRef.current) {
+           localVideoRef.current.srcObject = localStreamRef.current;
+         }
++        setFacingMode(nextMode);
++        const label = nextCamera?.label || newVideoTrack.label;
++        const isBack = /back|rear|environment/i.test(label) || nextMode === 'environment';
++        setCameraToast(isBack ? 'Back camera' : 'Front camera');
++        window.setTimeout(() => setCameraToast(''), 1800);
+       }
+     } catch (err) {
+       console.warn('Switch camera error:', err);
+@@ -161,10 +175,10 @@ const CallModalView: React.FC = () => {
+       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-in fade-in duration-200">
+         <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl text-center border border-slate-100 animate-in zoom-in-95 duration-200">
+           <div className="relative inline-block mb-5">
+-            <img 
+-              src={incomingCall.callerAvatar || initialsAvatar(incomingCall.callerName || '')} 
+-              alt={incomingCall.callerName} 
+-              className="w-24 h-24 rounded-full mx-auto object-cover border-4 border-blue-600 shadow-md ring-4 ring-blue-100" 
++            <img
++              src={incomingCall.callerAvatar || initialsAvatar(incomingCall.callerName || '')}
++              alt={incomingCall.callerName}
++              className="w-24 h-24 rounded-full mx-auto object-cover border-4 border-blue-600 shadow-md ring-4 ring-blue-100"
+             />
+             <span className="absolute bottom-1 right-1 w-6 h-6 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center">
+               {incomingCall.callType === 'video' ? <Video size={12} className="text-white" /> : <Phone size={12} className="text-white" />}
+@@ -175,16 +189,16 @@ const CallModalView: React.FC = () => {
+             Incoming {incomingCall.callType === 'video' ? 'Video' : 'Audio'} Call...
+           </p>
+           <div className="flex items-center gap-8 mt-8 justify-center">
+-            <button 
+-              onClick={rejectCall} 
+-              className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg transition active:scale-95" 
++            <button
++              onClick={rejectCall}
++              className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg transition active:scale-95"
+               title="Decline"
+             >
+               <PhoneOff size={24} />
+             </button>
+-            <button 
+-              onClick={acceptCall} 
+-              className="w-14 h-14 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-lg animate-bounce transition active:scale-95" 
++            <button
++              onClick={acceptCall}
++              className="w-14 h-14 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-lg animate-bounce transition active:scale-95"
+               title="Answer"
+             >
+               <Phone size={24} />
+@@ -200,10 +214,10 @@ const CallModalView: React.FC = () => {
+     if (isMinimized) {
+       return (
+         <div className="fixed bottom-6 right-6 z-[9999] bg-slate-900 text-white rounded-2xl p-3 shadow-2xl flex items-center gap-3 border border-slate-700 animate-in slide-in-from-bottom-4">
+-          <img 
+-            src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')} 
+-            className="w-10 h-10 rounded-full object-cover border border-slate-600" 
+-            alt={activeCall.partnerName} 
++          <img
++            src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')}
++            className="w-10 h-10 rounded-full object-cover border border-slate-600"
++            alt={activeCall.partnerName}
+           />
+           <div>
+             <p className="text-sm font-bold truncate max-w-[120px]">{activeCall.partnerName}</p>
+@@ -211,16 +225,16 @@ const CallModalView: React.FC = () => {
+               {activeCall.status === 'connected' ? formatTime(callDuration) : 'Calling...'}
+             </p>
+           </div>
+-          <button 
+-            onClick={() => setIsMinimized(false)} 
+-            className="p-2 text-slate-300 hover:text-white rounded-full hover:bg-slate-800 transition" 
++          <button
++            onClick={() => setIsMinimized(false)}
++            className="p-2 text-slate-300 hover:text-white rounded-full hover:bg-slate-800 transition"
+             title="Maximize"
+           >
+             <Maximize2 size={16} />
+           </button>
+-          <button 
+-            onClick={endCall} 
+-            className="p-2 bg-red-600 hover:bg-red-700 text-white rounded-full transition" 
++          <button
++            onClick={endCall}
++            className="p-2 bg-red-600 hover:bg-red-700 text-white rounded-full transition"
+             title="End Call"
+           >
+             <PhoneOff size={16} />
+@@ -232,14 +246,14 @@ const CallModalView: React.FC = () => {
+     return (
+       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-md p-3 animate-in fade-in">
+         <div className="relative bg-slate-950 rounded-3xl w-full max-w-4xl h-[84vh] shadow-2xl overflow-hidden flex flex-col border border-slate-800">
+-          
++
+           {/* Header Bar */}
+           <div className="absolute top-4 left-4 right-4 z-30 flex items-center justify-between pointer-events-none">
+             <div className="flex items-center gap-3 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full text-white pointer-events-auto border border-white/10 shadow-lg">
+-              <img 
+-                src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')} 
+-                className="w-8 h-8 rounded-full object-cover border border-white/20" 
+-                alt={activeCall.partnerName} 
++              <img
++                src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')}
++                className="w-8 h-8 rounded-full object-cover border border-white/20"
++                alt={activeCall.partnerName}
+               />
+               <div>
+                 <h4 className="text-sm font-semibold">{activeCall.partnerName}</h4>
+@@ -248,9 +262,9 @@ const CallModalView: React.FC = () => {
+                 </p>
+               </div>
+             </div>
+-            <button 
+-              onClick={() => setIsMinimized(true)} 
+-              className="p-2.5 rounded-full bg-black/60 backdrop-blur-md text-white hover:bg-black/80 pointer-events-auto border border-white/10 shadow-lg transition" 
++            <button
++              onClick={() => setIsMinimized(true)}
++              className="p-2.5 rounded-full bg-black/60 backdrop-blur-md text-white hover:bg-black/80 pointer-events-auto border border-white/10 shadow-lg transition"
+               title="Minimize"
+             >
+               <Minimize2 size={18} />
+@@ -259,11 +273,11 @@ const CallModalView: React.FC = () => {
+ 
+           {/* Main Video & Audio Area */}
+           <div className="flex-1 relative bg-slate-900 flex items-center justify-center overflow-hidden">
+-            {activeCall.callType === 'video' ? (
++            {(activeCall.callType === 'video' || Boolean(remoteStream?.getVideoTracks().length)) && !isVideoDisabled && Boolean(remoteStream?.getVideoTracks().some(track => !track.muted && track.readyState === 'live')) ? (
+               <>
+                 {/* Full Screen Remote Video */}
+                 {remoteStream && remoteStream.getVideoTracks().length > 0 ? (
+-                  <video 
++                  <video
+                     ref={(el) => {
+                       remoteVideoRef.current = el;
+                       if (el && remoteStream && el.srcObject !== remoteStream) {
+@@ -271,19 +285,19 @@ const CallModalView: React.FC = () => {
+                         el.muted = true;
+                         el.play().catch(() => {});
+                       }
+-                    }} 
+-                    autoPlay 
+-                    playsInline 
+-                    muted 
+-                    className="w-full h-full object-cover" 
++                    }}
++                    autoPlay
++                    playsInline
++                    muted
++                    className="w-full h-full object-cover"
+                   />
+                 ) : (
+                   <div className="flex flex-col items-center text-center p-6">
+                     <div className="relative">
+-                      <img 
+-                        src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')} 
+-                        className="w-28 h-28 rounded-full object-cover border-4 border-slate-700 shadow-xl" 
+-                        alt={activeCall.partnerName} 
++                      <img
++                        src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')}
++                        className="w-28 h-28 rounded-full object-cover border-4 border-slate-700 shadow-xl"
++                        alt={activeCall.partnerName}
+                       />
+                       <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-blue-500 border-2 border-slate-900 flex items-center justify-center">
+                         <Video size={12} className="text-white" />
+@@ -300,18 +314,18 @@ const CallModalView: React.FC = () => {
+ 
+                 {/* Small Local Video PiP */}
+                 <div className="absolute bottom-6 right-6 w-36 h-48 sm:w-44 sm:h-56 rounded-2xl overflow-hidden border-2 border-white/20 bg-black shadow-2xl z-20 transition">
+-                  <video 
++                  <video
+                     ref={(el) => {
+                       localVideoRef.current = el;
+                       if (el && localStreamRef?.current && el.srcObject !== localStreamRef.current) {
+                         el.srcObject = localStreamRef.current;
+                         el.play().catch(() => {});
+                       }
+-                    }} 
+-                    autoPlay 
+-                    playsInline 
+-                    muted={true} 
+-                    className="w-full h-full object-cover scale-x-[-1]" 
++                    }}
++                    autoPlay
++                    playsInline
++                    muted={true}
++                    className="w-full h-full object-cover scale-x-[-1]"
+                   />
+                   {isVideoDisabled && (
+                     <div className="absolute inset-0 bg-slate-900/90 flex flex-col items-center justify-center text-white text-xs">
+@@ -326,10 +340,10 @@ const CallModalView: React.FC = () => {
+               /* Audio Only Call Screen */
+               <div className="flex flex-col items-center text-center p-6">
+                 <div className="relative">
+-                  <img 
+-                    src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')} 
+-                    className="w-32 h-32 rounded-full object-cover border-4 border-emerald-500 shadow-xl" 
+-                    alt={activeCall.partnerName} 
++                  <img
++                    src={activeCall.partnerAvatar || initialsAvatar(activeCall.partnerName || '')}
++                    className="w-32 h-32 rounded-full object-cover border-4 border-emerald-500 shadow-xl"
++                    alt={activeCall.partnerName}
+                   />
+                   <span className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center">
+                     <Phone size={16} className="text-white" />
+@@ -339,7 +353,7 @@ const CallModalView: React.FC = () => {
+                 <p className="text-emerald-400 font-mono mt-1 text-sm font-semibold">
+                   {activeCall.status === 'connected' ? `In Call (${formatTime(callDuration)})` : 'Ringing...'}
+                 </p>
+-                
++
+ 
+                 {activeCall.status === 'connected' && (
+                   <div className="flex items-center gap-1.5 mt-8">
+@@ -356,8 +370,8 @@ const CallModalView: React.FC = () => {
+ 
+           {/* Controls Bar: Mute, Video Off, Switch Camera, End Call */}
+           <div className="p-5 bg-slate-950/95 border-t border-slate-800 flex items-center justify-center gap-4 z-30">
+-            <button 
+-              onClick={toggleMic} 
++            <button
++              onClick={toggleMic}
+               className={`p-4 rounded-full transition shadow-md active:scale-95 ${
+                 isMicMuted ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'bg-slate-800 text-white hover:bg-slate-700'
+               }`}
+@@ -366,30 +380,31 @@ const CallModalView: React.FC = () => {
+               {isMicMuted ? <MicOff size={20} /> : <Mic size={20} />}
+             </button>
+ 
+-            {activeCall.callType === 'video' && (
++            {(
+               <>
+-                <button 
+-                  onClick={toggleVideo} 
++                <button
++                  onClick={() => { void toggleVideo(); }}
+                   className={`p-4 rounded-full transition shadow-md active:scale-95 ${
+                     isVideoDisabled ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'bg-slate-800 text-white hover:bg-slate-700'
+                   }`}
+                   title={isVideoDisabled ? 'Turn Camera On' : 'Turn Camera Off'}
+                 >
+-                  {isVideoDisabled ? <VideoOff size={20} /> : <Video size={20} />}
++                  {isVideoDisabled ? <Video size={20} /> : <VideoOff size={20} />}
+                 </button>
+ 
+-                <button 
+-                  onClick={switchCamera} 
++                {!isVideoDisabled && activeCall.callType === 'video' && <button
++                  onClick={switchCamera}
+                   className="p-4 rounded-full bg-slate-800 text-white hover:bg-slate-700 transition shadow-md active:scale-95"
+                   title="Switch Camera"
+                 >
+                   <SwitchCamera size={20} />
+-                </button>
++                </button>}
+               </>
+             )}
++            {cameraToast && <span className="text-xs text-white">{cameraToast}</span>}
+ 
+-            <button 
+-              onClick={endCall} 
++            <button
++              onClick={endCall}
+               className="px-6 py-4 rounded-full bg-red-600 hover:bg-red-700 text-white font-semibold flex items-center gap-2 shadow-lg transition active:scale-95"
+               title="End Call"
+             >
+@@ -411,9 +426,14 @@ const CallModalView: React.FC = () => {
+  * when the UI switches between ringing / active / minimized views.
+  */
+ export const CallModal: React.FC = () => {
+-  const { remoteStream, activeCall, callNotice, clearCallNotice } = useSocket();
++  const { remoteStream, activeCall, callNotice, clearCallNotice, registerCallAudioElement } = useSocket();
+   const audioRef = useRef<HTMLAudioElement | null>(null);
+ 
++  useEffect(() => {
++    registerCallAudioElement(audioRef.current);
++    return () => registerCallAudioElement(null);
++  }, [registerCallAudioElement]);
++
+   useEffect(() => {
+     if (!callNotice) return;
+     const t = setTimeout(clearCallNotice, 6000);
+diff --git a/src/components/GoLiveModal.tsx b/src/components/GoLiveModal.tsx
+index 4a9dac4..080c776 100644
+--- a/src/components/GoLiveModal.tsx
++++ b/src/components/GoLiveModal.tsx
+@@ -465,7 +465,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+           <div className="flex-1 min-h-[360px] sm:min-h-[460px] relative bg-black flex flex-col md:flex-row overflow-hidden">
+             
+             {/* Video Viewport */}
+-            <div className="flex-1 relative flex items-center justify-center bg-radial from-slate-900 to-black overflow-hidden">
++            <div className="flex-1 relative w-full h-full min-w-0 min-h-0 flex items-center justify-center bg-black overflow-hidden">
+               
+               {/* Video Element (Live Camera) */}
+               <video
+@@ -473,7 +473,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
+                 autoPlay
+                 playsInline
+                 muted
+-                className={`w-full h-full object-cover ${isVideoMuted ? 'hidden' : 'block'}`}
++                className={`absolute inset-0 w-full h-full object-cover object-center ${isVideoMuted ? 'hidden' : 'block'}`}
++                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }}
+               />
+ 
+               {/* Fallback Camera Simulation if no camera attached / permission denied */}
+diff --git a/src/components/LeftSidebar.tsx b/src/components/LeftSidebar.tsx
+index 882b2b8..1b7e34b 100644
+--- a/src/components/LeftSidebar.tsx
++++ b/src/components/LeftSidebar.tsx
+@@ -17,7 +17,7 @@ import {
+   Flag,
+   Users2,
+   Calendar
+-  , Film
++  , Film, BarChart3
+ } from 'lucide-react';
+ 
+ interface LeftSidebarProps {
+@@ -71,6 +71,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
+           <span className="truncate">Reels</span>
+         </button>
+ 
++        <button onClick={() => onNavigate('dashboard')} className={`w-full p-2.5 rounded-2xl flex items-center gap-3 transition cursor-pointer text-left ${currentView === 'dashboard' ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-slate-200/60 text-slate-700 font-semibold text-sm'}`}>
++          <div className="w-9 h-9 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center"><BarChart3 size={19} /></div>
++          <span className="truncate">Dashboard</span>
++        </button>
++
+         {/* Friends */}
+         <button
+           onClick={() => onNavigate('friends')}
+diff --git a/src/components/LiveViewerModal.tsx b/src/components/LiveViewerModal.tsx
+index cfa6cff..37468ba 100644
+--- a/src/components/LiveViewerModal.tsx
++++ b/src/components/LiveViewerModal.tsx
+@@ -173,11 +173,11 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
+   };
+ 
+   return (
+-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+-      <div className="bg-slate-950 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
++    <div className="fixed inset-0 z-50 flex items-stretch justify-stretch bg-black animate-in fade-in duration-200">
++      <div className="bg-black w-full h-full min-w-0 min-h-0 shadow-2xl overflow-hidden flex flex-col">
+         
+         {/* Stream Header */}
+-        <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/95 text-white">
++        <div className="absolute top-0 left-0 right-0 z-40 p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/70 text-white">
+           <div className="flex items-center gap-3">
+             <div className="relative">
+               <img
+@@ -226,11 +226,11 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
+         </div>
+ 
+         {/* Video Canvas & Live Chat Stream */}
+-        <div className="flex-1 min-h-[360px] sm:min-h-[460px] relative bg-black flex flex-col md:flex-row overflow-hidden">
++        <div className="flex-1 min-h-0 w-full h-full relative bg-black overflow-hidden">
+           
+           {/* Main Video Viewport */}
+-            <div className="flex-1 relative flex items-center justify-center bg-radial from-slate-900 via-slate-950 to-black overflow-hidden">
+-            <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 h-full w-full object-contain ${remoteVideo ? 'block' : 'hidden'}`} />
++            <div className="absolute inset-0 w-full h-full relative bg-black overflow-hidden">
++            <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 w-full h-full object-cover object-center ${remoteVideo ? 'block' : 'hidden'}`} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }} />
+             {!remoteVideo && <div className="flex flex-col items-center justify-center p-8 text-center">
+               <div className="relative mb-4">
+                 <img
+@@ -299,7 +299,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
+           </div>
+ 
+           {/* Right Side: Live Chat Feed */}
+-          <div className="w-full md:w-80 bg-slate-900/90 border-t md:border-t-0 md:border-l border-slate-800 flex flex-col h-64 md:h-auto">
++          <div className="absolute right-0 bottom-0 top-auto w-full md:w-80 bg-slate-900/75 backdrop-blur-sm border-l border-slate-800/70 flex flex-col max-h-[45%] md:top-0 md:max-h-none">
+             <div className="px-3.5 py-2.5 border-b border-slate-800 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+               Live Chat Stream
+             </div>
+diff --git a/src/components/Navbar.tsx b/src/components/Navbar.tsx
+index 0f25741..2f72000 100644
+--- a/src/components/Navbar.tsx
++++ b/src/components/Navbar.tsx
+@@ -40,11 +40,11 @@ import {
+   Users2,
+   Calendar,
+   Settings as SettingsIcon
+-  , Film
++  , Film, BarChart3
+ } from 'lucide-react';
+ import { VerifiedBadge } from './VerifiedBadge';
+ 
+-export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved';
++export type AppView = 'feed' | 'reels' | 'friends' | 'admin' | 'profile' | 'pages' | 'groups' | 'events' | 'settings' | 'saved' | 'dashboard';
+ 
+ interface NavbarProps {
+   currentView: AppView;
+@@ -1056,6 +1056,7 @@ export const Navbar: React.FC<NavbarProps> = ({
+                   ['pages', 'Pages', Flag],
+                   ['groups', 'Groups', UsersRound],
+                   ['events', 'Events', CalendarDays],
++                  ['dashboard', 'Dashboard', BarChart3],
+                   ['saved', 'Saved Posts', Bookmark],
+                   ['settings', 'Settings & Privacy', Settings2]
+                 ] as const).map(([view, label, Icon]) => (
+diff --git a/src/context/SocketContext.tsx b/src/context/SocketContext.tsx
+index f52e823..d66a482 100644
+--- a/src/context/SocketContext.tsx
++++ b/src/context/SocketContext.tsx
+@@ -49,6 +49,7 @@ interface SocketContextType {
+   peerConnectionRef: React.MutableRefObject<RTCPeerConnection | null>;
+   localStreamRef: React.MutableRefObject<MediaStream | null>;
+   remoteStream: MediaStream | null;
++  registerCallAudioElement: (element: HTMLAudioElement | null) => void;
+   socket: any;
+   onNewMessage: (cb: (msg: Message) => void) => () => void;
+   onMessageUpdated: (cb: (msg: Message) => void) => () => void;
+@@ -88,11 +89,11 @@ const ICE_CONFIG: RTCConfiguration = {
+         }]
+       : [])
+   ],
+-  iceCandidatePoolSize: 4
++  iceCandidatePoolSize: 10
+ };
+ 
+ async function getCallIceConfig(): Promise<RTCConfiguration> {
+-  try { return await api.getCallIceConfig(); }
++  try { return { ...await api.getCallIceConfig(), iceCandidatePoolSize: 10 }; }
+   catch { return ICE_CONFIG; }
+ }
+ 
+@@ -158,6 +159,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
+   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
++  const callAudioElementRef = useRef<HTMLAudioElement | null>(null);
++  const registerCallAudioElement = useCallback((element: HTMLAudioElement | null) => {
++    callAudioElementRef.current = element;
++  }, []);
+ 
+   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+   const localStreamRef = useRef<MediaStream | null>(null);
+@@ -168,6 +173,61 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+   const isSettingUpCallRef = useRef<boolean>(false);
+   const processedCandidatesRef = useRef<Set<string>>(new Set());
+   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
++  const preparedIncomingRef = useRef<{ id: string; promise: Promise<{ pc: RTCPeerConnection; stream: MediaStream }> } | null>(null);
++
++  const prepareIncomingCall = useCallback((call: IncomingCall) => {
++    if (preparedIncomingRef.current?.id === call.id) return;
++    const promise = (async () => {
++      const [stream, config] = await Promise.all([
++        navigator.mediaDevices.getUserMedia({
++          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
++          video: call.callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
++        }),
++        getCallIceConfig()
++      ]);
++      const pc = new RTCPeerConnection({ ...config, iceCandidatePoolSize: 10 });
++      peerConnectionRef.current = pc;
++      localStreamRef.current = stream;
++      stream.getTracks().forEach(track => { track.enabled = true; pc.addTrack(track, stream); });
++      if (call.callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
++      pc.onicecandidate = event => {
++        if (!event.candidate) return;
++        const candidate = event.candidate.toJSON();
++        if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'call:ice-candidate', rawType: 'ice_candidate', targetUserId: call.callerId, candidate }));
++        if (call.id && !call.id.startsWith('ws_')) updateDoc(doc(firestore, 'calls', call.id), { receiverCandidates: arrayUnion(candidate) }).catch(() => {});
++      };
++      pc.ontrack = event => {
++        const remote = event.streams[0] || new MediaStream([event.track]);
++        remote.getAudioTracks().forEach(track => { track.enabled = true; });
++        remote.getVideoTracks().forEach(track => { track.enabled = true; });
++        const remoteStream = new MediaStream(remote.getTracks());
++        setRemoteStream(remoteStream);
++        const audio = callAudioElementRef.current;
++        if (audio && remoteStream.getAudioTracks().length) {
++          audio.srcObject = remoteStream;
++          audio.muted = false;
++          audio.volume = 1;
++          audio.play().catch(() => {});
++        }
++      };
++      pc.getReceivers().forEach(receiver => {
++        const withJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
++        if ('jitterBufferTarget' in withJitter) withJitter.jitterBufferTarget = 0;
++      });
++      if (call.offer) await pc.setRemoteDescription(new RTCSessionDescription(call.offer));
++      pc.getReceivers().forEach(receiver => {
++        const receiverWithJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
++        if ('jitterBufferTarget' in receiverWithJitter) receiverWithJitter.jitterBufferTarget = 0;
++      });
++      while (pendingCandidatesRef.current.length) {
++        const candidate = pendingCandidatesRef.current.shift();
++        if (candidate) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
++      }
++      return { pc, stream };
++    })();
++    preparedIncomingRef.current = { id: call.id, promise };
++    promise.catch(error => console.warn('Could not prepare incoming call media:', error));
++  }, []);
+ 
+   useEffect(() => {
+     activeCallRef.current = activeCall;
+@@ -207,6 +267,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       } catch {}
+       localStreamRef.current = null;
+     }
++    preparedIncomingRef.current = null;
+     if (peerConnectionRef.current) {
+       const pc = peerConnectionRef.current;
+       try {
+@@ -264,14 +325,16 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+           // If we are not already in an active connected call
+           if (!activeCallRef.current || activeCallRef.current.status !== 'connected') {
+             currentCallDocIdRef.current = docData.id;
+-            setIncomingCall({
++            const call: IncomingCall = {
+               id: docData.id,
+               callerId: docData.callerId,
+               callerName: docData.callerName || docData.caller?.name || 'User',
+               callerAvatar: docData.callerAvatar || docData.caller?.avatar || '',
+               callType: docData.type || docData.callType || 'audio',
+               offer: docData.offer
+-            });
++            };
++            setIncomingCall(call);
++            prepareIncomingCall(call);
+ 
+             // Start ringing sound
+             if (!stopRingtoneRef.current) {
+@@ -298,7 +361,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+     } catch (e) {
+       console.warn('Could not set up Firestore call listener:', e);
+     }
+-  }, [user?.id]);
++  }, [user?.id, prepareIncomingCall]);
+ 
+   // WebSocket for chat & feed real-time events
+   useEffect(() => {
+@@ -428,14 +491,16 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+           case 'call:initiate':
+           case 'incoming_call': {
+             if (!incomingCall && !activeCallRef.current) {
+-              setIncomingCall({
++              const call: IncomingCall = {
+                 id: data.id || 'ws_' + Date.now(),
+                 callerId: data.callerId,
+                 callerName: data.callerName || 'User',
+                 callerAvatar: data.callerAvatar || '',
+                 callType: data.callType || 'video',
+                 offer: data.offer
+-              });
++              };
++              setIncomingCall(call);
++              prepareIncomingCall(call);
+               if (!stopRingtoneRef.current) {
+                 stopRingtoneRef.current = startRingtone();
+               }
+@@ -549,7 +614,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       setIsConnected(false);
+       cleanUpCallMedia();
+     };
+-  }, [user?.id, cleanUpCallMedia]);
++  }, [user?.id, cleanUpCallMedia, prepareIncomingCall]);
+ 
+   // Start outgoing call
+   const startCall = async (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => {
+@@ -577,7 +642,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+     try {
+       // 2. Ask for camera/mic permission
+       const stream = await navigator.mediaDevices.getUserMedia({
+-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
++          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
+         video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+       });
+ 
+@@ -590,7 +655,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       localStreamRef.current = stream;
+ 
+       // 3. Create WebRTC PeerConnection with STUN server stun:stun.l.google.com:19302
+-      const pc = new RTCPeerConnection(await getCallIceConfig());
++      const pc = new RTCPeerConnection({ ...(await getCallIceConfig()), iceCandidatePoolSize: 10 });
+       peerConnectionRef.current = pc;
+ 
+       // Attach the ICE handler NOW, before any description is set. Candidates are produced as soon as
+@@ -625,12 +690,22 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+           console.warn('Error adding track:', e);
+         }
+       });
++      if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
+ 
+       pc.ontrack = (event) => {
+         const streamObj = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+         streamObj.getAudioTracks().forEach(t => { t.enabled = true; });
+         streamObj.getVideoTracks().forEach(t => { t.enabled = true; });
+-        setRemoteStream(new MediaStream(streamObj.getTracks()));
++        const remote = new MediaStream(streamObj.getTracks());
++        setRemoteStream(remote);
++        const audio = callAudioElementRef.current;
++        if (audio && remote.getAudioTracks().length) {
++          audio.srcObject = remote;
++          audio.muted = false;
++          audio.volume = 1;
++          audio.play().catch(() => {});
++        }
++        streamObj.getAudioTracks().forEach(track => { track.enabled = true; });
+         event.track.onunmute = () => {
+           setRemoteStream(new MediaStream(streamObj.getTracks()));
+         };
+@@ -754,6 +829,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+   const acceptCall = async () => {
+     if (!incomingCall || !user) return;
+ 
++    // Unlock audio playback synchronously from the Answer button gesture.
++    callAudioElementRef.current?.play().catch(() => {});
++
+     if (stopRingtoneRef.current) {
+       stopRingtoneRef.current();
+       stopRingtoneRef.current = null;
+@@ -779,21 +857,27 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+     setIncomingCall(null);
+ 
+     try {
+-      // 1. Ask for microphone/camera permission
+-      const stream = await navigator.mediaDevices.getUserMedia({
+-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+-        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+-      });
+-
++      // Media and peer connection are prepared on the incoming ring screen where possible.
++      const prepared = preparedIncomingRef.current?.id === callDocId
++        ? await preparedIncomingRef.current.promise
++        : await (async () => {
++            const stream = await navigator.mediaDevices.getUserMedia({
++              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
++              video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
++            });
++            const pc = new RTCPeerConnection({ ...(await getCallIceConfig()), iceCandidatePoolSize: 10 });
++            stream.getTracks().forEach(track => pc.addTrack(track, stream));
++            if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
++            if (offer) await pc.setRemoteDescription(new RTCSessionDescription(offer));
++            return { pc, stream };
++          })();
++      const { pc, stream } = prepared;
+       if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
+         stream.getTracks().forEach(t => t.stop());
++        pc.close();
+         return;
+       }
+-
+       localStreamRef.current = stream;
+-
+-      // 2. Setup RTCPeerConnection with STUN server stun:stun.l.google.com:19302
+-      const pc = new RTCPeerConnection(await getCallIceConfig());
+       peerConnectionRef.current = pc;
+ 
+       // Send our candidates from the very first one (see startCall): the caller needs them to reach us.
+@@ -813,17 +897,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+         }
+       };
+ 
+-      stream.getTracks().forEach(track => {
+-        try {
+-          track.enabled = true;
+-          if (pc.signalingState !== 'closed') {
+-            pc.addTrack(track, stream);
+-          }
+-        } catch (e) {
+-          console.warn('Error adding track on receiver:', e);
+-        }
+-      });
+-
+       pc.ontrack = (event) => {
+         const streamObj = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+         streamObj.getAudioTracks().forEach(t => { t.enabled = true; });
+@@ -835,7 +908,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       };
+ 
+       // 3. Set Remote Description (Caller's Offer)
+-      if (offer && pc.signalingState !== 'closed') {
++      if (offer && !pc.remoteDescription && pc.signalingState !== 'closed') {
+         await pc.setRemoteDescription(new RTCSessionDescription(offer));
+         while (pendingCandidatesRef.current.length > 0) {
+           const cand = pendingCandidatesRef.current.shift();
+@@ -847,6 +920,17 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+       const answer = await pc.createAnswer();
+       await pc.setLocalDescription(answer);
+ 
++      // Deliver the answer over the live signaling socket immediately; Firestore remains the fallback.
++      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
++        socketRef.current.send(JSON.stringify({
++          type: 'call:answer',
++          rawType: 'call_answer',
++          callerId,
++          receiverId: user.id,
++          answer: { type: answer.type, sdp: answer.sdp }
++        }));
++      }
++
+       // 5. Update Call Document in Firestore 'calls' collection
+       if (callDocId && !callDocId.startsWith('ws_')) {
+         try {
+@@ -881,19 +965,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+         }
+       }
+ 
+-      // Also notify over WebSocket backup immediately
+-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+-        socketRef.current.send(JSON.stringify({
+-          type: 'call:answer',
+-          rawType: 'call_answer',
+-          callerId,
+-          receiverId: user.id,
+-          answer: {
+-            type: answer.type,
+-            sdp: answer.sdp
+-          }
+-        }));
+-      }
+     } catch (err) {
+       console.error('Failed to answer call:', err);
+       setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to accept this call.' : 'Could not connect the call. Check your devices and network, then try again.');
+@@ -1067,6 +1138,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
+         peerConnectionRef,
+         localStreamRef,
+         remoteStream,
++        registerCallAudioElement,
+         socket: mockSocket,
+         onNewMessage,
+         onMessageUpdated,
+diff --git a/src/pages/Dashboard.tsx b/src/pages/Dashboard.tsx
+new file mode 100644
+index 0000000..6fe4ebd
+--- /dev/null
++++ b/src/pages/Dashboard.tsx
+@@ -0,0 +1,51 @@
++import React, { useEffect, useState } from 'react';
++import { Eye, Heart, MessageCircle, Users, FileText, TrendingUp } from 'lucide-react';
++import { api } from '../services/api';
++import type { Post } from '../types';
++
++type DashboardData = { stats: { views: number; likes: number; comments: number; followers: number; posts: number }; viewsByDay: { date: string; views: number }[]; posts: Post[] };
++
++export const Dashboard: React.FC = () => {
++  const [data, setData] = useState<DashboardData | null>(null);
++  const [period, setPeriod] = useState<7 | 30>(7);
++  const [error, setError] = useState('');
++  useEffect(() => {
++    let mounted = true;
++    const refresh = () => api.getDashboard().then(value => { if (mounted) setData(value); }).catch(err => { if (mounted) setError(err instanceof Error ? err.message : 'Could not load dashboard'); });
++    void refresh();
++    const timer = window.setInterval(refresh, 10000);
++    return () => { mounted = false; window.clearInterval(timer); };
++  }, []);
++  const days = data?.viewsByDay.slice(-period) || [];
++  const maxViews = Math.max(1, ...days.map(day => day.views));
++  const cards = [
++    { label: 'Post views', value: data?.stats.views ?? 0, Icon: Eye, color: 'text-cyan-300' },
++    { label: 'Likes', value: data?.stats.likes ?? 0, Icon: Heart, color: 'text-rose-300' },
++    { label: 'Comments', value: data?.stats.comments ?? 0, Icon: MessageCircle, color: 'text-blue-300' },
++    { label: 'Followers', value: data?.stats.followers ?? 0, Icon: Users, color: 'text-violet-300' },
++    { label: 'Posts', value: data?.stats.posts ?? 0, Icon: FileText, color: 'text-amber-300' }
++  ];
++  return <section className="space-y-6 text-white">
++    <header><p className="text-sm text-slate-400">Your content performance</p><h1 className="text-2xl font-black">Creator Dashboard</h1></header>
++    {error && <p className="rounded-xl bg-rose-950 p-4 text-rose-200">{error}</p>}
++    <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">{cards.map(({ label, value, Icon, color }) => <article key={label} className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg"><div className="flex justify-between"><span className="text-xs text-slate-400">{label}</span><Icon size={18} className={color} /></div><p className="mt-3 text-2xl font-black">{value.toLocaleString()}</p></article>)}</div>
++    <article className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
++      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">Post views</h2><p className="text-xs text-slate-400">Daily views over the selected period</p></div><div className="flex gap-2">{([7, 30] as const).map(value => <button key={value} onClick={() => setPeriod(value)} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${period === value ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}`}>Last {value} days</button>)}</div></div>
++      <div className="mt-5 flex h-44 items-end gap-1 border-b border-slate-700 pb-1">{days.map(day => <div key={day.date} title={`${day.date}: ${day.views} views`} className="group flex h-full min-w-0 flex-1 flex-col justify-end"><div className="w-full rounded-t bg-gradient-to-t from-blue-700 to-cyan-400" style={{ height: `${Math.max(day.views ? 5 : 1, day.views / maxViews * 100)}%` }} /></div>)}</div>
++      <div className="mt-2 flex justify-between text-[10px] text-slate-500"><span>{days[0]?.date}</span><span>{days.at(-1)?.date}</span></div>
++    </article>
++    <article className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
++      <div className="flex items-center gap-2 border-b border-slate-800 p-5"><TrendingUp className="text-emerald-300" size={20} /><h2 className="font-bold">Your posts</h2><span className="ml-auto text-xs text-slate-400">Sorted by views</span></div>
++      <div className="divide-y divide-slate-800">{data?.posts.map((post, index) => <PostRow key={post.id} post={post} top={index === 0 && (post.viewsCount || 0) > 0} />)}{data && !data.posts.length && <p className="p-8 text-center text-sm text-slate-400">Your posts and their stats will appear here.</p>}</div>
++    </article>
++  </section>;
++};
++
++const PostRow: React.FC<{ post: Post; top: boolean }> = ({ post, top }) => <div className="flex items-center gap-3 p-4 sm:gap-4">
++  {post.mediaUrl ? <img src={post.mediaUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" /> : <div className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-slate-800"><FileText size={20} className="text-slate-400" /></div>}
++  <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2">{top && <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold text-amber-200">Top post</span>}<span className="text-xs text-slate-500">{new Date(post.createdAt).toLocaleDateString()}</span></div><p className="mt-1 truncate text-sm text-slate-200">{post.content || 'Media post'}</p></div>
++  <div className="hidden shrink-0 grid-cols-3 gap-4 text-center sm:grid"><Metric icon={<Eye size={14} />} value={post.viewsCount || 0} label="Views" /><Metric icon={<Heart size={14} />} value={post.reactions.length} label="Likes" /><Metric icon={<MessageCircle size={14} />} value={post.comments.length} label="Comments" /></div>
++  <div className="shrink-0 text-right text-sm font-bold sm:hidden">{post.viewsCount || 0}<span className="block text-[10px] font-normal text-slate-500">views</span></div>
++</div>;
++
++const Metric: React.FC<{ icon: React.ReactNode; value: number; label: string }> = ({ icon, value, label }) => <div className="min-w-14"><div className="flex items-center justify-center gap-1 text-slate-300">{icon}<span>{value}</span></div><span className="text-[10px] text-slate-500">{label}</span></div>;
+diff --git a/src/services/api.ts b/src/services/api.ts
+index 8505908..b76fa9d 100644
+--- a/src/services/api.ts
++++ b/src/services/api.ts
+@@ -256,6 +256,10 @@ export const api = {
+       return [];
+     }
+   },
++  async getDashboard(): Promise<{ stats: { views: number; likes: number; comments: number; followers: number; posts: number }; viewsByDay: { date: string; views: number }[]; posts: Post[] }> {
++    const res = await fetch(apiUrl('/api/dashboard'), { headers: getHeaders() });
++    return readResponse(res, 'Could not load dashboard');
++  },
+ 
+   async createPost(data: {
+     content: string;

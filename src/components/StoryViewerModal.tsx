@@ -1,0 +1,280 @@
+import { initialsAvatar } from '../utils/avatar';
+import React, { useState, useEffect, useRef } from 'react';
+import { Story, User } from '../types';
+import { api } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { X, ChevronLeft, ChevronRight, Eye, Send, Heart } from 'lucide-react';
+import { useBackButton } from '../hooks/useBackButton';
+
+interface StoryViewerModalProps {
+  stories: Story[];
+  initialIndex: number;
+  onClose: () => void;
+  onReply: (author: User, text: string) => void;
+}
+
+export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
+  stories,
+  initialIndex,
+  onClose,
+  onReply
+}) => {
+  useBackButton(true, onClose, 'story-viewer');
+  const { user } = useAuth();
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [progress, setProgress] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [viewersOpen, setViewersOpen] = useState(false);
+  const touchStartY = useRef<number | null>(null);
+  const currentStory = stories[currentIndex];
+  const [storyViewers, setStoryViewers] = useState(currentStory?.viewers || []);
+
+  useEffect(() => {
+    if (!currentStory) return;
+    setStoryViewers(currentStory.viewers || []);
+    const timer = window.setTimeout(() => { void api.viewStory(currentStory.id).then(result => {
+      if (result.story?.id === currentStory.id) setStoryViewers(result.story.viewers || []);
+    }).catch(() => {}); }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [currentIndex, currentStory]);
+
+  // Story autoplay timer
+  useEffect(() => {
+    if (isPaused || currentStory?.type === 'video') return;
+
+    const interval = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 100) {
+          if (currentIndex < stories.length - 1) {
+            setCurrentIndex(c => c + 1);
+            return 0;
+          } else {
+            onClose();
+            return 100;
+          }
+        }
+        return prev + 2; // ~5 seconds per story
+      });
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [currentIndex, stories.length, isPaused, onClose, currentStory?.type]);
+
+  const goToNext = () => {
+    if (currentIndex < stories.length - 1) {
+      setCurrentIndex(c => c + 1);
+      setProgress(0);
+    } else {
+      onClose();
+    }
+  };
+
+  const goToPrev = () => {
+    if (currentIndex > 0) {
+      setCurrentIndex(c => c - 1);
+      setProgress(0);
+    }
+  };
+
+  const storyAuthor: User = currentStory?.author || {
+    id: currentStory?.authorId || '',
+    name: 'User',
+    email: '',
+    avatar: initialsAvatar('Echat User'),
+    coverPhoto: '',
+    bio: '',
+    location: '',
+    role: 'user',
+    isBlocked: false,
+    isOnline: false,
+    lastSeen: 0,
+    createdAt: 0,
+    friends: [],
+    friendRequestsSent: [],
+    friendRequestsReceived: []
+  };
+
+  const handleSendReply = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replyText.trim() || !currentStory) return;
+    onReply(storyAuthor, replyText.trim());
+    setReplyText('');
+    onClose();
+  };
+
+  if (!currentStory) return null;
+
+  const isMyStory = currentStory.authorId === user?.id;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md">
+      {/* Close button */}
+      <button
+        onClick={onClose}
+        className="absolute top-5 right-5 z-50 p-2.5 rounded-full bg-white/20 hover:bg-white/30 text-white transition cursor-pointer"
+      >
+        <X size={24} />
+      </button>
+
+      {/* Prev / Next Navigation Arrows */}
+      {currentIndex > 0 && (
+        <button
+          onClick={goToPrev}
+          className="absolute left-6 top-1/2 -translate-y-1/2 z-40 p-3 rounded-full bg-white/20 hover:bg-white/30 text-white transition hidden md:flex items-center justify-center"
+        >
+          <ChevronLeft size={28} />
+        </button>
+      )}
+
+      {currentIndex < stories.length - 1 && (
+        <button
+          onClick={goToNext}
+          className="absolute right-6 top-1/2 -translate-y-1/2 z-40 p-3 rounded-full bg-white/20 hover:bg-white/30 text-white transition hidden md:flex items-center justify-center"
+        >
+          <ChevronRight size={28} />
+        </button>
+      )}
+
+      {/* Main Story Container */}
+      <div
+        className="relative w-full max-w-md h-[90vh] sm:h-[85vh] rounded-3xl overflow-hidden shadow-2xl flex flex-col justify-between border border-white/10"
+        onMouseDown={() => setIsPaused(true)}
+        onMouseUp={() => setIsPaused(false)}
+        onTouchStart={event => { setIsPaused(true); touchStartY.current = event.touches[0]?.clientY ?? null; }}
+        onTouchEnd={event => {
+          setIsPaused(false);
+          const start = touchStartY.current;
+          touchStartY.current = null;
+          const end = event.changedTouches[0]?.clientY;
+          if (start !== null && end !== undefined && end - start > 80) onClose();
+        }}
+        onTouchMove={() => {}}
+        onClick={event => {
+          const target = event.target as HTMLElement;
+          if (target.closest('button, input, textarea, form, video')) return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          if (event.clientX < bounds.left + bounds.width / 2) goToPrev(); else goToNext();
+        }}
+      >
+        {/* Background Visual */}
+        {currentStory.type === 'video' && currentStory.mediaUrl ? (
+          <video key={currentStory.id} src={currentStory.mediaUrl} autoPlay playsInline controls muted className="absolute inset-0 h-full w-full object-contain" onTimeUpdate={event => { const video = event.currentTarget; if (video.duration > 0) setProgress(video.currentTime / video.duration * 100); }} onEnded={goToNext} />
+        ) : currentStory.type === 'image' && currentStory.mediaUrl ? (
+          <img
+            src={currentStory.mediaUrl}
+            alt="story"
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div
+            className="absolute inset-0 w-full h-full"
+            style={{ background: currentStory.backgroundGradient || 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}
+          />
+        )}
+
+        {/* Dark overlay gradients for readability */}
+        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/80 pointer-events-none" />
+
+        {/* Top Progress Bars & Author Details */}
+        <div className="relative z-20 p-4 space-y-3">
+          {/* Progress Segment */}
+          <div className="flex items-center gap-1.5 w-full">
+            {stories.map((s, idx) => (
+              <div key={s.id} className="h-1 flex-1 bg-white/30 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-white rounded-full transition-all duration-100 ease-linear"
+                  style={{
+                    width: idx < currentIndex ? '100%' : idx === currentIndex ? `${progress}%` : '0%'
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Author info */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <img
+                src={storyAuthor.avatar}
+                alt={storyAuthor.name}
+                className="w-10 h-10 rounded-full object-cover ring-2 ring-white shadow-md"
+              />
+              <div>
+                <p className="text-sm font-bold text-white leading-tight drop-shadow-md">
+                  {storyAuthor.name}
+                </p>
+                <p className="text-xs text-white/80 font-medium leading-tight">
+                  {Math.max(1, Math.round((Date.now() - currentStory.createdAt) / 3600000))}h ago • 24h Status
+                </p>
+              </div>
+            </div>
+
+            {isMyStory && (
+              <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full text-white text-xs font-semibold">
+                <Eye size={14} />
+                <button type="button" onClick={() => setViewersOpen(true)} className="min-h-8 rounded-full px-1 text-white hover:underline">{storyViewers.length} views</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Story Text Content (Middle) */}
+        <div className="relative z-20 flex-1 flex items-center justify-center p-8 text-center">
+          {currentStory.text && (
+            <p className="text-2xl sm:text-3xl font-extrabold text-white leading-relaxed drop-shadow-lg max-w-sm">
+              {currentStory.text}
+            </p>
+          )}
+        </div>
+
+        {/* Bottom Bar: Reply or Viewer Info */}
+        <div className="relative z-20 p-4">
+          {isMyStory ? (
+            <div className="bg-black/40 backdrop-blur-md rounded-2xl p-3 text-white">
+              <div className="flex items-center gap-2 mb-1">
+                <Eye size={16} className="text-blue-400" />
+                <span className="text-xs font-bold uppercase tracking-wider">
+                  Viewers ({currentStory.viewers.length})
+                </span>
+              </div>
+              {storyViewers.length === 0 ? (
+                <p className="text-xs text-white/80">No views yet. Friends will see your story.</p>
+              ) : (
+                <button type="button" onClick={() => setViewersOpen(true)} className="mt-1 text-xs font-semibold text-blue-200">Tap to see who viewed</button>
+              )}
+            </div>
+          ) : (
+            <form onSubmit={handleSendReply} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                placeholder={`Reply to ${storyAuthor.name}...`}
+                className="flex-1 bg-white/20 backdrop-blur-md text-white placeholder-white/70 text-sm px-4 py-2.5 rounded-full border border-white/20 focus:outline-hidden focus:bg-white/30 transition"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onReply(storyAuthor, '❤️ Loved your story!');
+                  onClose();
+                }}
+                className="p-2.5 rounded-full bg-white/20 hover:bg-white/30 text-rose-400 transition"
+              >
+                <Heart size={20} className="fill-rose-500" />
+              </button>
+              <button
+                type="submit"
+                disabled={!replyText.trim()}
+                className="p-2.5 rounded-full bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40 transition"
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          )}
+        </div>
+        {viewersOpen && isMyStory && <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 sm:items-center" onClick={() => setViewersOpen(false)}><section role="dialog" aria-modal="true" aria-label="Story viewers" onClick={event => event.stopPropagation()} className="max-h-[75dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 text-slate-900 sm:rounded-2xl"><div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300 sm:hidden"/><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Viewers ({storyViewers.length})</h2><button type="button" onClick={() => setViewersOpen(false)} aria-label="Close viewers" className="grid h-10 w-10 place-items-center rounded-full hover:bg-slate-100"><X size={20}/></button></div>{storyViewers.length ? <div className="mt-3 divide-y divide-slate-100">{storyViewers.map(view => <div key={view.userId} className="flex items-center gap-3 py-3"><img src={view.user?.avatar || initialsAvatar(view.user?.name || 'Echat User')} alt="" className="h-10 w-10 rounded-full object-cover"/><span className="min-w-0 flex-1 truncate text-sm font-semibold">{view.user?.name || 'Echat user'}</span><time className="text-xs text-slate-500">{new Date(view.viewedAt).toLocaleString()}</time></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No views yet.</p>}</section></div>}
+      </div>
+    </div>
+  );
+};

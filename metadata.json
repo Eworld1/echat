@@ -1,0 +1,12 @@
+{
+  "name": "EchatSL",
+  "description": "A real-time, full-stack social chat web application featuring news feeds, 24-hour stories, rich posts, one-to-one real-time messaging, WebRTC audio/video calls, and private developer administration.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

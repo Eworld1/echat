@@ -1,0 +1,8 @@
+import React from 'react';
+import type { Story } from '../../types';
+
+interface Props { stories:Story[]; ownId?:string; onOpen:(story:Story)=>void; onCreate:()=>void; }
+export const MomentsRow:React.FC<Props>=({stories,ownId,onOpen,onCreate})=>{
+  const byAuthor=new Map<string,Story>();for(const story of stories){if(Date.now()<story.expiresAt&&!byAuthor.has(story.authorId))byAuthor.set(story.authorId,story);}
+  return <section className="echat-v2-card overflow-hidden p-4"><div className="mb-3 flex items-center justify-between"><h2 className="font-extrabold">Moments</h2><span className="text-xs text-slate-500">Disappears after 24 hours</span></div><div className="flex gap-4 overflow-x-auto pb-2">{<button type="button" onClick={onCreate} className="flex w-[68px] shrink-0 flex-col items-center gap-1.5 text-center"><span className="grid h-14 w-14 place-items-center rounded-full border-2 border-dashed border-[#F5B301] bg-[#FFF8E7] text-2xl text-[#9A6800]">+</span><span className="max-w-full truncate text-[11px] font-semibold">Your moment</span></button>}{[...byAuthor.values()].filter(story=>story.authorId!==ownId).map(story=><button key={story.id} onClick={()=>onOpen(story)} className="flex w-[68px] shrink-0 flex-col items-center gap-1.5 text-center"><span className="rounded-full bg-gradient-to-tr from-[#F5B301] via-[#FFC107] to-[#00C2A8] p-[3px]"><img src={story.author?.avatar} alt="" className="h-[50px] w-[50px] rounded-full border-2 border-white object-cover"/></span><span className="max-w-full truncate text-[11px] font-semibold">{story.author?.name||'Member'}</span></button>)}</div></section>;
+};

@@ -1,0 +1,1317 @@
+import { wsUrl } from '../services/apiBase';
+import { api, type DirectMessage } from '../services/api';
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+import { useAuth } from './AuthContext';
+import { Message, Post, Story, LiveStream, LiveComment, Notification as AppNotification, User } from '../types';
+import { firestore } from '../services/firebase';
+import { playSound } from '../utils/sounds';
+import {
+  collection,
+  addDoc,
+  doc,
+  updateDoc,
+  onSnapshot,
+  query,
+  where,
+  arrayUnion
+} from 'firebase/firestore';
+export interface IncomingCall {
+  id: string; // Firestore document ID
+  callerId: string;
+  callerName: string;
+  callerAvatar: string;
+  callType: 'audio' | 'video';
+  offer: any;
+}
+
+export interface ActiveCall {
+  id?: string; // Firestore document ID
+  startedAt?: number;
+  partnerId: string;
+  partnerName: string;
+  partnerAvatar: string;
+  callType: 'audio' | 'video';
+  isCaller: boolean;
+  status: 'calling' | 'ringing' | 'connected' | 'ended' | 'offline';
+}
+
+interface SocketContextType {
+  isConnected: boolean;
+  onlineUserIds: string[];
+  typingUsers: Record<string, boolean>;
+  activeCall: ActiveCall | null;
+  incomingCall: IncomingCall | null;
+  startCall: (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => Promise<void>;
+  acceptCall: () => Promise<void>;
+  rejectCall: () => Promise<void>;
+  endCall: () => Promise<void>;
+  sendTyping: (receiverId: string, isTyping: boolean) => void;
+  markSeen: (senderId: string) => void;
+  peerConnectionRef: React.MutableRefObject<RTCPeerConnection | null>;
+  localStreamRef: React.MutableRefObject<MediaStream | null>;
+  remoteStream: MediaStream | null;
+  speakerEnabled: boolean;
+  setSpeakerEnabled: (enabled: boolean) => void;
+  registerCallAudioElement: (element: HTMLAudioElement | null) => void;
+  socket: any;
+  onNewMessage: (cb: (msg: Message) => void) => () => void;
+  onDirectMessage: (cb: (event: { message: DirectMessage; partner: User }) => void) => () => void;
+  onDirectMessagesRead: (cb: (event: { readerId: string; senderId: string; readAt: number }) => void) => () => void;
+  onMessageUpdated: (cb: (msg: Message) => void) => () => void;
+  onMessageDeleted: (cb: (messageId: string) => void) => () => void;
+  onPostUpdated: (cb: (post: Post) => void) => () => void;
+  onPostDeleted: (cb: (postId: string) => void) => () => void;
+  onNotification: (cb: (notification: AppNotification) => void) => () => void;
+  /** Short message about the call (person offline, not allowed...). */
+  callNotice: string | null;
+  clearCallNotice: () => void;
+  onNewPost: (cb: (post: Post) => void) => () => void;
+  onStoryCreated: (cb: (story: Story) => void) => () => void;
+  onLiveStarted: (cb: (stream: LiveStream) => void) => () => void;
+  onLiveStopped: (cb: (streamId: string) => void) => () => void;
+  onLiveStreamUpdated: (cb: (stream: LiveStream) => void) => () => void;
+  onLiveComment: (cb: (comment: LiveComment) => void) => () => void;
+  onLiveReaction: (cb: (data: { emoji: string; userName?: string; userId?: string }) => void) => () => void;
+  onLiveViewersUpdated: (cb: (count: number) => void) => () => void;
+  onLiveSignal: (cb: (data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void) => () => void;
+  onLiveCaption: (cb: (data: { streamId: string; text: string; createdAt: number }) => void) => () => void;
+  sendLiveCaption: (streamId: string, text: string) => void;
+  switchCallType: (callType: 'audio' | 'video') => void;
+}
+
+const SocketContext = createContext<SocketContextType | undefined>(undefined);
+
+const TURN_URL: string = import.meta.env.VITE_TURN_URL ?? '';
+const TURN_USERNAME = import.meta.env.VITE_TURN_USERNAME?.trim() ?? '';
+const TURN_CREDENTIAL = import.meta.env.VITE_TURN_CREDENTIAL ?? '';
+const ICE_CONFIG: RTCConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    ...(TURN_URL && TURN_USERNAME && TURN_CREDENTIAL
+      ? [{
+          urls: TURN_URL,
+          username: TURN_USERNAME,
+          credential: TURN_CREDENTIAL
+        }]
+      : [])
+  ],
+  iceCandidatePoolSize: 10
+};
+
+function logCallSetupError(stage: string, error: unknown): void {
+  const details = error instanceof Error
+    ? { name: error.name, message: error.message }
+    : { name: typeof error, message: String(error) };
+  console.error(`[Call] ${stage} failed`, details);
+}
+
+async function getCallIceConfig(): Promise<RTCConfiguration> {
+  try {
+    const config = await api.getCallIceConfig();
+    if (!Array.isArray(config.iceServers) || config.iceServers.length === 0) {
+      throw new Error('The call network configuration did not include any ICE servers');
+    }
+    return { ...config, iceCandidatePoolSize: 10 };
+  } catch (error) {
+    logCallSetupError('Loading ICE configuration; using the browser fallback', error);
+    return ICE_CONFIG;
+  }
+}
+
+let callAudioContext: AudioContext | null = null;
+
+function getCallAudioContext(): AudioContext | null {
+  try {
+    const AudioCtx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!callAudioContext || callAudioContext.state === 'closed') callAudioContext = new AudioCtx();
+    return callAudioContext;
+  } catch {
+    return null;
+  }
+}
+
+function unlockCallAudio(): void {
+  const context = getCallAudioContext();
+  if (context?.state === 'suspended') void context.resume().catch(() => {});
+}
+
+function startSynthRingtone(ringtoneId = 'classic', kind: 'incoming' | 'outgoing' = 'incoming'): () => void {
+  const ctx = getCallAudioContext();
+  if (!ctx) return () => {};
+  try {
+    let isStopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const oscillators = new Set<OscillatorNode>();
+    const patterns: Record<string, number[]> = {
+      classic: [440, 480],
+      chime: [523, 659],
+      digital: [660, 880],
+      gentle: [392, 494]
+    };
+    const notes = kind === 'outgoing' ? [440, 480] : patterns[ringtoneId] || patterns.classic;
+    const toneDuration = kind === 'outgoing' ? 2 : 1.8;
+    const cycleDuration = kind === 'outgoing' ? 6000 : 3500;
+
+    const playBeep = () => {
+      if (isStopped || ctx.state !== 'running') return;
+      try {
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.06, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + toneDuration);
+        gain.connect(ctx.destination);
+        notes.forEach(frequency => {
+          const oscillator = ctx.createOscillator();
+          oscillator.frequency.value = frequency;
+          oscillator.connect(gain);
+          oscillators.add(oscillator);
+          oscillator.onended = () => oscillators.delete(oscillator);
+          oscillator.start();
+          oscillator.stop(ctx.currentTime + toneDuration);
+        });
+      } catch {
+        return;
+      }
+    };
+    const playCycle = () => {
+      if (isStopped) return;
+      playBeep();
+      timer = setTimeout(playCycle, cycleDuration);
+    };
+    const onStateChange = () => {
+      if (ctx.state !== 'running' || isStopped) return;
+      if (timer) clearTimeout(timer);
+      playCycle();
+    };
+    ctx.addEventListener('statechange', onStateChange);
+    playCycle();
+    return () => {
+      isStopped = true;
+      if (timer) clearTimeout(timer);
+      ctx.removeEventListener('statechange', onStateChange);
+      oscillators.forEach(oscillator => {
+        try { oscillator.stop(); } catch {}
+      });
+      oscillators.clear();
+    };
+  } catch {
+    return () => {};
+  }
+}
+
+function startCallTone(kind: 'incoming' | 'outgoing'): () => void {
+  if (localStorage.getItem('echat_sound') === 'false') return () => {};
+  return startSynthRingtone(localStorage.getItem('echat_ringtone') || 'classic', kind);
+}
+
+export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  const socketRef = useRef<WebSocket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
+  const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
+
+  // Call States
+  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
+  const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [speakerEnabled, setSpeakerEnabledState] = useState(true);
+  const remoteTracksRef = useRef<Map<string, MediaStreamTrack>>(new Map());
+  const callAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const registerCallAudioElement = useCallback((element: HTMLAudioElement | null) => {
+    callAudioElementRef.current = element;
+    if (element && remoteStream) {
+      element.srcObject = remoteStream;
+      element.muted = !speakerEnabled;
+      element.volume = speakerEnabled ? 1 : 0;
+      void element.play().catch(() => {});
+    }
+  }, [remoteStream, speakerEnabled]);
+  const setSpeakerEnabled = useCallback((enabled:boolean) => {
+    setSpeakerEnabledState(enabled);
+    const element=callAudioElementRef.current;
+    if(element){element.muted=!enabled;element.volume=enabled?1:0;if(enabled)void element.play().catch(()=>{});}
+  },[]);
+
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const activeCallRef = useRef<ActiveCall | null>(null);
+  const loggedMissedCallIdsRef = useRef<Set<string>>(new Set());
+  const currentCallDocIdRef = useRef<string | null>(null);
+  const callUnsubscribeRef = useRef<(() => void) | null>(null);
+  const stopRingtoneRef = useRef<(() => void) | null>(null);
+  const isSettingUpCallRef = useRef<boolean>(false);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const preparedIncomingRef = useRef<{ id: string; promise: Promise<{ pc: RTCPeerConnection; stream: MediaStream }> } | null>(null);
+
+  useEffect(() => {
+    const unlock = () => {
+      unlockCallAudio();
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('touchstart', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  const publishRemoteTracks = useCallback((extraTrack?: MediaStreamTrack) => {
+    const pc = peerConnectionRef.current;
+    for (const receiver of pc?.getReceivers() || []) {
+      const track = receiver.track;
+      if (track && track.readyState !== 'ended') remoteTracksRef.current.set(track.id, track);
+    }
+    if (extraTrack && extraTrack.readyState !== 'ended') remoteTracksRef.current.set(extraTrack.id, extraTrack);
+    for (const [id, track] of remoteTracksRef.current) if (track.readyState === 'ended') remoteTracksRef.current.delete(id);
+    const stream = new MediaStream([...remoteTracksRef.current.values()]);
+    setRemoteStream(stream);
+    const audio = callAudioElementRef.current;
+    if (audio && stream.getAudioTracks().length) {
+      audio.srcObject = stream;
+      audio.muted = !speakerEnabled;
+      audio.volume = speakerEnabled ? 1 : 0;
+      void audio.play().catch(() => {});
+    }
+  }, [speakerEnabled]);
+
+  const prepareIncomingCall = useCallback((call: IncomingCall) => {
+    if (preparedIncomingRef.current?.id === call.id) return;
+    const promise = (async () => {
+      const [stream, config] = await Promise.all([
+        navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
+          video: call.callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+        }),
+        getCallIceConfig()
+      ]);
+      const pc = new RTCPeerConnection({ ...config, iceCandidatePoolSize: 10 });
+      peerConnectionRef.current = pc;
+      localStreamRef.current = stream;
+      stream.getTracks().forEach(track => { track.enabled = true; pc.addTrack(track, stream); });
+      if (call.callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
+      pc.onicecandidate = event => {
+        if (!event.candidate) return;
+        const candidate = event.candidate.toJSON();
+        if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'call:ice-candidate', rawType: 'ice_candidate', targetUserId: call.callerId, candidate }));
+        if (call.id && !call.id.startsWith('ws_')) updateDoc(doc(firestore, 'calls', call.id), { receiverCandidates: arrayUnion(candidate) }).catch(() => {});
+      };
+      pc.ontrack = event => {
+        event.track.enabled = true;
+        event.track.onunmute = () => publishRemoteTracks(event.track);
+        event.track.onmute = () => publishRemoteTracks(event.track);
+        event.track.onended = () => publishRemoteTracks();
+        publishRemoteTracks(event.track);
+      };
+      pc.getReceivers().forEach(receiver => {
+        const withJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
+        if ('jitterBufferTarget' in withJitter) withJitter.jitterBufferTarget = 0;
+      });
+      if (call.offer) await pc.setRemoteDescription(new RTCSessionDescription(call.offer));
+      pc.getReceivers().forEach(receiver => {
+        const receiverWithJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
+        if ('jitterBufferTarget' in receiverWithJitter) receiverWithJitter.jitterBufferTarget = 0;
+      });
+      while (pendingCandidatesRef.current.length) {
+        const candidate = pendingCandidatesRef.current.shift();
+        if (candidate) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+      }
+      return { pc, stream };
+    })();
+    preparedIncomingRef.current = { id: call.id, promise };
+    promise.catch(error => console.warn('Could not prepare incoming call media:', error));
+  }, [publishRemoteTracks]);
+
+  useEffect(() => {
+    activeCallRef.current = activeCall;
+  }, [activeCall]);
+
+  // Subscriptions
+  const messageListeners = useRef<Set<(msg: Message) => void>>(new Set());
+  const directMessageListeners = useRef<Set<(event: { message: DirectMessage; partner: User }) => void>>(new Set());
+  const directMessagesReadListeners = useRef<Set<(event: { readerId: string; senderId: string; readAt: number }) => void>>(new Set());
+  const messageUpdatedListeners = useRef<Set<(msg: Message) => void>>(new Set());
+  const messageDeletedListeners = useRef<Set<(messageId: string) => void>>(new Set());
+  const postUpdateListeners = useRef<Set<(post: Post) => void>>(new Set());
+  const postDeleteListeners = useRef<Set<(postId: string) => void>>(new Set());
+  const notificationListeners = useRef<Set<(n: AppNotification) => void>>(new Set());
+  const [callNotice, setCallNotice] = useState<string | null>(null);
+  const logMissedCall = useCallback((call: ActiveCall) => {
+    if (!user || !call.isCaller) return;
+    const key = call.id || `${call.partnerId}:${call.callType}:${call.startedAt ?? 'unknown'}`;
+    if (loggedMissedCallIdsRef.current.has(key)) return;
+    loggedMissedCallIdsRef.current.add(key);
+    void api.sendMessage({ receiverId: call.partnerId, text: `__echat_missed_call__:${call.callType}` })
+      .catch(error => console.warn('Could not save missed-call chat item:', error));
+  }, [user?.id]);
+  const newPostListeners = useRef<Set<(post: Post) => void>>(new Set());
+  const storyListeners = useRef<Set<(story: Story) => void>>(new Set());
+  const liveStartedListeners = useRef<Set<(stream: LiveStream) => void>>(new Set());
+  const liveStoppedListeners = useRef<Set<(streamId: string) => void>>(new Set());
+  const liveStreamUpdatedListeners = useRef<Set<(stream: LiveStream) => void>>(new Set());
+  const liveCommentListeners = useRef<Set<(comment: LiveComment) => void>>(new Set());
+  const liveReactionListeners = useRef<Set<(data: { emoji: string; userName?: string; userId?: string }) => void>>(new Set());
+  const liveViewersUpdatedListeners = useRef<Set<(count: number) => void>>(new Set());
+  const liveSignalListeners = useRef<Set<(data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void>>(new Set());
+  const liveCaptionListeners = useRef<Set<(data: { streamId: string; text: string; createdAt: number }) => void>>(new Set());
+
+  // WebRTC teardown helper
+  const cleanUpCallMedia = useCallback(() => {
+    isSettingUpCallRef.current = false;
+    if (stopRingtoneRef.current) {
+      stopRingtoneRef.current();
+      stopRingtoneRef.current = null;
+    }
+    if (callUnsubscribeRef.current) {
+      callUnsubscribeRef.current();
+      callUnsubscribeRef.current = null;
+    }
+    if (localStreamRef.current) {
+      try {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+      } catch {}
+      localStreamRef.current = null;
+    }
+    preparedIncomingRef.current = null;
+    remoteTracksRef.current.clear();
+    if (peerConnectionRef.current) {
+      const pc = peerConnectionRef.current;
+      try {
+        pc.getReceivers().forEach(r => r.track?.stop());
+        pc.ontrack = null;
+        pc.onicecandidate = null;
+        pc.onconnectionstatechange = null;
+        pc.close();
+      } catch {}
+      peerConnectionRef.current = null;
+    }
+    currentCallDocIdRef.current = null;
+    pendingCandidatesRef.current = [];
+    setRemoteStream(null);
+    activeCallRef.current = null;
+    setActiveCall(null);
+    setIncomingCall(null);
+  }, []);
+
+  const addOrQueueCandidate = useCallback(async (candidate: RTCIceCandidateInit) => {
+    const pc = peerConnectionRef.current;
+    // A caller can emit ICE candidates while its offer is still being sent. Keep them
+    // until the incoming call has created its peer connection and applied the offer.
+    if (!pc || pc.signalingState === 'closed' || !pc.remoteDescription || !pc.remoteDescription.type) {
+      pendingCandidatesRef.current.push(candidate);
+      return;
+    }
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (err) {
+      console.warn('Error adding ICE candidate:', err);
+    }
+  }, []);
+
+  // Listen for incoming calls in Firestore 'calls' collection
+  useEffect(() => {
+    if (!user?.id) return;
+
+    try {
+      const callsQuery = query(
+        collection(firestore, 'calls'),
+        where('receiverId', '==', user.id),
+        where('status', '==', 'ringing')
+      );
+
+      const unsubscribe = onSnapshot(callsQuery, (snapshot) => {
+        // Find latest ringing call not created by myself
+        const incomingDocs = snapshot.docs
+          .map(d => ({ id: d.id, ...d.data() } as any))
+          .filter(d => d.callerId !== user.id && Date.now() - (d.createdAt || 0) < 120000)
+          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+        if (incomingDocs.length > 0) {
+          const docData = incomingDocs[0];
+          // If we are not already in an active connected call
+          if (!activeCallRef.current || activeCallRef.current.status !== 'connected') {
+            currentCallDocIdRef.current = docData.id;
+            const call: IncomingCall = {
+              id: docData.id,
+              callerId: docData.callerId,
+              callerName: docData.callerName || docData.caller?.name || 'User',
+              callerAvatar: docData.callerAvatar || docData.caller?.avatar || '',
+              callType: docData.type || docData.callType || 'audio',
+              offer: docData.offer
+            };
+            setIncomingCall(call);
+            prepareIncomingCall(call);
+
+            // Start ringing sound
+            if (!stopRingtoneRef.current) {
+              stopRingtoneRef.current = startCallTone('incoming');
+            }
+          }
+        } else {
+          // No active ringing call for me
+          if (incomingCall) {
+            setIncomingCall(null);
+            if (stopRingtoneRef.current) {
+              stopRingtoneRef.current();
+              stopRingtoneRef.current = null;
+            }
+          }
+        }
+      }, (err) => {
+        console.warn('Firestore calls listener error (falling back to WebSocket):', err);
+      });
+
+      return () => {
+        unsubscribe();
+      };
+    } catch (e) {
+      console.warn('Could not set up Firestore call listener:', e);
+    }
+  }, [user?.id, prepareIncomingCall]);
+
+  // WebSocket for chat & feed real-time events
+  useEffect(() => {
+    if (!user) {
+      if (socketRef.current) socketRef.current.close();
+      return;
+    }
+
+    // Auto-reconnecting socket: free hosts and mobile networks drop idle connections, and without
+    // a reconnect every user would show as "Offline" until the page was refreshed.
+    let disposed = false;
+    let retry = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+    const connect = () => {
+    const ws = new WebSocket(wsUrl());
+    socketRef.current = ws;
+
+    ws.onopen = () => {
+      retry = 0;
+      setIsConnected(true);
+      ws.send(JSON.stringify({ type: 'auth', userId: user.id }));
+      heartbeat = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+      }, 25000);
+    };
+
+    ws.onclose = () => {
+      if (socketRef.current === ws) socketRef.current = null;
+      if (heartbeat) clearInterval(heartbeat);
+      setIsConnected(false);
+      setOnlineUserIds([]);
+      setTypingUsers({});
+      if (!disposed) {
+        const delay = Math.min(30000, 1000 * 2 ** retry);
+        retry += 1;
+        reconnectTimer = setTimeout(connect, delay);
+      }
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        switch (data.type) {
+          case 'online_users_list':
+            setOnlineUserIds(data.userIds || []);
+            break;
+
+          case 'user_status':
+            setOnlineUserIds(prev => {
+              if (data.isOnline) {
+                return Array.from(new Set([...prev, data.userId]));
+              } else {
+                return prev.filter(id => id !== data.userId);
+              }
+            });
+            break;
+
+          case 'user_typing':
+            setTypingUsers(prev => ({
+              ...prev,
+              [data.senderId]: data.isTyping
+            }));
+            break;
+
+          case 'new_message':
+          case 'message_sent':
+            if (data.type === 'new_message' && data.message?.senderId !== user?.id && localStorage.getItem('echat_active_chat') !== data.message?.senderId) playSound('message_in');
+            messageListeners.current.forEach(cb => cb(data.message));
+            break;
+
+          case 'direct_message':
+            if (data.message?.senderId !== user?.id && localStorage.getItem('echat_active_chat') !== data.message?.senderId) playSound('message_in');
+            directMessageListeners.current.forEach(cb => cb({ message: data.message, partner: data.partner }));
+            break;
+
+          case 'direct_messages_read':
+            directMessagesReadListeners.current.forEach(cb => cb({
+              readerId: data.readerId,
+              senderId: data.senderId,
+              readAt: data.readAt
+            }));
+            break;
+
+          case 'message_updated':
+            messageUpdatedListeners.current.forEach(cb => cb(data.message));
+            break;
+
+          case 'message_deleted':
+            if (data.userId === user?.id && typeof data.messageId === 'string') messageDeletedListeners.current.forEach(cb => cb(data.messageId));
+            break;
+
+          case 'user_updated':
+          case 'developer_profile_updated':
+            if (data.user?.id) window.dispatchEvent(new CustomEvent('echat:profile-updated', { detail: data.user }));
+            break;
+
+          case 'new_notification':
+            if (data.notification) notificationListeners.current.forEach(cb => cb(data.notification));
+            break;
+
+          case 'post_deleted':
+            if (typeof data.postId === 'string') postDeleteListeners.current.forEach(cb => cb(data.postId));
+            break;
+
+          case 'post_updated':
+            postUpdateListeners.current.forEach(cb => cb(data.post));
+            break;
+
+          case 'new_post':
+            newPostListeners.current.forEach(cb => cb(data.post));
+            break;
+
+          case 'story_created':
+            storyListeners.current.forEach(cb => cb(data.story));
+            break;
+
+          case 'live_started':
+            liveStartedListeners.current.forEach(cb => cb(data.stream));
+            break;
+
+          case 'live_ended':
+          case 'live_stopped':
+            liveStoppedListeners.current.forEach(cb => cb(data.streamId));
+            break;
+
+          case 'live_stream_updated':
+            liveStreamUpdatedListeners.current.forEach(cb => cb(data.stream));
+            break;
+
+          case 'live_comment':
+            liveCommentListeners.current.forEach(cb => cb(data.comment));
+            break;
+
+          case 'live_reaction':
+            liveReactionListeners.current.forEach(cb => cb(data));
+            break;
+
+          case 'live_viewers_updated':
+            liveViewersUpdatedListeners.current.forEach(cb => cb(data.viewersCount));
+            break;
+
+          case 'live:signal':
+            liveSignalListeners.current.forEach(cb => cb(data));
+            break;
+
+          case 'live_caption':
+            liveCaptionListeners.current.forEach(cb => cb(data));
+            break;
+
+          // WebRTC Call Signaling (Supports call:initiate, call:offer, call:answer, call:ice-candidate, call:end, call:rejected)
+          case 'call:initiate':
+          case 'incoming_call': {
+            if (!incomingCall && !activeCallRef.current) {
+              const call: IncomingCall = {
+                id: data.id || 'ws_' + Date.now(),
+                callerId: data.callerId,
+                callerName: data.callerName || 'User',
+                callerAvatar: data.callerAvatar || '',
+                callType: data.callType || 'video',
+                offer: data.offer
+              };
+              setIncomingCall(call);
+              prepareIncomingCall(call);
+              if (!stopRingtoneRef.current) {
+                stopRingtoneRef.current = startCallTone('incoming');
+              }
+            }
+            break;
+          }
+
+          case 'call:offer':
+          case 'call_offer': {
+            if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed' && data.offer) {
+              try {
+                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+                // Flush pending candidates
+                while (pendingCandidatesRef.current.length > 0) {
+                  const cand = pendingCandidatesRef.current.shift();
+                  if (cand) await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+                }
+              } catch (e) {
+                console.warn('Could not set remote description from offer:', e);
+              }
+            }
+            break;
+          }
+
+          case 'call:answer':
+          case 'call_answered': {
+            if (stopRingtoneRef.current) {
+              stopRingtoneRef.current();
+              stopRingtoneRef.current = null;
+            }
+            if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed' && data.answer) {
+              try {
+                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
+                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+                  // Flush pending candidates
+                  while (pendingCandidatesRef.current.length > 0) {
+                    const cand = pendingCandidatesRef.current.shift();
+                    if (cand) await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+                  }
+                }
+                setActiveCall(prev => prev ? { ...prev, status: 'connected' } : null);
+              } catch (e) {
+                console.warn('Could not set remote description from answer:', e);
+              }
+            }
+            break;
+          }
+
+          case 'call:user_offline':
+          case 'call_user_offline': {
+            // Keep ringing (they may still receive it through the call document), but say so.
+            setCallNotice('This person looks offline right now. We will keep ringing in case they open Echat.');
+            break;
+          }
+
+          case 'call:rejected':
+          case 'call_rejected':
+          case 'call:end':
+          case 'call_ended':
+          case 'call_failed': {
+            if ((data.type === 'call:rejected' || data.type === 'call_rejected') && data.reason === 'not_allowed') {
+              setCallNotice('This person does not accept calls from you.');
+            } else if (data.type === 'call:rejected' || data.type === 'call_rejected') {
+              setCallNotice('Call declined.');
+              if (activeCallRef.current) logMissedCall(activeCallRef.current);
+            }
+            cleanUpCallMedia();
+            break;
+          }
+
+          case 'call:ice-candidate':
+          case 'call:ice_candidate':
+          case 'ice_candidate': {
+            if (data.candidate) {
+              await addOrQueueCandidate(data.candidate);
+            }
+            break;
+          }
+
+          case 'call-switch-type': {
+            const callType: 'video' | 'audio' = data.callType === 'video' ? 'video' : 'audio';
+            const call = activeCallRef.current;
+            if (call && call.partnerId === data.fromUserId) {
+              if (callType === 'audio') {
+                const pc = peerConnectionRef.current;
+                const videoSender = pc?.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender;
+                if (videoSender) await videoSender.replaceTrack(null).catch(() => {});
+                localStreamRef.current?.getVideoTracks().forEach(track => { track.enabled = false; });
+              }
+              const updated = { ...call, callType };
+              activeCallRef.current = updated;
+              setActiveCall(updated);
+            }
+            break;
+          }
+
+          default:
+            break;
+        }
+      } catch (err) {
+        console.error('WebSocket dispatch error:', err);
+      }
+    };
+    };
+    // Reconnect immediately when the phone/tab wakes up or the network returns.
+    const reconnectNow = () => {
+      const cur = socketRef.current;
+      if (disposed || (cur && cur.readyState <= WebSocket.OPEN)) return;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      retry = 0;
+      connect();
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') reconnectNow(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', reconnectNow);
+
+    connect();
+
+    return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (heartbeat) clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', reconnectNow);
+      const cur = socketRef.current;
+      socketRef.current = null;
+      cur?.close();
+      setIsConnected(false);
+      cleanUpCallMedia();
+    };
+  }, [user?.id, cleanUpCallMedia, prepareIncomingCall, logMissedCall]);
+
+  // Start outgoing call
+  const startCall = async (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => {
+    if (!user || isSettingUpCallRef.current || activeCallRef.current || incomingCall) return;
+
+    isSettingUpCallRef.current = true;
+    cleanUpCallMedia();
+
+    // 1. Show Calling popup immediately
+    const newCall: ActiveCall = {
+      startedAt: Date.now(),
+      partnerId: targetUserId,
+      partnerName: targetName,
+      partnerAvatar: targetAvatar,
+      callType,
+      isCaller: true,
+      status: 'calling'
+    };
+    setActiveCall(newCall);
+    activeCallRef.current = newCall;
+
+    // Start outgoing ringtone
+    stopRingtoneRef.current = startCallTone('outgoing');
+
+    let setupStage = 'getUserMedia';
+    try {
+      // 2. Ask for camera/mic permission
+      const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
+        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+      });
+
+      if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
+        stream.getTracks().forEach(t => t.stop());
+        isSettingUpCallRef.current = false;
+        return;
+      }
+
+      localStreamRef.current = stream;
+
+      setupStage = 'loading ICE configuration';
+      const iceConfig = await getCallIceConfig();
+      setupStage = 'constructing RTCPeerConnection';
+      const pc = new RTCPeerConnection({ ...iceConfig, iceCandidatePoolSize: 10 });
+      peerConnectionRef.current = pc;
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'failed') {
+          console.error('[Call] ICE connection failed', { iceConnectionState: pc.iceConnectionState });
+        }
+      };
+
+      // Attach the ICE handler NOW, before any description is set. Candidates are produced as soon as
+      // setLocalDescription runs; attaching later (after a network write) silently dropped them and the
+      // other side could not connect back, which caused one-way / no audio.
+      const earlyCandidates: RTCIceCandidateInit[] = [];
+      let iceDocId = '';
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        const cand = event.candidate.toJSON();
+        earlyCandidates.push(cand);
+        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({
+            type: 'call:ice-candidate',
+            rawType: 'ice_candidate',
+            targetUserId,
+            candidate: cand
+          }));
+        }
+        if (iceDocId) {
+          updateDoc(doc(firestore, 'calls', iceDocId), { callerCandidates: arrayUnion(cand) })
+            .catch(error => logCallSetupError('Publishing caller ICE candidate', error));
+        }
+      };
+
+      setupStage = 'adding local media tracks';
+      stream.getTracks().forEach(track => {
+        track.enabled = true;
+        if (pc.signalingState === 'closed') throw new Error('Peer connection closed before adding local media tracks');
+        pc.addTrack(track, stream);
+      });
+      if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
+
+      pc.ontrack = event => {
+        event.track.enabled = true;
+        event.track.onunmute = () => publishRemoteTracks(event.track);
+        event.track.onmute = () => publishRemoteTracks(event.track);
+        event.track.onended = () => publishRemoteTracks();
+        publishRemoteTracks(event.track);
+      };
+
+      // 4. Create SDP Offer
+      setupStage = 'creating SDP offer';
+      const offer = await pc.createOffer();
+      setupStage = 'setting local SDP description';
+      await pc.setLocalDescription(offer);
+
+      // 5. Create Call Document in Firestore 'calls' collection
+      setupStage = 'signaling the call';
+      let callDocId = '';
+      try {
+        const callDoc = await addDoc(collection(firestore, 'calls'), {
+          caller: {
+            id: user.id,
+            name: user.name,
+            avatar: user.avatar
+          },
+          receiver: {
+            id: targetUserId,
+            name: targetName,
+            avatar: targetAvatar
+          },
+          callerId: user.id,
+          callerName: user.name,
+          callerAvatar: user.avatar,
+          receiverId: targetUserId,
+          receiverName: targetName,
+          receiverAvatar: targetAvatar,
+          type: callType,
+          callType,
+          status: 'ringing',
+          offer: {
+            type: offer.type,
+            sdp: offer.sdp
+          },
+          answer: null,
+          callerCandidates: [],
+          receiverCandidates: [],
+          createdAt: Date.now()
+        });
+
+        callDocId = callDoc.id;
+        currentCallDocIdRef.current = callDocId;
+        setActiveCall(prev => { const updated=prev?{...prev,id:callDocId}:null;if(updated)activeCallRef.current=updated;return updated; });
+
+        // Publish the candidates gathered while the call document was being created
+        iceDocId = callDocId;
+        if (earlyCandidates.length > 0) {
+          updateDoc(doc(firestore, 'calls', callDocId), { callerCandidates: arrayUnion(...earlyCandidates) }).catch(() => {});
+        }
+
+      } catch (firestoreErr) {
+        logCallSetupError('Creating Firestore call document; trying WebSocket fallback', firestoreErr);
+      }
+
+      // Also trigger over WebSocket backup channel immediately
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'call:initiate',
+          rawType: 'call_initiate',
+          callerId: user.id,
+          callerName: user.name,
+          callerAvatar: user.avatar,
+          receiverId: targetUserId,
+          callType,
+          offer
+        }));
+      }
+    } catch (err) {
+      logCallSetupError(setupStage, err);
+      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to start this call.' : 'Could not start the call. Check your microphone, camera, and network, then try again.');
+      cleanUpCallMedia();
+    } finally {
+      isSettingUpCallRef.current = false;
+    }
+  };
+
+  // Accept incoming call
+  const acceptCall = async () => {
+    if (!incomingCall || !user) return;
+
+    // Unlock audio playback synchronously from the Answer button gesture.
+    callAudioElementRef.current?.play().catch(() => {});
+
+    if (stopRingtoneRef.current) {
+      stopRingtoneRef.current();
+      stopRingtoneRef.current = null;
+    }
+
+    const callDocId = incomingCall.id;
+    const callerId = incomingCall.callerId;
+    const callType = incomingCall.callType;
+    const offer = incomingCall.offer;
+
+    const acceptedCall: ActiveCall = {
+      id: callDocId,
+      partnerId: callerId,
+      partnerName: incomingCall.callerName,
+      partnerAvatar: incomingCall.callerAvatar,
+      callType,
+      isCaller: false,
+      status: 'connected'
+    };
+    setActiveCall(acceptedCall);
+    activeCallRef.current = acceptedCall;
+    currentCallDocIdRef.current = callDocId;
+    setIncomingCall(null);
+
+    try {
+      // Media and peer connection are prepared on the incoming ring screen where possible.
+      const prepared = preparedIncomingRef.current?.id === callDocId
+        ? await preparedIncomingRef.current.promise
+        : await (async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
+              video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
+            });
+            const pc = new RTCPeerConnection({ ...(await getCallIceConfig()), iceCandidatePoolSize: 10 });
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
+            if (offer) await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            return { pc, stream };
+          })();
+      const { pc, stream } = prepared;
+      if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
+        stream.getTracks().forEach(t => t.stop());
+        pc.close();
+        return;
+      }
+      localStreamRef.current = stream;
+      peerConnectionRef.current = pc;
+
+      // Send our candidates from the very first one (see startCall): the caller needs them to reach us.
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        const cand = event.candidate.toJSON();
+        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({
+            type: 'call:ice-candidate',
+            rawType: 'ice_candidate',
+            targetUserId: callerId,
+            candidate: cand
+          }));
+        }
+        if (callDocId && !callDocId.startsWith('ws_')) {
+          updateDoc(doc(firestore, 'calls', callDocId), { receiverCandidates: arrayUnion(cand) }).catch(() => {});
+        }
+      };
+
+      pc.ontrack = event => {
+        event.track.enabled = true;
+        event.track.onunmute = () => publishRemoteTracks(event.track);
+        event.track.onmute = () => publishRemoteTracks(event.track);
+        event.track.onended = () => publishRemoteTracks();
+        publishRemoteTracks(event.track);
+      };
+
+      // 3. Set Remote Description (Caller's Offer)
+      if (offer && !pc.remoteDescription && pc.signalingState !== 'closed') {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        while (pendingCandidatesRef.current.length > 0) {
+          const cand = pendingCandidatesRef.current.shift();
+          if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+        }
+      }
+
+      // 4. Create Answer
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      // Deliver the answer over the live signaling socket.
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'call:answer',
+          rawType: 'call_answer',
+          callerId,
+          receiverId: user.id,
+          answer: { type: answer.type, sdp: answer.sdp }
+        }));
+      }
+
+      // 5. Update Call Document in Firestore 'calls' collection
+      if (callDocId && !callDocId.startsWith('ws_')) {
+        try {
+          await updateDoc(doc(firestore, 'calls', callDocId), {
+            status: 'connected',
+            answer: {
+              type: answer.type,
+              sdp: answer.sdp
+            }
+          });
+
+        } catch (e) {
+          console.warn('Could not update call doc on accept:', e);
+        }
+      }
+
+    } catch (err) {
+      console.error('Failed to answer call:', err);
+      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to accept this call.' : 'Could not connect the call. Check your devices and network, then try again.');
+      cleanUpCallMedia();
+    }
+  };
+
+  const rejectCall = async () => {
+    if (stopRingtoneRef.current) {
+      stopRingtoneRef.current();
+      stopRingtoneRef.current = null;
+    }
+
+    if (incomingCall) {
+      const callDocId = incomingCall.id;
+      if (callDocId && !callDocId.startsWith('ws_')) {
+        try {
+          await updateDoc(doc(firestore, 'calls', callDocId), { status: 'declined' });
+        } catch {}
+      }
+
+      if (socketRef.current && user && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'call:rejected',
+          rawType: 'call_reject',
+          callerId: incomingCall.callerId,
+          receiverId: user.id,
+          reason: 'declined'
+        }));
+      }
+    }
+
+    cleanUpCallMedia();
+  };
+
+  const endCall = async () => {
+    if (stopRingtoneRef.current) {
+      stopRingtoneRef.current();
+      stopRingtoneRef.current = null;
+    }
+
+    const docId = currentCallDocIdRef.current;
+    if (docId && !docId.startsWith('ws_')) {
+      try {
+        await updateDoc(doc(firestore, 'calls', docId), { status: 'ended' });
+      } catch {}
+    }
+
+    if (activeCall && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'call:end',
+        rawType: 'call_end',
+        targetUserId: activeCall.partnerId
+      }));
+    }
+
+    if (activeCall && activeCall.isCaller && activeCall.status !== 'connected') logMissedCall(activeCall);
+
+    cleanUpCallMedia();
+  };
+
+  useEffect(() => {
+    if (!activeCall || !activeCall.isCaller || activeCall.status === 'connected') return;
+    const callKey=activeCall.id;
+    const timer=window.setTimeout(()=>{
+      const current=activeCallRef.current;
+      if(current&&current.isCaller&&current.status!=='connected'&&current.id===callKey){
+        logMissedCall(current);
+        void endCall();
+        setCallNotice('No answer. A missed call was added to your chat.');
+      }
+    },45000);
+    return()=>window.clearTimeout(timer);
+  },[activeCall?.id,activeCall?.status,activeCall?.isCaller,logMissedCall]);
+
+  const sendTyping = (receiverId: string, isTyping: boolean) => {
+    if (!socketRef.current || !user || socketRef.current.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({
+      type: isTyping ? 'typing_start' : 'typing_stop',
+      senderId: user.id,
+      receiverId
+    }));
+  };
+
+  const markSeen = (senderId: string) => {
+    if (!socketRef.current || !user || socketRef.current.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({
+      type: 'message_seen',
+      viewerId: user.id,
+      senderId
+    }));
+  };
+
+  // Mock socket object with emit() for components expecting socket.emit
+  const mockSocket = {
+    emit: (event: string, payload: any) => {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({ type: event, ...payload }));
+      }
+    }
+  };
+
+  const onNewMessage = (cb: (msg: Message) => void) => {
+    messageListeners.current.add(cb);
+    return () => { messageListeners.current.delete(cb); };
+  };
+
+  const onDirectMessage = (cb: (event: { message: DirectMessage; partner: User }) => void) => {
+    directMessageListeners.current.add(cb);
+    return () => { directMessageListeners.current.delete(cb); };
+  };
+
+  const onDirectMessagesRead = (cb: (event: { readerId: string; senderId: string; readAt: number }) => void) => {
+    directMessagesReadListeners.current.add(cb);
+    return () => { directMessagesReadListeners.current.delete(cb); };
+  };
+
+  const onMessageUpdated = (cb: (msg: Message) => void) => {
+    messageUpdatedListeners.current.add(cb);
+    return () => { messageUpdatedListeners.current.delete(cb); };
+  };
+
+  const onMessageDeleted = (cb: (messageId: string) => void) => {
+    messageDeletedListeners.current.add(cb);
+    return () => { messageDeletedListeners.current.delete(cb); };
+  };
+
+  const onNotification = (cb: (n: AppNotification) => void) => {
+    notificationListeners.current.add(cb);
+    return () => { notificationListeners.current.delete(cb); };
+  };
+
+  const onPostDeleted = (cb: (postId: string) => void) => {
+    postDeleteListeners.current.add(cb);
+    return () => { postDeleteListeners.current.delete(cb); };
+  };
+
+  const onPostUpdated = (cb: (post: Post) => void) => {
+    postUpdateListeners.current.add(cb);
+    return () => { postUpdateListeners.current.delete(cb); };
+  };
+
+  const onNewPost = (cb: (post: Post) => void) => {
+    newPostListeners.current.add(cb);
+    return () => { newPostListeners.current.delete(cb); };
+  };
+
+  const onStoryCreated = (cb: (story: Story) => void) => {
+    storyListeners.current.add(cb);
+    return () => { storyListeners.current.delete(cb); };
+  };
+
+  const onLiveStarted = (cb: (stream: LiveStream) => void) => {
+    liveStartedListeners.current.add(cb);
+    return () => { liveStartedListeners.current.delete(cb); };
+  };
+
+  const onLiveStopped = (cb: (streamId: string) => void) => {
+    liveStoppedListeners.current.add(cb);
+    return () => { liveStoppedListeners.current.delete(cb); };
+  };
+
+  const onLiveStreamUpdated = (cb: (stream: LiveStream) => void) => {
+    liveStreamUpdatedListeners.current.add(cb);
+    return () => { liveStreamUpdatedListeners.current.delete(cb); };
+  };
+
+  const onLiveComment = (cb: (comment: LiveComment) => void) => {
+    liveCommentListeners.current.add(cb);
+    return () => { liveCommentListeners.current.delete(cb); };
+  };
+
+  const onLiveReaction = (cb: (data: { emoji: string; userName?: string; userId?: string }) => void) => {
+    liveReactionListeners.current.add(cb);
+    return () => { liveReactionListeners.current.delete(cb); };
+  };
+
+  const onLiveViewersUpdated = (cb: (count: number) => void) => {
+    liveViewersUpdatedListeners.current.add(cb);
+    return () => { liveViewersUpdatedListeners.current.delete(cb); };
+  };
+
+  const onLiveSignal = (cb: (data: { streamId: string; fromUserId: string; signal: Record<string, any> }) => void) => {
+    liveSignalListeners.current.add(cb);
+    return () => { liveSignalListeners.current.delete(cb); };
+  };
+
+  const onLiveCaption = useCallback((cb: (data: { streamId: string; text: string; createdAt: number }) => void) => {
+    liveCaptionListeners.current.add(cb);
+    return () => { liveCaptionListeners.current.delete(cb); };
+  }, []);
+  const sendLiveCaption = useCallback((streamId: string, text: string) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'live-caption', streamId, text }));
+  }, []);
+  const switchCallType = useCallback((callType: 'audio' | 'video') => {
+    const call = activeCallRef.current;
+    if (!call) return;
+    setActiveCall(current => current ? { ...current, callType } : null);
+    activeCallRef.current = { ...call, callType };
+    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'call-switch-type', targetUserId: call.partnerId, callType }));
+  }, []);
+
+  return (
+    <SocketContext.Provider
+      value={{
+        isConnected,
+        onlineUserIds,
+        typingUsers,
+        activeCall,
+        incomingCall,
+        startCall,
+        acceptCall,
+        rejectCall,
+        endCall,
+        sendTyping,
+        markSeen,
+        peerConnectionRef,
+        localStreamRef,
+        remoteStream,
+        speakerEnabled,
+        setSpeakerEnabled,
+        registerCallAudioElement,
+        socket: mockSocket,
+        onNewMessage,
+        onDirectMessage,
+        onDirectMessagesRead,
+        onMessageUpdated,
+        onMessageDeleted,
+        onPostUpdated,
+        onPostDeleted,
+        onNotification,
+        callNotice,
+        clearCallNotice: () => setCallNotice(null),
+        onNewPost,
+        onStoryCreated,
+        onLiveStarted,
+        onLiveStopped,
+        onLiveStreamUpdated,
+        onLiveComment,
+        onLiveReaction,
+        onLiveViewersUpdated,
+        onLiveSignal,
+        onLiveCaption,
+        sendLiveCaption,
+        switchCallType
+      }}
+    >
+      {children}
+    </SocketContext.Provider>
+  );
+};
+
+export const useSocket = () => {
+  const context = useContext(SocketContext);
+  if (!context) throw new Error('useSocket must be used within a SocketProvider');
+  return context;
+};
