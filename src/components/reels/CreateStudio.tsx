@@ -245,7 +245,7 @@ export const CreateStudio: React.FC<CreateStudioProps> = ({ mode, preset, onClos
       if (coverFile && mediaType === 'video') {
         const coverUpload = uploadMedia('covers', uid, coverFile, percent => setProgress(85 + Math.round(percent * 0.1)));
         cancelUpload.current = coverUpload.cancel;
-        coverUrl = await coverUpload.promise.catch(() => '');
+        coverUrl = await coverUpload.promise.catch(error => { console.error('[EChat upload] cover upload failed (reel still posts)', error); return ''; });
       }
       setProgress(96);
       const finalEdit: MediaEdit = { ...edit, trimEnd: mediaType === 'image' ? IMAGE_SECONDS : (edit.trimEnd || Math.min(duration, maxSeconds)) };
@@ -276,11 +276,12 @@ export const CreateStudio: React.FC<CreateStudioProps> = ({ mode, preset, onClos
         remixOf: preset?.remixOf || ''
       });
       if (alsoStory) {
-        await createStory({ ...finalEdit, userId: uid, userName: user.name, userAvatar: user.avatar || '', mediaUrl, mediaType, coverUrl, stickers: [], allowedViewers: storyViewers({ id: uid, friends }), fromReelId: reelId }).catch(() => {});
+        await createStory({ ...finalEdit, userId: uid, userName: user.name, userAvatar: user.avatar || '', mediaUrl, mediaType, coverUrl, stickers: [], allowedViewers: storyViewers({ id: uid, friends }), fromReelId: reelId }).catch(error => console.error('[EChat upload] could not also share to Story', error));
       }
       setProgress(100);
       onCreated(alsoStory ? 'Reel posted and shared to your Story' : 'Reel posted');
     } catch (error) {
+      console.error('[EChat upload] publish failed', error);
       setProgress(null);
       setSubmitError(error instanceof Error ? error.message : 'Upload failed. Please try again.');
     }
@@ -323,7 +324,12 @@ export const CreateStudio: React.FC<CreateStudioProps> = ({ mode, preset, onClos
           {progress < 85 && <button type="button" onClick={() => { cancelUpload.current(); setProgress(null); }} className="mt-1 text-xs font-semibold text-rose-600">Cancel upload</button>}
         </div>
       )}
-      {submitError && <p role="alert" className="mx-4 mt-2 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{submitError}</p>}
+      {submitError && (
+        <div role="alert" className="mx-4 mt-2 flex items-start gap-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">
+          <p className="min-w-0 flex-1">{submitError}</p>
+          {file && progress === null && <button type="button" onClick={() => void publish()} className="min-h-9 shrink-0 rounded-lg bg-rose-600 px-3 text-xs font-bold text-white">Retry</button>}
+        </div>
+      )}
 
       {step === 'pick' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-y-auto bg-[#F2F4F7] p-6 text-center">
@@ -332,7 +338,7 @@ export const CreateStudio: React.FC<CreateStudioProps> = ({ mode, preset, onClos
             <Upload size={32} className="text-[#1877F2]" />
             <span className="text-base font-extrabold text-slate-900">Choose video or photo</span>
             <span className="text-xs">Video: MP4, MOV, WEBM · max 30MB · up to {maxSeconds}s</span>
-            <span className="text-xs">Photo: JPG, PNG, WEBP · plays for {IMAGE_SECONDS}s with zoom</span>
+            <span className="text-xs">Photo: JPG, PNG, WEBP · max 10MB · plays for {IMAGE_SECONDS}s with zoom</span>
             <input type="file" accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp" className="hidden" onChange={event => void pickFile(event)} />
           </label>
           {pickError && <p role="alert" className="w-full max-w-sm rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-700">{pickError}</p>}
