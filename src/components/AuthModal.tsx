@@ -1,4 +1,5 @@
 import { initialsAvatar } from '../utils/avatar';
+import { BrandFooter } from './BrandFooter';
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
@@ -234,6 +235,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               Sign up
             </button>
           </p>
+
+          <BrandFooter className="mt-8" />
 
           <ForgotPasswordModal
             isOpen={isForgotModalOpen}

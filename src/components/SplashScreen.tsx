@@ -1,4 +1,5 @@
 import React from 'react';
+import { BrandFooter } from './BrandFooter';
 
 export const SplashScreen: React.FC<{ leaving?: boolean }> = ({ leaving = false }) => <div className="fixed inset-0 z-[10000] grid place-items-center bg-white text-slate-900 transition-opacity duration-500" style={{ opacity: leaving ? 0 : 1 }}>
   <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-700">
@@ -7,4 +8,5 @@ export const SplashScreen: React.FC<{ leaving?: boolean }> = ({ leaving = false 
     <p className="mt-1 text-sm text-slate-600">Connect, Share &amp; Chat</p>
     <span className="mt-5 h-5 w-5 animate-spin rounded-full border-2 border-[#0A2A6B] border-t-transparent" />
   </div>
+  <BrandFooter fixed />
 </div>;
