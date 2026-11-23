@@ -1,0 +1,32 @@
+rules_version = '2';
+// Firebase Storage rules for Reels / Stories media.
+// Anyone may view media (it is referenced by public reels); only the owner may upload into their
+// own folder, and every file is limited to 30 MB and to the allowed video / image formats.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+    function allowedMedia() {
+      return request.resource.size <= 30 * 1024 * 1024 &&
+        request.resource.contentType.matches('video/(mp4|quicktime|webm)|image/(jpeg|png|webp)');
+    }
+
+    match /reels/{uid}/{fileName} {
+      allow read: if true;
+      allow create: if isOwner(uid) && allowedMedia();
+      allow delete: if isOwner(uid);
+    }
+    match /stories/{uid}/{fileName} {
+      allow read: if true;
+      allow create: if isOwner(uid) && allowedMedia();
+      allow delete: if isOwner(uid);
+    }
+    match /covers/{uid}/{fileName} {
+      allow read: if true;
+      allow create: if isOwner(uid) && request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if isOwner(uid);
+    }
+  }
+}

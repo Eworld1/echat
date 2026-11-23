@@ -13,7 +13,19 @@
       }
     ]
   },
-  "firestore": {
-    "rules": "firestore.rules"
+  "firestore": [
+    {
+      "database": "(default)",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
+    },
+    {
+      "database": "ai-studio-echat-134f096e-b18d-4bb7-870d-d4f7fa96d17d",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
+    }
+  ],
+  "storage": {
+    "rules": "storage.rules"
   }
 }
