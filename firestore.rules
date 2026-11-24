@@ -59,7 +59,7 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats' && document[0] != 'reelReports';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats' && document[0] != 'reelReports' && document[0] != 'marketFavorites';
     }
 
     // ---------------- GAMES HUB ----------------
@@ -535,11 +535,36 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    function validListing(data) {
+      return data.get('title', '') is string && data.get('title', '').size() >= 1 && data.get('title', '').size() <= 100 &&
+        data.get('price', 0) is number && data.get('price', 0) >= 0 && data.get('price', 0) <= 10000000000 &&
+        data.get('photos', []) is list && data.get('photos', []).size() <= 5 &&
+        data.get('description', '') is string && data.get('description', '').size() <= 3000 &&
+        data.get('status', 'active') in ['active', 'sold'];
+    }
+
     match /echat_v2_market_listings/{listingId} {
       allow read: if true;
-      allow create: if signedIn() && request.resource.data.get('sellerId', '') == request.auth.uid;
-      allow update: if signedIn() && resource.data.get('sellerId', '') == request.auth.uid && request.resource.data.get('sellerId', '') == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.get('sellerId', '') == request.auth.uid &&
+        validListing(request.resource.data) && request.resource.data.get('status', '') == 'active';
+      // Only the seller edits / marks sold; seller and creation time can't be changed.
+      allow update: if signedIn() && resource.data.get('sellerId', '') == request.auth.uid &&
+        request.resource.data.get('sellerId', '') == request.auth.uid &&
+        request.resource.data.get('createdAt', 0) == resource.data.get('createdAt', 0) &&
+        validListing(request.resource.data);
       allow delete: if signedIn() && resource.data.get('sellerId', '') == request.auth.uid;
+    }
+
+    // Marketplace favorites: marketFavorites/{uid}_{listingId}, private to each user.
+    match /marketFavorites/{favId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if signedIn() && favId == request.auth.uid + '_' + request.resource.data.listingId &&
+        request.resource.data.keys().hasOnly(['uid', 'listingId', 'createdAt']) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.listingId is string && request.resource.data.listingId.size() <= 128 &&
+        request.resource.data.createdAt is int;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
     }
 
     match /echat_v2_market_orders/{orderId} {

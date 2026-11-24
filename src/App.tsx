@@ -394,7 +394,7 @@ export function MainApp() {
             <SavedPosts onViewProfile={(uid) => handleNavigate('profile', uid)} />
           )}
 
-          {currentView === 'marketplace' && <V2Market route={marketRoute} onNavigate={navigateMarket} onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} />}
+          {currentView === 'marketplace' && <V2Market route={marketRoute} onNavigate={navigateMarket} onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} onViewProfile={uid => handleNavigate('profile', uid)} />}
           {currentView === 'orders' && <V2MarketOrders onChat={(_listing: V2MarketListing, partner: User) => handleOpenChat(partner)} onShop={() => handleNavigate('marketplace')} />}
 
           {currentView === 'admin' && canAdmin && (
