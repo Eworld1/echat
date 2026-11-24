@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import type { App } from 'firebase-admin/app';
 import type { CollectionReference, Firestore } from 'firebase-admin/firestore';
-import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import { AccessToken, RoomServiceClient, TwirpError } from 'livekit-server-sdk';
 import { importX509, jwtVerify, type JWTPayload } from 'jose';
 import { resolveLiveCreatedAt } from './live-age.js';
 
@@ -120,9 +120,13 @@ const lives = new Proxy({} as CollectionReference, {
     return typeof value === 'function' ? value.bind(target) : value;
   }
 });
-const liveKitUrl = (process.env.LIVEKIT_URL || '').trim();
-const liveKitApiKey = (process.env.LIVEKIT_API_KEY || '').trim();
-const liveKitApiSecret = (process.env.LIVEKIT_API_SECRET || '').trim();
+/** Env values pasted into Vercel often carry stray quotes, spaces or a trailing newline. */
+function cleanEnv(value: string | undefined): string {
+  return String(value || '').trim().replace(/^(['"])(.*)\1$/s, '$2').trim();
+}
+const liveKitUrl = cleanEnv(process.env.LIVEKIT_URL).replace(/\/+$/, '');
+const liveKitApiKey = cleanEnv(process.env.LIVEKIT_API_KEY);
+const liveKitApiSecret = cleanEnv(process.env.LIVEKIT_API_SECRET);
 
 export interface LiveUser {
   uid: string;
@@ -429,7 +433,40 @@ export async function createRoomToken(user: LiveUser, roomName: string, canPubli
   return token.toJwt();
 }
 
+/**
+ * LiveKit answers 401 "invalid token" when LIVEKIT_API_KEY / LIVEKIT_API_SECRET don't match each other
+ * or the project in LIVEKIT_URL. Turn that into a clear setup message (and not a 401, which the app
+ * would read as "the user's sign-in expired").
+ */
+export function describeLiveKitError(error: unknown): unknown {
+  if (!(error instanceof TwirpError)) return error;
+  if (error.status === 401 || error.status === 403 || /invalid token|unauthenticated|permission/i.test(`${error.code} ${error.message}`)) {
+    return Object.assign(new Error('LiveKit rejected the server keys. In Vercel, LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be a matching pair from the same LiveKit project as LIVEKIT_URL (LiveKit Cloud → Settings → API Keys). Fix them, then redeploy.'), { status: 503, code: 'livekit-auth-failed' });
+  }
+  if (error.status === 404) {
+    return Object.assign(new Error('The LiveKit server could not be found. Check LIVEKIT_URL in Vercel (for example wss://your-project.livekit.cloud).'), { status: 503, code: 'livekit-not-found' });
+  }
+  return Object.assign(new Error(`LiveKit error: ${error.message || 'request failed'}`), { status: 502, code: `livekit-${error.code || 'error'}` });
+}
+
+/** Calls LiveKit once with the configured keys. Booleans and a short reason only. */
+export async function checkLiveKitCredentials(): Promise<{ ok: boolean; error?: string; code?: string }> {
+  if (!liveKitUrl || !liveKitApiKey || !liveKitApiSecret) return { ok: false, code: 'livekit-not-configured' };
+  try {
+    const { rooms } = requireLiveKit();
+    await Promise.race([
+      rooms.listRooms(),
+      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('LiveKit did not answer within 6 seconds. Check LIVEKIT_URL.'), { code: 'livekit-timeout' })), 6000))
+    ]);
+    return { ok: true };
+  } catch (error) {
+    const described = describeLiveKitError(error) as { message?: string; code?: string };
+    return { ok: false, error: described?.message || 'LiveKit check failed.', code: described?.code || 'livekit-error' };
+  }
+}
+
 export async function handleError(res: ApiResponse, error: unknown, label: string): Promise<void> {
+  error = describeLiveKitError(error);
   const value = error as { status?: number; code?: string; message?: string };
   const status = Number.isInteger(value?.status) ? value.status! : 500;
   const code = value?.code || 'internal-error';

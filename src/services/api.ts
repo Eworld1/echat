@@ -946,7 +946,7 @@ export const api = {
   },
 
   /** Which live settings the server has (booleans only). */
-  async getLiveConfigStatus(): Promise<{ ready: boolean; missing: string[]; liveKitUrlLooksValid: boolean; webhookUrl: string }> {
+  async getLiveConfigStatus(): Promise<{ ready: boolean; missing: string[]; liveKitUrlLooksValid: boolean; webhookUrl: string; liveKitAuthOk?: boolean | null; liveKitError?: string }> {
     const res = await fetch(apiUrl('/api/live/status'), { cache: 'no-store' });
     return readResponse(res, 'Could not check the live server configuration');
   },

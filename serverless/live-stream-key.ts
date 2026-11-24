@@ -2,6 +2,8 @@ import { IngressClient, IngressInput } from 'livekit-server-sdk';
 import type { DocumentData } from 'firebase-admin/firestore';
 import { firestore, requireLiveKit } from './live.js';
 
+export { describeLiveKitError } from './live.js';
+
 export interface LiveStreamIngress {
   streamKey: string;
   serverUrl: string;

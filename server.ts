@@ -11,7 +11,7 @@ import { SocketManager } from './server/socket.js';
 import { firebaseProjectId, firestore, getFirebaseAdminAuth } from './server/firebase-admin.js';
 import { verifyFirebaseIdToken } from './server/firebase-token.js';
 import { resolveLiveCreatedAt } from './serverless/live-age.js';
-import { getOrCreateLiveStreamIngress, resetLiveStreamIngress } from './serverless/live-stream-key.js';
+import { describeLiveKitError, getOrCreateLiveStreamIngress, resetLiveStreamIngress } from './serverless/live-stream-key.js';
 
 const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
 const PORT = Number(process.env.PORT) || 3000;
@@ -2369,6 +2369,7 @@ function endLiveForBlockedUser(userId: string): void {
 }
 
 function sendLiveStreamKeyError(res: Response, error: unknown) {
+  error = describeLiveKitError(error);
   const value = error as { status?: number; code?: string; message?: string };
   const status = Number.isInteger(value?.status) ? value.status! : 500;
   return res.status(status).json({

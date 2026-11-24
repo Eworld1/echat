@@ -108,7 +108,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const facingModeRef = useRef<'user' | 'environment'>('user');
   const [switchingCamera, setSwitchingCamera] = useState(false);
-  const [liveConfig, setLiveConfig] = useState<{ ready: boolean; missing: string[]; liveKitUrlLooksValid: boolean; webhookUrl: string } | null>(null);
+  const [liveConfig, setLiveConfig] = useState<{ ready: boolean; missing: string[]; liveKitUrlLooksValid: boolean; webhookUrl: string; liveKitAuthOk?: boolean | null; liveKitError?: string } | null>(null);
+  const [streamKeyRetry, setStreamKeyRetry] = useState(0);
   const [rtmpDetails, setRtmpDetails] = useState<{ title: string; category: string; location: string }>({ title: '', category: 'Just Chatting', location: '' });
   const [rtmpDetailsNotice, setRtmpDetailsNotice] = useState('');
   const [rtmpDetailsSaving, setRtmpDetailsSaving] = useState(false);
@@ -398,7 +399,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       if (active) setStreamKeyLoading(false);
     });
     return () => { active = false; };
-  }, [isOpen, studioMode, signedIn, firebaseUser?.uid, user?.id]);
+  }, [isOpen, studioMode, signedIn, firebaseUser?.uid, user?.id, streamKeyRetry]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1188,11 +1189,15 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                 <p className="font-bold">Live server setup is incomplete.</p>
                 <p className="mt-1">Missing on the server: <code className="font-mono">{liveConfig.missing.join(', ')}</code>. An admin must add these in Vercel → Project → Settings → Environment Variables, then redeploy.</p>
               </div>}
+              {liveConfig?.ready && liveConfig.liveKitAuthOk === false && <div role="alert" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-sm leading-5 text-amber-200">
+                <p className="font-bold">Live server keys are not working.</p>
+                <p className="mt-1">{liveConfig.liveKitError || 'LiveKit rejected the server keys. Check LIVEKIT_API_KEY and LIVEKIT_API_SECRET in Vercel, then redeploy.'}</p>
+              </div>}
               {liveConfig?.ready && !liveConfig.liveKitUrlLooksValid && <p role="alert" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-sm text-amber-200">LIVEKIT_URL should start with wss:// (for example wss://your-project.livekit.cloud).</p>}
 
               <label className="block text-xs font-bold uppercase tracking-wide text-slate-400">RTMP Server URL
                 <div className="mt-1 flex gap-2">
-                  <input readOnly value={streamKeyServerUrl || (streamKeyLoading ? 'Loading…' : '')} placeholder="Not available yet" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 font-mono text-sm normal-case text-white"/>
+                  <input readOnly value={streamKeyServerUrl || (streamKeyLoading ? 'Loading…' : '')} placeholder={streamKeyError ? 'Unavailable - see the message below' : 'Not available yet'} className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 font-mono text-sm normal-case text-white"/>
                   <button type="button" disabled={!streamKeyServerUrl} onClick={() => void copyStreamValue(streamKeyServerUrl, 'Server URL')} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-slate-700 px-3 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-40"><Copy size={16}/>Copy URL</button>
                 </div>
               </label>
@@ -1208,7 +1213,10 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                 <p className="mt-1 text-xs text-slate-500">Reset Key makes a new key. The old key stops working in every app.</p>
               </div>
               <p className="rounded-xl border border-rose-900/70 bg-rose-950/50 p-3 text-sm font-semibold text-rose-200">Never share your stream key. Anyone who has it can stream as you.</p>
-              {streamKeyError && <p role="alert" className="rounded-xl bg-rose-950/70 p-3 text-sm text-rose-200">{streamKeyError}</p>}
+              {streamKeyError && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-rose-950/70 p-3 text-sm text-rose-200">
+                <span className="min-w-0 flex-1">{liveConfig?.liveKitAuthOk === false && streamKeyError === liveConfig.liveKitError ? 'Your Server URL and Stream Key will appear here once the live server keys are fixed.' : streamKeyError}</span>
+                <button type="button" disabled={streamKeyLoading} onClick={() => { setStreamKeyRetry(value => value + 1); void api.getLiveConfigStatus().then(setLiveConfig).catch(() => {}); }} className="min-h-9 shrink-0 rounded-lg border border-rose-800 px-3 text-xs font-bold text-rose-100 hover:bg-rose-900 disabled:opacity-50">Try again</button>
+              </div>}
               {streamKeyNotice && <p role="status" className="rounded-xl bg-emerald-950/70 p-3 text-sm text-emerald-200">{streamKeyNotice}</p>}
 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
