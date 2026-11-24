@@ -96,6 +96,13 @@ export function listenFollowingState(followerId: string, followingId: string, on
   return onSnapshot(doc(db, 'followers', pairId(followerId, followingId)), snapshot => onFollowing(snapshot.exists()));
 }
 
+/** IDs of everyone who follows `userId` (live). */
+export function listenFollowerIds(userId: string, onIds: (ids: string[]) => void, onError?: (error: Error) => void): Unsubscribe {
+  return onSnapshot(query(collection(db, 'followers'), where('followingId', '==', userId)), snapshot => {
+    onIds(snapshot.docs.map(item => String(item.data().followerId || '')).filter(Boolean));
+  }, error => onError?.(error));
+}
+
 export function listenFollowerCount(userId: string, onCount: (count: number) => void): Unsubscribe {
   return onSnapshot(query(collection(db, 'followers'), where('followingId', '==', userId)), snapshot => onCount(snapshot.size));
 }

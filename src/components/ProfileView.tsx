@@ -10,6 +10,8 @@ import { ReelThumbnail } from './ReelThumbnail';
 import { useBackButton } from '../hooks/useBackButton';
 import { CreatePostModal } from './CreatePostModal';
 import { LiveUserActions } from './LiveUserActions';
+import { ConnectionsModal, type ConnectionsTab } from './ConnectionsModal';
+import { listenFollowerCount } from '../services/liveDiscovery';
 import { VerifiedBadge } from './VerifiedBadge';
 import {
   Camera,
@@ -56,7 +58,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenChat,
   onViewProfile
 }) => {
-  const { user: currentUser, updateCurrentUser } = useAuth();
+  const { user: currentUser, updateCurrentUser, updateUser } = useAuth();
   const { startCall } = useSocket();
   const [profileData, setProfileData] = useState<{ user: User; posts: Post[]; reels?: Post[]; friends: User[] } | null>(null);
   const [activeTab, setActiveTab] = useState<'posts' | 'reels' | 'about' | 'friends' | 'photos' | 'videos'>('posts');
@@ -81,6 +83,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [profileNotice, setProfileNotice] = useState('');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [selectedReel, setSelectedReel] = useState<Post | null>(null);
+  // Friends / Following / Followers list (tap the counts or the Friends tab).
+  const [connectionsTab, setConnectionsTab] = useState<ConnectionsTab | null>(null);
+  const [followerCount, setFollowerCount] = useState(0);
+  useEffect(() => (userId ? listenFollowerCount(userId, setFollowerCount) : undefined), [userId]);
+  useEffect(() => { setConnectionsTab(null); }, [userId]);
   useBackButton(isEditModalOpen, () => setIsEditModalOpen(false), 'profile-edit');
   useBackButton(Boolean(selectedReel), () => setSelectedReel(null), 'profile-reel');
 
@@ -336,9 +343,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       </div>
                       
                       <div className="flex items-center gap-3 text-sm text-slate-500 font-medium mt-1 flex-wrap">
-                        <span>{friends.length} {friends.length === 1 ? 'friend' : 'friends'}</span>
+                        <button type="button" onClick={() => setConnectionsTab('friends')} className="rounded-md font-semibold text-slate-600 hover:text-slate-900 hover:underline">{friends.length} {friends.length === 1 ? 'friend' : 'friends'}</button>
                         <span>•</span>
-                        <LiveUserActions targetUserId={user.id} targetName={user.name} showCount countOnly compact />
+                        <button type="button" onClick={() => setConnectionsTab('followers')} className="rounded-md font-semibold text-slate-600 hover:text-slate-900 hover:underline">{followerCount.toLocaleString()} {followerCount === 1 ? 'follower' : 'followers'}</button>
                         {isDevProfile && (
                           <>
                             <span>•</span>
@@ -524,7 +531,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               About
             </button>
             <button
-              onClick={() => setActiveTab('friends')}
+              onClick={() => { setActiveTab('friends'); setConnectionsTab('friends'); }}
               className={`px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 transition ${
                 activeTab === 'friends' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-600 hover:text-slate-900'
               }`}
@@ -596,7 +603,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
         {activeTab === 'friends' && (
           <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200">
-            <h3 className="text-base font-bold text-slate-900 mb-4">Friends ({friends.length})</h3>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="text-base font-bold text-slate-900">Friends ({friends.length})</h3>
+              <button type="button" onClick={() => setConnectionsTab('friends')} className="rounded-lg px-3 py-1.5 text-sm font-bold text-blue-600 hover:bg-blue-50">See all · Followers</button>
+            </div>
             {friends.length === 0 ? (
               <p className="text-sm text-slate-400">No friends added yet.</p>
             ) : (
@@ -802,6 +812,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {connectionsTab && (
+        <ConnectionsModal
+          profileUser={{ id: user.id, name: user.name }}
+          friends={friends}
+          initialTab={connectionsTab}
+          onClose={() => setConnectionsTab(null)}
+          onViewProfile={onViewProfile}
+          onFriendsChanged={next => {
+            setProfileData(current => current ? { ...current, friends: next } : current);
+            if (currentUser && isOwnProfile) updateUser({ ...currentUser, friends: next.map(friend => friend.id) });
+          }}
+        />
       )}
     </div>
   );
