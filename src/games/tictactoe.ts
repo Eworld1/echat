@@ -1,4 +1,4 @@
-import { randomInt, twoPlayerForfeit, type Engine, type Outcome } from './engine';
+import { randomInt, twoPlayerForfeit, type BotLevel, type Engine, type Outcome } from './engine';
 
 /** Seat 0 plays X and moves first; seat 1 plays O. Board: 9 chars of 'X' | 'O' | '-'. */
 export interface TttState { board: string; turn: number; forfeit?: Outcome | null }
@@ -22,7 +22,17 @@ function outcome(state: TttState): Outcome | null {
   return null;
 }
 
+const minimaxCache = new Map<string, number>();
 function minimax(board: string, mark: string, me: string): number {
+  const key = `${board}${mark}${me}`;
+  const cached = minimaxCache.get(key);
+  if (cached !== undefined) return cached;
+  const result = minimaxUncached(board, mark, me);
+  minimaxCache.set(key, result);
+  return result;
+}
+
+function minimaxUncached(board: string, mark: string, me: string): number {
   const line = tttWinningLine(board);
   if (line) return board[line[0]] === me ? 10 : -10;
   if (!board.includes('-')) return 0;
@@ -56,11 +66,12 @@ export const ticTacToe: Engine<TttState, TttAction> = {
     const forfeit = twoPlayerForfeit(seat);
     return { state: { ...state, forfeit }, outcome: forfeit };
   },
-  bot(state, seat, rng) {
+  bot(state, seat, rng, level: BotLevel = 'medium') {
     const me = seat === 0 ? 'X' : 'O';
     const empty = [...state.board].map((value, index) => (value === '-' ? index : -1)).filter(index => index >= 0);
-    // Beatable: about 1 move in 4 is a random one.
-    if (rng() < 0.25) return { type: 'place', cell: empty[randomInt(rng, empty.length)] };
+    // Easy: mostly random. Medium: a random move 1 time in 3. Hard: perfect play (you can only draw or win if it can't).
+    const mistake = level === 'easy' ? 0.7 : level === 'medium' ? 0.33 : 0;
+    if (rng() < mistake) return { type: 'place', cell: empty[randomInt(rng, empty.length)] };
     let best = empty[0];
     let bestScore = -Infinity;
     for (const cell of empty) {

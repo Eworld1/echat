@@ -1,4 +1,4 @@
-import { randomInt, type Engine, type Outcome } from './engine';
+import { randomInt, type BotLevel, type Engine, type Outcome } from './engine';
 
 /**
  * Ludo for 2–4 players.
@@ -220,8 +220,11 @@ export const ludo: Engine<LudoState, LudoAction> = {
     if (state.phase === 'roll') return { type: 'roll', value: 1 + randomInt(rng, 6) };
     return { type: 'move', token: ludoBestToken(state, state.turn, rng) };
   },
-  bot(state, seat, rng) {
+  bot(state, seat, rng, level: BotLevel = 'medium') {
+    // The dice are always fair; difficulty only changes which token the computer moves.
     if (state.phase === 'roll') return { type: 'roll', value: 1 + randomInt(rng, 6) };
+    const randomPick = level === 'easy' ? 0.6 : level === 'medium' ? 0.2 : 0;
+    if (rng() < randomPick) return { type: 'move', token: state.movable[randomInt(rng, state.movable.length)] };
     return { type: 'move', token: ludoBestToken(state, seat, rng) };
   }
 };

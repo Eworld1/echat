@@ -4,7 +4,8 @@ import { ArrowLeft, Bot, Gamepad2, Globe2, LogIn, Medal, Play, Trophy, Users } f
 import { useAuth } from '../context/AuthContext';
 import { auth } from '../services/firebase';
 import { usePathname } from '../utils/eventsNav';
-import { GAME_LIST, gameMeta, type GameId, type GameMeta } from '../games/engine';
+import { BOT_LEVELS, GAME_LIST, gameMeta, type BotLevel, type GameId, type GameMeta } from '../games/engine';
+import { colorsForPlayers, LUDO_COLORS, LUDO_HEX } from '../games/ludo';
 import {
   createRoom,
   gameErrorMessage,
@@ -236,6 +237,16 @@ const GameLobby: React.FC<{ game: GameMeta; me: Me }> = ({ game, me }) => {
   const isLudo = game.id === 'ludo';
   const [seats, setSeats] = useState(isLudo ? 4 : 2);
   const [bots, setBots] = useState(isLudo ? 3 : 1);
+  const [level, setLevel] = useState<BotLevel>(() => {
+    try { const saved = window.localStorage.getItem('echat_games_level'); return saved === 'easy' || saved === 'hard' ? saved : 'medium'; } catch { return 'medium'; }
+  });
+  const [seat, setSeat] = useState(0);
+  const sides: { label: string; hint?: string; color?: string }[] = isLudo
+    ? colorsForPlayers(bots + 1).map((color, index) => ({ label: LUDO_COLORS[color], color: LUDO_HEX[color], hint: index === 0 ? 'goes first' : undefined }))
+    : game.id === 'tictactoe' ? [{ label: 'X', hint: 'goes first' }, { label: 'O' }]
+      : game.id === 'chess' ? [{ label: 'White', hint: 'goes first' }, { label: 'Black' }]
+        : [{ label: 'Red', hint: 'goes first' }, { label: 'Black' }];
+  const chooseLevel = (value: BotLevel) => { setLevel(value); try { window.localStorage.setItem('echat_games_level', value); } catch { /* storage blocked */ } };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -283,13 +294,37 @@ const GameLobby: React.FC<{ game: GameMeta; me: Me }> = ({ game, me }) => {
       <section className="space-y-3 rounded-2xl bg-white p-4 shadow-sm">
         <h2 className="flex items-center gap-2 text-base font-extrabold text-slate-900"><Bot size={18} className="text-slate-700" />Play vs Computer</h2>
         {isLudo && (
-          <div className="grid grid-cols-3 gap-2">
-            {[1, 2, 3].map(count => (
-              <button key={count} type="button" onClick={() => setBots(count)} aria-pressed={bots === count} className={`min-h-11 rounded-xl border text-xs font-bold ${bots === count ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-200 text-slate-700'}`}>{count} computer{count > 1 ? 's' : ''}</button>
-            ))}
+          <div>
+            <p className="mb-1.5 text-xs font-bold uppercase tracking-wider text-slate-500">Opponents</p>
+            <div className="grid grid-cols-3 gap-2">
+              {[1, 2, 3].map(count => (
+                <button key={count} type="button" onClick={() => { setBots(count); setSeat(0); }} aria-pressed={bots === count} className={`min-h-11 rounded-xl border text-xs font-bold ${bots === count ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-200 text-slate-700'}`}>{count} computer{count > 1 ? 's' : ''}</button>
+              ))}
+            </div>
           </div>
         )}
-        <button type="button" onClick={() => navigateGames(`/games/${game.id}/computer${isLudo ? `?bots=${bots}` : ''}`)} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-slate-800 text-sm font-bold text-white"><Play size={16} />Start{game.id === 'chess' ? ' (easy)' : ''}</button>
+        <div>
+          <p className="mb-1.5 text-xs font-bold uppercase tracking-wider text-slate-500">Difficulty</p>
+          <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Difficulty">
+            {BOT_LEVELS.map(item => (
+              <button key={item.id} type="button" role="radio" aria-checked={level === item.id} onClick={() => chooseLevel(item.id)}
+                className={`min-h-11 rounded-xl border text-sm font-bold ${level === item.id ? (item.id === 'easy' ? 'border-emerald-600 bg-emerald-600 text-white' : item.id === 'medium' ? 'border-amber-500 bg-amber-500 text-white' : 'border-rose-600 bg-rose-600 text-white') : 'border-slate-200 text-slate-700'}`}>{item.label}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="mb-1.5 text-xs font-bold uppercase tracking-wider text-slate-500">Play as</p>
+          <div className={`grid gap-2 ${sides.length > 2 ? 'grid-cols-4' : 'grid-cols-2'}`} role="radiogroup" aria-label="Play as">
+            {sides.map((side, index) => (
+              <button key={side.label} type="button" role="radio" aria-checked={seat === index} onClick={() => setSeat(index)}
+                className={`flex min-h-11 flex-col items-center justify-center rounded-xl border px-1 text-sm font-bold ${seat === index ? 'border-[#1877F2] bg-[#E7F0FD] text-[#1877F2]' : 'border-slate-200 text-slate-700'}`}>
+                <span className="flex items-center gap-1.5">{side.color && <span className="h-3 w-3 rounded-full" style={{ background: side.color }} />}{side.label}</span>
+                {side.hint && <span className="text-[10px] font-semibold text-slate-500">{side.hint}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button type="button" onClick={() => navigateGames(`/games/${game.id}/computer?level=${level}&seat=${Math.min(seat, sides.length - 1)}${isLudo ? `&bots=${bots}` : ''}`)} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-slate-800 text-sm font-bold text-white"><Play size={16} />Start</button>
       </section>
     </div>
   );
@@ -326,7 +361,11 @@ export const Games: React.FC = () => {
   const gameId = parts[1] && parts[1] !== 'room' ? parts[1] : '';
   const meta = gameId ? gameMeta(gameId) : undefined;
   const computer = parts[2] === 'computer';
-  const bots = Math.min(3, Math.max(1, Number(new URLSearchParams(window.location.search).get('bots') || 1)));
+  const search = new URLSearchParams(window.location.search);
+  const bots = Math.min(3, Math.max(1, Number(search.get('bots') || 1)));
+  const levelParam = search.get('level');
+  const level: BotLevel = levelParam === 'easy' || levelParam === 'hard' ? levelParam : 'medium';
+  const startSeat = Math.max(0, Math.min(3, Number(search.get('seat') || 0) || 0));
 
   let title = '';
   let body: React.ReactNode;
@@ -338,9 +377,9 @@ export const Games: React.FC = () => {
     title = 'Snake';
     body = <SnakeGame highScore={snakeHigh} onGameOver={onSnakeOver} />;
   } else if (meta && computer) {
-    title = `${meta.name} vs Computer`;
+    title = `${meta.name} vs Computer · ${BOT_LEVELS.find(item => item.id === level)?.label}`;
     back = `/games/${meta.id}`;
-    body = <LocalGame key={`${meta.id}-${bots}`} game={meta.id as GameId} me={{ name: me.name, avatar: me.avatar }} bots={meta.id === 'ludo' ? bots : 1} />;
+    body = <LocalGame key={`${meta.id}-${bots}-${level}-${startSeat}`} game={meta.id as GameId} me={{ name: me.name, avatar: me.avatar }} bots={meta.id === 'ludo' ? bots : 1} level={level} startSeat={startSeat} />;
   } else if (meta) {
     title = meta.name;
     body = <GameLobby game={meta} me={me} />;

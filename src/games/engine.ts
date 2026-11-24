@@ -4,6 +4,8 @@
  */
 export type GameId = 'tictactoe' | 'chess' | 'checkers' | 'ludo';
 export type HubGameId = GameId | 'snake';
+export type BotLevel = 'easy' | 'medium' | 'hard';
+export const BOT_LEVELS: { id: BotLevel; label: string }[] = [{ id: 'easy', label: 'Easy' }, { id: 'medium', label: 'Medium' }, { id: 'hard', label: 'Hard' }];
 
 export interface Outcome {
   /** Seat indexes of the winners (empty on a draw). */
@@ -28,8 +30,8 @@ export interface Engine<S, A> {
   removePlayer(state: S, seat: number, players: number): { state: S; outcome: Outcome | null };
   /** Action taken for a player whose timer ran out (Ludo auto-roll / auto-move). Null = they lose on time. */
   autoAction?(state: S, rng: () => number): A | null;
-  /** Computer opponent. */
-  bot(state: S, seat: number, rng: () => number): A;
+  /** Computer opponent. Easy makes mistakes often, Medium sometimes, Hard plays its best. */
+  bot(state: S, seat: number, rng: () => number, level?: BotLevel): A;
 }
 
 export const twoPlayerForfeit = (seat: number): Outcome => ({ winners: [1 - seat], draw: false, reason: 'Opponent left — win by forfeit' });

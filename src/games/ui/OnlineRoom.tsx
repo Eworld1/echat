@@ -19,7 +19,7 @@ import {
   type Me,
   type RoomMessage
 } from '../rooms';
-import { GameBoard, seatDecor, statusLine } from './GameTable';
+import { GameBoard, seatDecor, statusLine, winnerLine } from './GameTable';
 import { colorsForPlayers } from '../ludo';
 import { Avatar, PlayerStrip, ResultBanner, useCountdown, type SeatInfo } from './common';
 import { FloatingReactions, InviteSheet, RoomChat, ShareRoom } from './RoomExtras';
@@ -234,8 +234,8 @@ export const OnlineRoom: React.FC<{ roomId: string; me: Me; friendIds: string[];
 
       {finished && (
         <ResultBanner
-          title={room.draw ? "It's a draw" : iWon ? 'You win! 🎉' : isMember ? 'You lose' : `${room.winnerIds.map(uid => room.players.find(player => player.uid === uid)?.name).join(', ')} wins`}
-          subtitle={room.endReason}
+          title={room.draw ? "It's a draw" : iWon ? 'You Win! 🎉' : isMember ? 'You Lose' : `${room.winnerIds.map(uid => room.players.find(player => player.uid === uid)?.name).join(', ')} wins`}
+          subtitle={[winnerLine(room.game, room.state, winnerSeats, names), room.endReason].filter(Boolean).join(' — ')}
           tone={room.draw ? 'draw' : iWon ? 'win' : 'lose'}>
           {isMember && canRematch && (
             <button type="button" disabled={busy || votedRematch} onClick={() => void run(() => voteRematch(roomId, me))} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-900 disabled:opacity-70">

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import type { GameId } from '../engine';
 import type { TttState } from '../tictactoe';
 import type { ChessState } from '../chess';
@@ -18,6 +18,15 @@ export function seatDecor(game: GameId, state: unknown, seat: number): { color: 
   if (game === 'checkers') return seat === 0 ? { color: '#E0322A', label: 'Red' } : { color: '#1F2937', label: 'Black' };
   const color = (state as LudoState | null)?.colors?.[seat] ?? [0, 2, 1, 3][seat] ?? 0;
   return { color: LUDO_HEX[color], label: LUDO_COLORS[color] };
+}
+
+/** "O wins", "Black wins", "Fatu (Yellow) wins" — names the winning side for the result banner. */
+export function winnerLine(game: GameId, state: unknown, winners: number[], names: string[]): string {
+  if (!winners.length) return '';
+  return winners.map(seat => {
+    const { label } = seatDecor(game, state, seat);
+    return game === 'ludo' ? `${names[seat] || label} (${label})` : label;
+  }).join(', ') + ' wins';
 }
 
 /** One-line status for the current position. */
@@ -46,14 +55,21 @@ export const GameBoard: React.FC<GameBoardProps> = ({ game, state, mySeat, canAc
   const ludoState = game === 'ludo' ? (state as LudoState) : null;
 
   // Ludo convenience: only one sensible choice → move it automatically.
-  useEffect(() => {
-    if (!ludoState || !canAct || ludoState.phase !== 'move' || ludoState.turn !== mySeat) return;
+  // Keyed on the roll itself (not on object identity), so screen refreshes (timer ticks) can't cancel it.
+  const actionRef = useRef(onAction);
+  actionRef.current = onAction;
+  const autoToken = (() => {
+    if (!ludoState || !canAct || ludoState.phase !== 'move' || ludoState.turn !== mySeat) return -1;
     const tokens = ludoState.movable;
     const allInYard = tokens.every(token => ludoState.pos[mySeat * 4 + token] === -1);
-    if (tokens.length !== 1 && !allInYard) return;
-    const id = window.setTimeout(() => onAction({ type: 'move', token: tokens[0] }), 700);
+    return tokens.length === 1 || allInYard ? tokens[0] : -1;
+  })();
+  const rollKey = ludoState ? ludoState.rollId : -1;
+  useEffect(() => {
+    if (autoToken < 0) return;
+    const id = window.setTimeout(() => actionRef.current({ type: 'move', token: autoToken }), 700);
     return () => window.clearTimeout(id);
-  }, [ludoState, canAct, mySeat, onAction]);
+  }, [autoToken, rollKey]);
 
   if (game === 'tictactoe') return <TicTacToeBoard state={state as TttState} canAct={canAct} onAction={onAction} />;
   if (game === 'chess') return <ChessBoard state={state as ChessState} mySeat={mySeat} canAct={canAct} onAction={onAction} />;

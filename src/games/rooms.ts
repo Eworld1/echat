@@ -17,11 +17,8 @@ import {
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { api } from '../services/api';
-import type { Engine, GameId, Outcome } from './engine';
-import { ticTacToe } from './tictactoe';
-import { checkers } from './checkers';
-import { chess } from './chess';
-import { ludo } from './ludo';
+import type { GameId, Outcome } from './engine';
+import { ENGINES } from './registry';
 
 /**
  * Online game rooms on Firestore: gameRooms/{CODE} (+ messages subcollection), gameStats/{uid}.
@@ -29,13 +26,7 @@ import { ludo } from './ludo';
  * Security rules (firestore.rules) restrict writes to room members and tie stats to finished rooms.
  */
 
-type AnyEngine = Engine<unknown, unknown>;
-export const ENGINES: Record<GameId, AnyEngine> = {
-  tictactoe: ticTacToe as unknown as AnyEngine,
-  chess: chess as unknown as AnyEngine,
-  checkers: checkers as unknown as AnyEngine,
-  ludo: ludo as unknown as AnyEngine
-};
+export { ENGINES };
 
 export type RoomStatus = 'waiting' | 'playing' | 'finished';
 

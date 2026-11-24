@@ -1,4 +1,4 @@
-import { randomInt, twoPlayerForfeit, type Engine, type Outcome } from './engine';
+import { randomInt, twoPlayerForfeit, type BotLevel, type Engine, type Outcome } from './engine';
 
 /**
  * American checkers / English draughts on an 8×8 board.
@@ -168,12 +168,16 @@ export const checkers: Engine<CheckersState, CheckersAction> = {
     const forfeit = twoPlayerForfeit(seat);
     return { state: { ...state, forfeit }, outcome: forfeit };
   },
-  bot(state, seat, rng) {
+  bot(state, seat, rng, level: BotLevel = 'medium') {
     const legal = checkersMoves(state);
+    // Easy: often just a random legal move. Medium: looks 2 moves ahead. Hard: looks 6 moves ahead.
+    if (level === 'easy' && rng() < 0.5) { const pick = legal[randomInt(rng, legal.length)]; return { type: 'move', from: pick.from, to: pick.to }; }
+    const depth = level === 'easy' ? 1 : level === 'medium' ? 2 : 5;
+    const noise = level === 'hard' ? 0.05 : level === 'medium' ? 0.6 : 1.2;
     let best = legal[randomInt(rng, legal.length)];
     let bestScore = -Infinity;
     for (const move of legal) {
-      const score = search(applyMove(state, move), 4, seat, -Infinity, Infinity) + rng() * 0.3;
+      const score = search(applyMove(state, move), depth, seat, -Infinity, Infinity) + rng() * noise;
       if (score > bestScore) { bestScore = score; best = move; }
     }
     return { type: 'move', from: best.from, to: best.to };

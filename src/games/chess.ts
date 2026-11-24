@@ -1,5 +1,5 @@
 import { Chess, type Move, type Square } from 'chess.js';
-import { randomInt, twoPlayerForfeit, type Engine, type Outcome } from './engine';
+import { randomInt, twoPlayerForfeit, type BotLevel, type Engine, type Outcome } from './engine';
 
 /**
  * Chess with full rules via chess.js (legal moves only, check, checkmate, stalemate, castling,
@@ -64,21 +64,29 @@ export const chess: Engine<ChessState, ChessAction> = {
     const forfeit = twoPlayerForfeit(seat);
     return { state: { ...state, forfeit }, outcome: forfeit };
   },
-  /** Easy computer: greedy one-ply with a safety check and some randomness. */
-  bot(state, _seat, rng) {
+  bot(state, seat, rng, level: BotLevel = 'medium') {
     const game = chessGame(state);
     const moves = game.moves({ verbose: true });
+    if (level === 'easy' && rng() < 0.4) {
+      const pick = moves[randomInt(rng, moves.length)];
+      return { type: 'move', from: pick.from, to: pick.to, promotion: (pick.promotion as ChessAction['promotion']) || undefined };
+    }
+    if (level === 'hard') {
+      const best = searchBest(game.fen(), seat === 0 ? 'w' : 'b', rng);
+      return { type: 'move', from: best.from, to: best.to, promotion: (best.promotion as ChessAction['promotion']) || undefined };
+    }
+    // Easy / Medium: greedy one-move look-ahead with a safety check and some randomness.
+    const noise = level === 'easy' ? 14 : 6;
     let best = moves[randomInt(rng, moves.length)];
     let bestScore = -Infinity;
     for (const move of moves) {
-      let score = (move.captured ? PIECE_VALUE[move.captured] * 10 : 0) + (move.promotion ? 80 : 0) + rng() * 6;
+      let score = (move.captured ? PIECE_VALUE[move.captured] * 10 : 0) + (move.promotion ? 80 : 0) + rng() * noise;
       const after = new Chess(game.fen());
       after.move(move.san);
       if (after.isCheckmate()) score += 1000;
       else if (after.inCheck()) score += 2;
-      // Penalise leaving the moved piece where it can be taken for free.
-      const replies = after.moves({ verbose: true });
-      const attacked = replies.some(reply => reply.to === move.to);
+      // Penalise leaving the moved piece where it can be taken.
+      const attacked = after.moves({ verbose: true }).some(reply => reply.to === move.to);
       if (attacked) score -= PIECE_VALUE[move.promotion || move.piece] * 7;
       if (after.isStalemate() || after.isDraw()) score -= 20;
       if (score > bestScore) { bestScore = score; best = move; }
@@ -86,3 +94,63 @@ export const chess: Engine<ChessState, ChessAction> = {
     return { type: 'move', from: best.from, to: best.to, promotion: (best.promotion as ChessAction['promotion']) || undefined };
   }
 };
+
+// ---------------- Hard computer: 2-move look-ahead (minimax + alpha-beta) ----------------
+
+const CENTER_BONUS = [0, 0.05, 0.1, 0.15, 0.15, 0.1, 0.05, 0];
+
+/** Material + a little central control + pawn advance, from White's point of view (cheap: no move generation). */
+function evaluateBoard(game: Chess): number {
+  let score = 0;
+  const board = game.board();
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r][c];
+      if (!piece) continue;
+      const value = PIECE_VALUE[piece.type] + (piece.type === 'k' ? 0 : CENTER_BONUS[r] + CENTER_BONUS[c]) + (piece.type === 'p' ? (piece.color === 'w' ? (6 - r) : (r - 1)) * 0.05 : 0);
+      score += piece.color === 'w' ? value : -value;
+    }
+  }
+  return score;
+}
+
+const MATE = 10_000;
+
+function minimax(game: Chess, depth: number, alpha: number, beta: number): number {
+  if (depth === 0) return evaluateBoard(game);
+  const moves = game.moves({ verbose: true });
+  if (!moves.length) return game.inCheck() ? (game.turn() === 'w' ? -MATE - depth : MATE + depth) : 0; // mate / stalemate
+  // Captures first = better pruning.
+  moves.sort((a, b) => (b.captured ? PIECE_VALUE[b.captured] : 0) - (a.captured ? PIECE_VALUE[a.captured] : 0));
+  const white = game.turn() === 'w';
+  let best = white ? -Infinity : Infinity;
+  for (const move of moves) {
+    game.move({ from: move.from, to: move.to, promotion: move.promotion });
+    const value = minimax(game, depth - 1, alpha, beta);
+    game.undo();
+    if (white) { best = Math.max(best, value); alpha = Math.max(alpha, value); }
+    else { best = Math.min(best, value); beta = Math.min(beta, value); }
+    if (beta <= alpha) break;
+  }
+  return best;
+}
+
+function searchBest(fen: string, color: 'w' | 'b', rng: () => number): Move {
+  const game = new Chess(fen);
+  const moves = game.moves({ verbose: true });
+  // Most promising first (captures, checks, promotions), so a time cap rarely cuts a good move.
+  const promise = (move: Move) => (move.captured ? PIECE_VALUE[move.captured] * 10 : 0) + (move.promotion ? 50 : 0) + (move.san.includes('+') ? 3 : 0);
+  moves.sort((a, b) => promise(b) - promise(a));
+  const started = Date.now();
+  let best = moves[0];
+  let bestScore = -Infinity;
+  for (const move of moves) {
+    if (Date.now() - started > 700 && bestScore > -Infinity) break; // keep the phone responsive
+    game.move({ from: move.from, to: move.to, promotion: move.promotion });
+    const value = minimax(game, 1, -Infinity, Infinity);
+    game.undo();
+    const score = (color === 'w' ? value : -value) + rng() * 0.05;
+    if (score > bestScore) { bestScore = score; best = move; }
+  }
+  return best;
+}

@@ -24,7 +24,7 @@ export const SnakeGame: React.FC<{ highScore: number; onGameOver: (score: number
   const dir = useRef<Dir>('right');
   const queued = useRef<Dir[]>([]);
   const [score, setScore] = useState(0);
-  const [status, setStatus] = useState<'ready' | 'playing' | 'paused' | 'over'>('ready');
+  const [status, setStatus] = useState<'ready' | 'playing' | 'paused' | 'over' | 'won'>('ready');
   const touchStart = useRef<Point | null>(null);
 
   const draw = useCallback(() => {
@@ -100,6 +100,14 @@ export const SnakeGame: React.FC<{ highScore: number; onGameOver: (score: number
         return;
       }
       snake.current = [next, ...body];
+      if (ate && snake.current.length >= GRID * GRID) {
+        // The snake fills the whole board: nothing left to eat — you win.
+        draw();
+        setScore(value => value + 1);
+        setStatus('won');
+        onGameOver(score + 1);
+        return;
+      }
       if (ate) { food.current = randomFood(snake.current); setScore(value => value + 1); }
       draw();
     }, speed);
@@ -110,16 +118,16 @@ export const SnakeGame: React.FC<{ highScore: number; onGameOver: (score: number
     const onKey = (event: KeyboardEvent) => {
       const map: Record<string, Dir> = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right', W: 'up', S: 'down', A: 'left', D: 'right' };
       const next = map[event.key];
-      if (next) { event.preventDefault(); if (status === 'over') return; turn(next); }
+      if (next) { event.preventDefault(); if (status === 'over' || status === 'won') return; turn(next); }
       if (event.key === ' ') { event.preventDefault(); setStatus(current => (current === 'playing' ? 'paused' : current === 'paused' ? 'playing' : current)); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [status, turn]);
 
-  const best = Math.max(highScore, status === 'over' ? score : 0);
+  const best = Math.max(highScore, status === 'over' || status === 'won' ? score : 0);
   const pad = (label: string, icon: React.ReactNode, next: Dir) => (
-    <button type="button" aria-label={label} onClick={() => status !== 'over' && turn(next)} className="grid h-14 w-14 place-items-center rounded-2xl bg-white text-slate-800 shadow-[0_4px_0_#CBD5E1] active:translate-y-0.5 active:shadow-none">{icon}</button>
+    <button type="button" aria-label={label} onClick={() => status !== 'over' && status !== 'won' && turn(next)} className="grid h-14 w-14 place-items-center rounded-2xl bg-white text-slate-800 shadow-[0_4px_0_#CBD5E1] active:translate-y-0.5 active:shadow-none">{icon}</button>
   );
 
   return (
@@ -127,7 +135,7 @@ export const SnakeGame: React.FC<{ highScore: number; onGameOver: (score: number
       <div className="flex items-center justify-between rounded-2xl bg-white px-4 py-2.5 shadow-sm">
         <p className="text-sm font-bold text-slate-700">Score <span className="ml-1 text-xl font-black text-emerald-600">{score}</span></p>
         <p className="flex items-center gap-1 text-sm font-bold text-slate-700"><Trophy size={16} className="text-amber-500" />Best <span className="ml-1 text-xl font-black text-amber-600">{best}</span></p>
-        <button type="button" onClick={() => setStatus(current => (current === 'playing' ? 'paused' : current === 'paused' ? 'playing' : current))} disabled={status === 'ready' || status === 'over'}
+        <button type="button" onClick={() => setStatus(current => (current === 'playing' ? 'paused' : current === 'paused' ? 'playing' : current))} disabled={status === 'ready' || status === 'over' || status === 'won'}
           aria-label={status === 'playing' ? 'Pause' : 'Resume'} className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 disabled:opacity-40">
           {status === 'playing' ? <Pause size={18} /> : <Play size={18} />}
         </button>
@@ -137,7 +145,7 @@ export const SnakeGame: React.FC<{ highScore: number; onGameOver: (score: number
           onTouchStart={event => { const touch = event.touches[0]; touchStart.current = { x: touch.clientX, y: touch.clientY }; }}
           onTouchEnd={event => {
             const start = touchStart.current; const touch = event.changedTouches[0];
-            if (!start || status === 'over') return;
+            if (!start || status === 'over' || status === 'won') return;
             const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
             if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
             turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
@@ -145,7 +153,13 @@ export const SnakeGame: React.FC<{ highScore: number; onGameOver: (score: number
         {status !== 'playing' && (
           <div className="absolute inset-0 grid place-items-center rounded-2xl bg-black/45 text-center text-white">
             <div>
-              {status === 'over' ? (
+              {status === 'won' ? (
+                <>
+                  <p className="text-3xl font-black">You Win! 🏆</p>
+                  <p className="mt-1 text-sm">You filled the whole board — {score} points!</p>
+                  <button type="button" onClick={() => { reset(); setStatus('ready'); }} className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-500 px-5 text-sm font-bold"><RotateCcw size={16} />Play again</button>
+                </>
+              ) : status === 'over' ? (
                 <>
                   <p className="text-3xl font-black">Game Over</p>
                   <p className="mt-1 text-sm">You scored {score}{score > 0 && score >= highScore ? ' — new high score! 🏆' : ''}</p>
