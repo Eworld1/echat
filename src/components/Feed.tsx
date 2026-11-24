@@ -11,7 +11,6 @@ import { ProfilePhotoPostCard } from './ProfilePhotoPostCard';
 import { listenProfilePhotoPosts, type ProfilePhotoPost } from '../services/profilePhotoPosts';
 import { CreatePostModal } from './CreatePostModal';
 import { DashboardHeader } from './DashboardHeader';
-import { LowDataFeedBar } from './LowData';
 import { useLowDataMode } from '../services/lowData';
 import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown } from 'lucide-react';
 
@@ -150,9 +149,6 @@ export const Feed: React.FC<FeedProps> = ({
           {isRefreshing && <span className="sr-only">Refreshing feed</span>}
         </div>
       )}
-
-      {/* Low Data: ON/OFF quick toggle (+ green "Saving Data" badge when ON) */}
-      <LowDataFeedBar />
 
       {/* Welcome, today's date, Go Live and my stats */}
       <DashboardHeader onGoLive={onOpenGoLive} onOpen={target => (target === 'profile' && user ? onViewProfile(user.id) : onOpenSection?.(target))} />

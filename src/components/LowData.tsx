@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Download, Film, Gauge, Image as ImageIcon, Leaf, Play, Wifi, X } from 'lucide-react';
-import {
-  countSaving, formatBytes, isUnlocked, lightVideoPoster, markLowDataSuggested, onNetworkChange, setLowDataMode,
-  shouldSuggestLowData, unlock, useDataSavedThisWeek, useLowDataMode, useMediaSize
-} from '../services/lowData';
+import { Download, Film, Gauge, Image as ImageIcon, Leaf, Play } from 'lucide-react';
+import { countSaving, formatBytes, isUnlocked, lightVideoPoster, unlock, useDataSavedThisWeek, useLowDataMode, useMediaSize } from '../services/lowData';
+
+/** Low Data Mode is switched only from Settings & Privacy → Data & Storage (no feed card, no pop-up). */
 
 /** Small ON/OFF switch. */
 export const LowDataSwitch: React.FC<{ checked: boolean; onChange: (on: boolean) => void; label: string; size?: 'sm' | 'md' }> = ({ checked, onChange, label, size = 'md' }) => (
@@ -12,24 +11,6 @@ export const LowDataSwitch: React.FC<{ checked: boolean; onChange: (on: boolean)
     <span className={`pointer-events-none inline-block transform rounded-full bg-white shadow transition ${size === 'sm' ? 'h-4 w-4' : 'h-5 w-5'} ${checked ? (size === 'sm' ? 'translate-x-4' : 'translate-x-5') : 'translate-x-0'}`} />
   </button>
 );
-
-/** Top of the Feed: "Low Data: ON/OFF" quick toggle + green "Saving Data" badge when ON. */
-export const LowDataFeedBar: React.FC = () => {
-  const [on, setOn] = useLowDataMode();
-  const saved = useDataSavedThisWeek();
-  return (
-    <div className={`ec-card flex items-center gap-3 px-4 py-2.5 transition ${on ? 'bg-emerald-50 ring-1 ring-emerald-200 dark:bg-emerald-500/10 dark:ring-emerald-400/30' : 'bg-white dark:bg-[#161033]'}`}>
-      <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${on ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300'}`}><Leaf size={16} /></span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold text-slate-900 dark:text-white">Low Data: {on ? 'ON' : 'OFF'}</p>
-        {on
-          ? <p className="flex flex-wrap items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300"><span className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[11px] font-bold text-white"><span className="h-1.5 w-1.5 rounded-full bg-white" />Low Data ON - Saving Data</span>{saved > 0 && <span>{formatBytes(saved)} saved this week</span>}</p>
-          : <p className="truncate text-xs text-slate-500 dark:text-slate-400">Turn on to stop autoplay and load lighter photos.</p>}
-      </div>
-      <LowDataSwitch checked={on} onChange={setOn} label="Low Data Mode" />
-    </div>
-  );
-};
 
 /** Settings → Data & Storage. */
 export const LowDataSettingsCard: React.FC = () => {
@@ -53,35 +34,6 @@ export const LowDataSettingsCard: React.FC = () => {
         <li className="flex items-center gap-2"><Download size={14} className="shrink-0 text-violet-500" />Chat media: tap to download</li>
         <li className="flex items-center gap-2"><Gauge size={14} className="shrink-0 text-violet-500" />Smaller uploads (800px photos, 480p video)</li>
       </ul>
-    </div>
-  );
-};
-
-/** "Slow network detected" popup (2G / 3G / phone data saver). Once every few days, never after a choice. */
-export const LowDataSuggestion: React.FC = () => {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const check = () => { if (shouldSuggestLowData()) { markLowDataSuggested(); setVisible(true); } };
-    const timer = window.setTimeout(check, 2500);
-    const stop = onNetworkChange(check);
-    return () => { window.clearTimeout(timer); stop(); };
-  }, []);
-  if (!visible) return null;
-  const choose = (on: boolean) => { setLowDataMode(on); setVisible(false); };
-  return (
-    <div role="dialog" aria-modal="false" aria-labelledby="low-data-title" className="fixed inset-x-3 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-[95] mx-auto max-w-sm rounded-[20px] border border-emerald-200 bg-white p-4 shadow-2xl shadow-emerald-900/20 ec-fade-up dark:border-emerald-400/30 dark:bg-[#161033] sm:bottom-6">
-      <button type="button" onClick={() => setVisible(false)} aria-label="Not now" className="absolute right-2 top-2 grid h-9 w-9 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18} /></button>
-      <div className="flex items-start gap-3 pr-6">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-500/15"><Wifi size={20} /></span>
-        <div>
-          <p id="low-data-title" className="font-extrabold text-slate-900 dark:text-white">Slow network detected. Turn ON Low Data Mode?</p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Videos won't autoplay and photos load lighter. You can change this in Settings → Data & Storage.</p>
-        </div>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => choose(false)} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold text-slate-700 dark:bg-white/10 dark:text-slate-200">Keep OFF</button>
-        <button type="button" onClick={() => choose(true)} className="min-h-11 rounded-xl bg-emerald-500 text-sm font-bold text-white hover:bg-emerald-600">Turn ON</button>
-      </div>
     </div>
   );
 };
