@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { User, Post } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { avatarClick, openAvatarViewer } from './AvatarViewer';
 import { PostCard } from './PostCard';
 import { ReelsViewer } from './ReelsViewer';
 import { ReelThumbnail } from './ReelThumbnail';
@@ -285,7 +286,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 <img
                   src={user.avatar}
                   alt={user.name}
-                  className="w-32 h-32 sm:w-40 sm:h-40 rounded-full object-cover border-4 border-white shadow-lg bg-white"
+                  role="button"
+                  tabIndex={0}
+                  title="View profile picture"
+                  onClick={avatarClick({ userId: user.id, name: user.name, avatar: user.avatar })}
+                  onKeyDown={event => { if (event.key === 'Enter') openAvatarViewer({ userId: user.id, name: user.name, avatar: user.avatar }); }}
+                  className="w-32 h-32 sm:w-40 sm:h-40 cursor-pointer rounded-full object-cover border-4 border-white shadow-lg bg-white transition hover:brightness-95"
                 />
                 {user.isOnline && (
                   <span className="absolute bottom-3 right-3 w-5 h-5 bg-emerald-500 rounded-full ring-4 ring-white" />

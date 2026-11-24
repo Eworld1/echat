@@ -1,4 +1,5 @@
 import { compressImage } from '../utils/image';
+import { onProfilePictureChanged } from '../services/profilePhotoPosts';
 import { gradientCover, initialsAvatar } from '../utils/avatar';
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { 
@@ -480,6 +481,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updated = serverResult.status === 'fulfilled' ? { ...optimistic, ...serverResult.value } : optimistic;
       setUser(updated);
       publishProfile(updated);
+      // Facebook-style "[Name] updated their profile picture" post in the main feed.
+      if (typeof updates.avatar === 'string' && updates.avatar && updates.avatar !== previous.avatar) {
+        void onProfilePictureChanged({ id: updated.id, name: updated.name }, updates.avatar, previous.avatar || '')
+          .catch(error => console.warn('Could not create the profile picture post:', error));
+      }
     } catch (err) {
       console.error('updateCurrentUser error:', err);
       setUser(previous);

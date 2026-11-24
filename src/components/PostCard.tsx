@@ -1,5 +1,6 @@
 import { usePreferences } from '../context/PreferencesContext';
 import { UserAvatar } from './UserAvatar';
+import { openAvatarViewer } from './AvatarViewer';
 import { getReelsMuted, setReelsMuted } from '../services/reels/reelSound';
 import { SharePostModal, postPermalink } from './SharePostModal';
 import { initialsAvatar } from '../utils/avatar';
@@ -421,7 +422,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* Post Header */}
       <div className={reelMode ? 'absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/75 to-transparent p-3 pb-7 text-white' : 'p-4 flex items-center justify-between'}>
         <div className="flex items-center gap-3">
-          <UserAvatar src={author.avatar} name={author.name || 'EChat user'} size={40} onClick={() => onViewProfile(author.id)} className={reelMode ? 'ring-2 ring-white/80' : 'ring-1 ring-slate-200'} />
+          <UserAvatar src={author.avatar} name={author.name || 'EChat user'} size={40} onClick={() => openAvatarViewer({ userId: author.id, name: author.name || 'EChat user', avatar: author.avatar })} className={reelMode ? 'ring-2 ring-white/80' : 'ring-1 ring-slate-200'} />
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
               <span
@@ -845,7 +846,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               }), ...(profileOverrides[comment.authorId] || {}), ...(user && comment.authorId === user.id ? { name: user.name, avatar: user.avatar } : {}) };
               return (
                 <div key={comment.id} className="flex items-start gap-2.5 group">
-                  <UserAvatar src={commentAuthor.avatar} name={commentAuthor.name || 'EChat user'} size={32} onClick={() => onViewProfile(comment.authorId)} className="mt-0.5" />
+                  <UserAvatar src={commentAuthor.avatar} name={commentAuthor.name || 'EChat user'} size={32} onClick={() => openAvatarViewer({ userId: comment.authorId, name: commentAuthor.name || 'EChat user', avatar: commentAuthor.avatar })} className="mt-0.5" />
                   <div className="flex-1">
                     <div className="bg-white rounded-2xl px-3.5 py-2 shadow-2xs border border-slate-200/70 inline-block max-w-full">
                       <p

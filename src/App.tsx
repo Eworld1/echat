@@ -1,3 +1,4 @@
+import { AvatarViewerHost } from './components/AvatarViewer';
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider, useSocket } from './context/SocketContext';
@@ -432,6 +433,12 @@ export function MainApp() {
         />}
 
       {showBackToast && <div role="status" className="fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">Press back again to exit</div>}
+
+      {/* Full-screen profile picture viewer (tap any avatar) */}
+      <AvatarViewerHost
+        onViewProfile={uid => handleNavigate('profile', uid)}
+        onSendMessage={target => handleOpenDm({ id: target.userId, name: target.name, avatar: target.avatar || '' } as User)}
+      />
 
       {/* Shared WebRTC Video / Audio Call Screen */}
       <CallScreen />

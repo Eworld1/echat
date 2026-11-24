@@ -3,6 +3,7 @@ import { User } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
+import { avatarClick } from './AvatarViewer';
 import { Search, X, MessageSquare, Phone, Video } from 'lucide-react';
 import { useBackButton } from '../hooks/useBackButton';
 
@@ -154,7 +155,9 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({ isOpen, onClose, onSelec
                       <img
                         src={u.avatar}
                         alt={u.name}
-                        className="w-12 h-12 rounded-full object-cover border border-slate-100"
+                        title="View profile picture"
+                        onClick={avatarClick({ userId: u.id, name: u.name, avatar: u.avatar })}
+                        className="w-12 h-12 cursor-pointer rounded-full object-cover border border-slate-100"
                       />
                       {isOnline && (
                         <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full ring-2 ring-white" />

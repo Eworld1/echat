@@ -7,6 +7,8 @@ import { api, invalidateApiReadCache } from '../services/api';
 import { Post, User } from '../types';
 import { StoriesBar } from './StoriesBar';
 import { PostCard } from './PostCard';
+import { ProfilePhotoPostCard } from './ProfilePhotoPostCard';
+import { listenProfilePhotoPosts, type ProfilePhotoPost } from '../services/profilePhotoPosts';
 import { CreatePostModal } from './CreatePostModal';
 import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown } from 'lucide-react';
 
@@ -29,6 +31,9 @@ export const Feed: React.FC<FeedProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // "[Name] updated their profile picture" posts live in Firestore; merged into the stream by time.
+  const [photoPosts, setPhotoPosts] = useState<ProfilePhotoPost[]>([]);
+  useEffect(() => listenProfilePhotoPosts(setPhotoPosts), []);
   const touchStartY = useRef<number | null>(null);
   const [pullDistance, setPullDistance] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -185,7 +190,7 @@ export const Feed: React.FC<FeedProps> = ({
         <div className="space-y-4" aria-label={t('loading_feed')} role="status">
           {[0, 1, 2].map(index => <PostSkeleton key={index} withImage={index !== 1} />)}
         </div>
-      ) : posts.length === 0 ? (
+      ) : posts.length === 0 && photoPosts.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
           <svg viewBox="0 0 160 120" className="mx-auto mb-4 h-28 w-36" aria-hidden="true">
             <rect x="18" y="22" width="124" height="84" rx="14" fill="#E7F0FD" />
@@ -202,10 +207,12 @@ export const Feed: React.FC<FeedProps> = ({
         </div>
       ) : (
         <>
-        {posts.map((post) => (
+        {mergeFeed(posts, photoPosts, Boolean(nextCursor)).map((item) => item.kind === 'photo' ? (
+          <ProfilePhotoPostCard key={item.post.id} post={item.post} onViewProfile={onViewProfile} />
+        ) : (
           <PostCard
-            key={post.id}
-            post={post}
+            key={item.post.id}
+            post={item.post}
             onPostUpdated={(updated) => {
               setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
             }}
@@ -232,6 +239,21 @@ export const Feed: React.FC<FeedProps> = ({
 };
 
 /** Grey placeholder shaped like a post while the feed loads. */
+type FeedItem = { kind: 'post'; post: Post; at: number } | { kind: 'photo'; post: ProfilePhotoPost; at: number };
+
+/**
+ * Newest first. A profile-picture post only appears once the loaded server posts reach back to its
+ * time (or all are loaded), so it never jumps above newer posts that haven't loaded yet.
+ */
+function mergeFeed(posts: Post[], photoPosts: ProfilePhotoPost[], hasMore: boolean): FeedItem[] {
+  const oldestLoaded = posts.length ? Math.min(...posts.map(post => Number(post.createdAt) || 0)) : 0;
+  const photos = photoPosts.filter(post => !hasMore || post.createdAt >= oldestLoaded);
+  return [
+    ...posts.map(post => ({ kind: 'post' as const, post, at: Number(post.createdAt) || 0 })),
+    ...photos.map(post => ({ kind: 'photo' as const, post, at: post.createdAt }))
+  ].sort((a, b) => b.at - a.at);
+}
+
 const PostSkeleton: React.FC<{ withImage?: boolean }> = ({ withImage = true }) => (
   <div className="animate-pulse overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm" aria-hidden="true">
     <div className="flex items-center gap-3 p-4">

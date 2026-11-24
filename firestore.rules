@@ -59,7 +59,7 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats' && document[0] != 'reelReports' && document[0] != 'marketFavorites';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats' && document[0] != 'reelReports' && document[0] != 'marketFavorites' && document[0] != 'calls' && document[0] != 'posts';
     }
 
     // ---------------- GAMES HUB ----------------
@@ -553,6 +553,77 @@ service cloud.firestore {
         request.resource.data.get('createdAt', 0) == resource.data.get('createdAt', 0) &&
         validListing(request.resource.data);
       allow delete: if signedIn() && resource.data.get('sellerId', '') == request.auth.uid;
+    }
+
+    // ---------------- DM CALLS ----------------
+    // calls/{callId}: WebRTC signaling + call history. Only the two people in the call can see or
+    // change it, and who/when/what-type can never be rewritten.
+    function callParty() {
+      return signedIn() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+    }
+    match /calls/{callId} {
+      allow read: if callParty();
+      allow create: if signedIn() &&
+        request.resource.data.callerId == request.auth.uid &&
+        request.resource.data.receiverId is string && request.resource.data.receiverId.size() > 0 &&
+        request.resource.data.receiverId != request.auth.uid &&
+        request.resource.data.status == 'ringing' &&
+        request.resource.data.type in ['audio', 'video'] &&
+        request.resource.data.createdAt is int &&
+        !isBlockedPair(request.resource.data.receiverId, request.auth.uid);
+      allow update: if callParty() &&
+        request.resource.data.callerId == resource.data.callerId &&
+        request.resource.data.receiverId == resource.data.receiverId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.type == resource.data.type &&
+        request.resource.data.status in ['ringing', 'answered', 'declined', 'missed'] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'reason', 'offer', 'answer', 'ringingAt', 'answeredAt', 'endedAt', 'endedBy', 'duration',
+          'callerCandidates', 'receiverCandidates', 'currentType', 'currentTypeBy'
+        ]);
+      allow delete: if false;
+    }
+
+    // ---------------- FEED: PROFILE PICTURE UPDATES ----------------
+    // posts/pp_{uid}_{photoHash}: "[Name] updated their profile picture". The id makes the same
+    // picture impossible to post twice. Anyone signed in can like (only their own uid) and comment.
+    match /posts/{postId} {
+      allow read: if signedIn();
+      allow create: if signedIn() &&
+        postId.matches('pp_' + request.auth.uid + '_[A-Za-z0-9]{8,64}') &&
+        request.resource.data.keys().hasOnly(['type', 'userId', 'userName', 'newPhotoURL', 'oldPhotoURL', 'createdAt', 'likes', 'comments']) &&
+        request.resource.data.type == 'profile_picture_update' &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.userName is string && request.resource.data.userName.size() <= 100 &&
+        request.resource.data.newPhotoURL is string && request.resource.data.newPhotoURL.matches('^https://.{1,2000}$') &&
+        request.resource.data.oldPhotoURL is string && request.resource.data.oldPhotoURL.size() <= 2000 &&
+        request.resource.data.createdAt is int &&
+        request.resource.data.likes == [] &&
+        request.resource.data.comments == 0;
+      allow update: if signedIn() && resource.data.type == 'profile_picture_update' && (
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes']) &&
+          request.resource.data.likes is list &&
+          request.resource.data.likes.toSet().difference(resource.data.likes.toSet()).hasOnly([request.auth.uid]) &&
+          resource.data.likes.toSet().difference(request.resource.data.likes.toSet()).hasOnly([request.auth.uid])) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comments']) &&
+          (request.resource.data.comments == resource.data.comments + 1 ||
+            (request.resource.data.comments == resource.data.comments - 1 && request.resource.data.comments >= 0)))
+      );
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+
+      match /comments/{commentId} {
+        allow read: if signedIn();
+        allow create: if signedIn() &&
+          request.resource.data.keys().hasOnly(['userId', 'userName', 'userAvatar', 'text', 'createdAt']) &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.userName is string && request.resource.data.userName.size() <= 100 &&
+          request.resource.data.userAvatar is string && request.resource.data.userAvatar.size() <= 2000 &&
+          request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 1000 &&
+          request.resource.data.createdAt is int;
+        allow update: if false;
+        allow delete: if signedIn() && (resource.data.userId == request.auth.uid ||
+          get(/databases/$(database)/documents/posts/$(postId)).data.userId == request.auth.uid);
+      }
     }
 
     // Marketplace favorites: marketFavorites/{uid}_{listingId}, private to each user.

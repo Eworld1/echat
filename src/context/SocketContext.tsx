@@ -13,8 +13,20 @@ import {
   onSnapshot,
   query,
   where,
-  arrayUnion
+  arrayUnion,
+  getDoc,
+  setDoc
 } from 'firebase/firestore';
+import {
+  CALL_ANSWER_TIMEOUT_MS,
+  CALL_DELIVERY_TIMEOUT_MS,
+  CALL_RING_MAX_AGE_MS,
+  type CallDoc,
+  callMediaErrorMessage,
+  getCallMedia,
+  remoteCandidates,
+  unavailableMessage
+} from '../services/calls';
 export interface IncomingCall {
   id: string; // Firestore document ID
   callerId: string;
@@ -32,7 +44,7 @@ export interface ActiveCall {
   partnerAvatar: string;
   callType: 'audio' | 'video';
   isCaller: boolean;
-  status: 'calling' | 'ringing' | 'connected' | 'ended' | 'offline';
+  status: 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended' | 'offline';
 }
 
 interface SocketContextType {
@@ -244,7 +256,21 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const stopRingtoneRef = useRef<(() => void) | null>(null);
   const isSettingUpCallRef = useRef<boolean>(false);
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
-  const preparedIncomingRef = useRef<{ id: string; promise: Promise<{ pc: RTCPeerConnection; stream: MediaStream }> } | null>(null);
+  const incomingCallRef = useRef<IncomingCall | null>(null);
+  const appliedRemoteCandidatesRef = useRef(0);
+  const connectedAtRef = useRef<number | null>(null);
+  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showIncomingCall = useCallback((call: IncomingCall | null) => {
+    incomingCallRef.current = call;
+    setIncomingCall(call);
+  }, []);
+  const updateActiveCall = useCallback((patch: Partial<ActiveCall>) => {
+    const current = activeCallRef.current;
+    if (!current) return;
+    const updated = { ...current, ...patch };
+    activeCallRef.current = updated;
+    setActiveCall(updated);
+  }, []);
 
   useEffect(() => {
     const unlock = () => {
@@ -281,53 +307,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       void audio.play().catch(() => {});
     }
   }, [speakerEnabled]);
-
-  const prepareIncomingCall = useCallback((call: IncomingCall) => {
-    if (preparedIncomingRef.current?.id === call.id) return;
-    const promise = (async () => {
-      const [stream, config] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
-          video: call.callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
-        }),
-        getCallIceConfig()
-      ]);
-      const pc = new RTCPeerConnection({ ...config, iceCandidatePoolSize: 10 });
-      peerConnectionRef.current = pc;
-      localStreamRef.current = stream;
-      stream.getTracks().forEach(track => { track.enabled = true; pc.addTrack(track, stream); });
-      if (call.callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
-      pc.onicecandidate = event => {
-        if (!event.candidate) return;
-        const candidate = event.candidate.toJSON();
-        if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'call:ice-candidate', rawType: 'ice_candidate', targetUserId: call.callerId, candidate }));
-        if (call.id && !call.id.startsWith('ws_')) updateDoc(doc(firestore, 'calls', call.id), { receiverCandidates: arrayUnion(candidate) }).catch(() => {});
-      };
-      pc.ontrack = event => {
-        event.track.enabled = true;
-        event.track.onunmute = () => publishRemoteTracks(event.track);
-        event.track.onmute = () => publishRemoteTracks(event.track);
-        event.track.onended = () => publishRemoteTracks();
-        publishRemoteTracks(event.track);
-      };
-      pc.getReceivers().forEach(receiver => {
-        const withJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
-        if ('jitterBufferTarget' in withJitter) withJitter.jitterBufferTarget = 0;
-      });
-      if (call.offer) await pc.setRemoteDescription(new RTCSessionDescription(call.offer));
-      pc.getReceivers().forEach(receiver => {
-        const receiverWithJitter = receiver as RTCRtpReceiver & { jitterBufferTarget?: number };
-        if ('jitterBufferTarget' in receiverWithJitter) receiverWithJitter.jitterBufferTarget = 0;
-      });
-      while (pendingCandidatesRef.current.length) {
-        const candidate = pendingCandidatesRef.current.shift();
-        if (candidate) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
-      }
-      return { pc, stream };
-    })();
-    preparedIncomingRef.current = { id: call.id, promise };
-    promise.catch(error => console.warn('Could not prepare incoming call media:', error));
-  }, [publishRemoteTracks]);
 
   useEffect(() => {
     activeCallRef.current = activeCall;
@@ -379,7 +358,13 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch {}
       localStreamRef.current = null;
     }
-    preparedIncomingRef.current = null;
+    if (disconnectTimerRef.current) {
+      clearTimeout(disconnectTimerRef.current);
+      disconnectTimerRef.current = null;
+    }
+    connectedAtRef.current = null;
+    appliedRemoteCandidatesRef.current = 0;
+    incomingCallRef.current = null;
     remoteTracksRef.current.clear();
     if (peerConnectionRef.current) {
       const pc = peerConnectionRef.current;
@@ -400,81 +385,53 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setIncomingCall(null);
   }, []);
 
-  const addOrQueueCandidate = useCallback(async (candidate: RTCIceCandidateInit) => {
-    const pc = peerConnectionRef.current;
-    // A caller can emit ICE candidates while its offer is still being sent. Keep them
-    // until the incoming call has created its peer connection and applied the offer.
-    if (!pc || pc.signalingState === 'closed' || !pc.remoteDescription || !pc.remoteDescription.type) {
-      pendingCandidatesRef.current.push(candidate);
-      return;
-    }
-    try {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (err) {
-      console.warn('Error adding ICE candidate:', err);
-    }
-  }, []);
-
-  // Listen for incoming calls in Firestore 'calls' collection
+  /**
+   * Incoming calls. Signaling runs entirely through the Firestore `calls` collection, so calls work
+   * on Vercel and Render without a WebSocket server. A call doc that is still "ringing" for me shows
+   * the incoming popup; when it stops ringing (caller hung up, answered on another device) the popup
+   * closes. If I'm already in a call, new callers are told I'm busy.
+   */
   useEffect(() => {
     if (!user?.id) return;
+    const callsQuery = query(collection(firestore, 'calls'), where('receiverId', '==', user.id), where('status', '==', 'ringing'));
+    const unsubscribe = onSnapshot(callsQuery, snapshot => {
+      const ringing = snapshot.docs
+        .map(item => ({ ...(item.data() as CallDoc), id: item.id }))
+        .filter(item => item.callerId !== user.id && !item.endedAt && Date.now() - (item.createdAt || 0) < CALL_RING_MAX_AGE_MS)
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-    try {
-      const callsQuery = query(
-        collection(firestore, 'calls'),
-        where('receiverId', '==', user.id),
-        where('status', '==', 'ringing')
-      );
+      const shown = incomingCallRef.current;
+      if (shown && !ringing.some(item => item.id === shown.id)) {
+        // The caller gave up (or another of my devices answered).
+        stopRingtoneRef.current?.();
+        stopRingtoneRef.current = null;
+        showIncomingCall(null);
+      }
 
-      const unsubscribe = onSnapshot(callsQuery, (snapshot) => {
-        // Find latest ringing call not created by myself
-        const incomingDocs = snapshot.docs
-          .map(d => ({ id: d.id, ...d.data() } as any))
-          .filter(d => d.callerId !== user.id && Date.now() - (d.createdAt || 0) < 120000)
-          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
-        if (incomingDocs.length > 0) {
-          const docData = incomingDocs[0];
-          // If we are not already in an active connected call
-          if (!activeCallRef.current || activeCallRef.current.status !== 'connected') {
-            currentCallDocIdRef.current = docData.id;
-            const call: IncomingCall = {
-              id: docData.id,
-              callerId: docData.callerId,
-              callerName: docData.callerName || docData.caller?.name || 'User',
-              callerAvatar: docData.callerAvatar || docData.caller?.avatar || '',
-              callType: docData.type || docData.callType || 'audio',
-              offer: docData.offer
-            };
-            setIncomingCall(call);
-            prepareIncomingCall(call);
-
-            // Start ringing sound
-            if (!stopRingtoneRef.current) {
-              stopRingtoneRef.current = startCallTone('incoming');
-            }
-          }
-        } else {
-          // No active ringing call for me
-          if (incomingCall) {
-            setIncomingCall(null);
-            if (stopRingtoneRef.current) {
-              stopRingtoneRef.current();
-              stopRingtoneRef.current = null;
-            }
-          }
+      for (const item of ringing) {
+        if (item.id === incomingCallRef.current?.id || item.id === activeCallRef.current?.id) continue;
+        const busy = Boolean(activeCallRef.current || incomingCallRef.current);
+        if (busy) {
+          updateDoc(doc(firestore, 'calls', item.id), { status: 'missed', reason: 'busy', endedAt: Date.now() }).catch(() => {});
+          continue;
         }
-      }, (err) => {
-        console.warn('Firestore calls listener error (falling back to WebSocket):', err);
-      });
-
-      return () => {
-        unsubscribe();
-      };
-    } catch (e) {
-      console.warn('Could not set up Firestore call listener:', e);
-    }
-  }, [user?.id, prepareIncomingCall]);
+        showIncomingCall({
+          id: item.id,
+          callerId: item.callerId,
+          callerName: item.callerName || 'User',
+          callerAvatar: item.callerAvatar || '',
+          callType: item.type === 'video' ? 'video' : 'audio',
+          offer: item.offer
+        });
+        // Tell the caller this device is ringing (otherwise they see "User is unavailable").
+        updateDoc(doc(firestore, 'calls', item.id), { ringingAt: Date.now() }).catch(() => {});
+        if (!stopRingtoneRef.current) stopRingtoneRef.current = startCallTone('incoming');
+      }
+    }, error => {
+      console.warn('Incoming call listener failed:', error);
+    });
+    return () => unsubscribe();
+  }, [user?.id, showIncomingCall]);
 
   // WebSocket for chat & feed real-time events
   useEffect(() => {
@@ -627,116 +584,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             liveCaptionListeners.current.forEach(cb => cb(data));
             break;
 
-          // WebRTC Call Signaling (Supports call:initiate, call:offer, call:answer, call:ice-candidate, call:end, call:rejected)
-          case 'call:initiate':
-          case 'incoming_call': {
-            if (!incomingCall && !activeCallRef.current) {
-              const call: IncomingCall = {
-                id: data.id || 'ws_' + Date.now(),
-                callerId: data.callerId,
-                callerName: data.callerName || 'User',
-                callerAvatar: data.callerAvatar || '',
-                callType: data.callType || 'video',
-                offer: data.offer
-              };
-              setIncomingCall(call);
-              prepareIncomingCall(call);
-              if (!stopRingtoneRef.current) {
-                stopRingtoneRef.current = startCallTone('incoming');
-              }
-            }
-            break;
-          }
-
-          case 'call:offer':
-          case 'call_offer': {
-            if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed' && data.offer) {
-              try {
-                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-                // Flush pending candidates
-                while (pendingCandidatesRef.current.length > 0) {
-                  const cand = pendingCandidatesRef.current.shift();
-                  if (cand) await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-                }
-              } catch (e) {
-                console.warn('Could not set remote description from offer:', e);
-              }
-            }
-            break;
-          }
-
-          case 'call:answer':
-          case 'call_answered': {
-            if (stopRingtoneRef.current) {
-              stopRingtoneRef.current();
-              stopRingtoneRef.current = null;
-            }
-            if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed' && data.answer) {
-              try {
-                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
-                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-                  // Flush pending candidates
-                  while (pendingCandidatesRef.current.length > 0) {
-                    const cand = pendingCandidatesRef.current.shift();
-                    if (cand) await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-                  }
-                }
-                setActiveCall(prev => prev ? { ...prev, status: 'connected' } : null);
-              } catch (e) {
-                console.warn('Could not set remote description from answer:', e);
-              }
-            }
-            break;
-          }
-
-          case 'call:user_offline':
-          case 'call_user_offline': {
-            // Keep ringing (they may still receive it through the call document), but say so.
-            setCallNotice('This person looks offline right now. We will keep ringing in case they open Echat.');
-            break;
-          }
-
-          case 'call:rejected':
-          case 'call_rejected':
-          case 'call:end':
-          case 'call_ended':
-          case 'call_failed': {
-            if ((data.type === 'call:rejected' || data.type === 'call_rejected') && data.reason === 'not_allowed') {
-              setCallNotice('This person does not accept calls from you.');
-            } else if (data.type === 'call:rejected' || data.type === 'call_rejected') {
-              setCallNotice('Call declined.');
-              if (activeCallRef.current) logMissedCall(activeCallRef.current);
-            }
-            cleanUpCallMedia();
-            break;
-          }
-
-          case 'call:ice-candidate':
-          case 'call:ice_candidate':
-          case 'ice_candidate': {
-            if (data.candidate) {
-              await addOrQueueCandidate(data.candidate);
-            }
-            break;
-          }
-
-          case 'call-switch-type': {
-            const callType: 'video' | 'audio' = data.callType === 'video' ? 'video' : 'audio';
-            const call = activeCallRef.current;
-            if (call && call.partnerId === data.fromUserId) {
-              if (callType === 'audio') {
-                const pc = peerConnectionRef.current;
-                const videoSender = pc?.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender;
-                if (videoSender) await videoSender.replaceTrack(null).catch(() => {});
-                localStreamRef.current?.getVideoTracks().forEach(track => { track.enabled = false; });
-              }
-              const updated = { ...call, callType };
-              activeCallRef.current = updated;
-              setActiveCall(updated);
-            }
-            break;
-          }
-
           default:
             break;
         }
@@ -771,367 +618,282 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setIsConnected(false);
       cleanUpCallMedia();
     };
-  }, [user?.id, cleanUpCallMedia, prepareIncomingCall, logMissedCall]);
+  }, [user?.id, cleanUpCallMedia]);
+
+  /** One peer connection for either side. ICE candidates go into the call doc as they appear. */
+  const createPeer = useCallback(async (callId: string, role: 'caller' | 'receiver', stream: MediaStream, callType: 'audio' | 'video', docReady: Promise<void> = Promise.resolve()) => {
+    const config = await getCallIceConfig();
+    const pc = new RTCPeerConnection({ ...config, iceCandidatePoolSize: 10 });
+    peerConnectionRef.current = pc;
+    localStreamRef.current = stream;
+    const field = role === 'caller' ? 'callerCandidates' : 'receiverCandidates';
+    pc.onicecandidate = event => {
+      if (!event.candidate) return;
+      const candidate = event.candidate.toJSON();
+      // Candidates found before the call doc exists wait for it.
+      docReady
+        .then(() => updateDoc(doc(firestore, 'calls', callId), { [field]: arrayUnion(candidate) }))
+        .catch(error => logCallSetupError('Publishing ICE candidate', error));
+    };
+    stream.getTracks().forEach(track => { track.enabled = true; pc.addTrack(track, stream); });
+    // Audio calls keep a video slot so "Switch to video" works without renegotiating.
+    if (callType === 'audio' || !stream.getVideoTracks().length) pc.addTransceiver('video', { direction: 'sendrecv' });
+    pc.ontrack = event => {
+      event.track.enabled = true;
+      event.track.onunmute = () => publishRemoteTracks(event.track);
+      event.track.onmute = () => publishRemoteTracks(event.track);
+      event.track.onended = () => publishRemoteTracks();
+      publishRemoteTracks(event.track);
+    };
+    const markConnected = () => {
+      if (disconnectTimerRef.current) { clearTimeout(disconnectTimerRef.current); disconnectTimerRef.current = null; }
+      if (activeCallRef.current?.status === 'connected') return;
+      connectedAtRef.current = connectedAtRef.current || Date.now();
+      stopRingtoneRef.current?.();
+      stopRingtoneRef.current = null;
+      updateActiveCall({ status: 'connected', startedAt: connectedAtRef.current });
+    };
+    const onState = () => {
+      const state = pc.connectionState || pc.iceConnectionState;
+      if (state === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') markConnected();
+      else if (state === 'failed') {
+        setCallNotice('The call could not connect. Check your internet connection and try again.');
+        void hangUpRef.current();
+      } else if (state === 'disconnected' && !disconnectTimerRef.current) {
+        // Brief drops (switching Wi-Fi / mobile data) often recover by themselves.
+        disconnectTimerRef.current = setTimeout(() => {
+          disconnectTimerRef.current = null;
+          if (peerConnectionRef.current === pc && (pc.connectionState === 'disconnected' || pc.iceConnectionState === 'disconnected')) {
+            setCallNotice('Call dropped: the connection was lost.');
+            void hangUpRef.current();
+          }
+        }, 12000);
+      }
+    };
+    pc.onconnectionstatechange = onState;
+    pc.oniceconnectionstatechange = onState;
+    return pc;
+  }, [publishRemoteTracks, updateActiveCall]);
+
+  const applyRemoteCandidates = useCallback(async (pc: RTCPeerConnection, list: RTCIceCandidateInit[]) => {
+    if (!pc.remoteDescription) return;
+    const start = appliedRemoteCandidatesRef.current;
+    appliedRemoteCandidatesRef.current = list.length;
+    for (const candidate of list.slice(start)) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+  }, []);
+
+  /** Follow the call doc: answer, the other side's network candidates, decline / hang-up, video switch. */
+  const watchCallDoc = useCallback((callId: string, role: 'caller' | 'receiver') => {
+    callUnsubscribeRef.current?.();
+    let chain = Promise.resolve();
+    callUnsubscribeRef.current = onSnapshot(doc(firestore, 'calls', callId), snapshot => {
+      chain = chain.then(async () => {
+        const data = snapshot.data() as CallDoc | undefined;
+        const current = activeCallRef.current;
+        const pc = peerConnectionRef.current;
+        if (!data || !current || current.id !== callId || !pc || pc.signalingState === 'closed') return;
+
+        if (data.endedAt || data.status === 'declined' || data.status === 'missed') {
+          const byMe = data.endedBy === user?.id;
+          if (!byMe) {
+            if (data.status === 'declined') setCallNotice(data.reason === 'no_permission' ? `${current.partnerName} could not use their microphone/camera.` : `${current.partnerName} declined the call.`);
+            else if (data.status === 'missed' && role === 'caller') {
+              setCallNotice(unavailableMessage(current.partnerName, data.reason));
+              logMissedCall(current);
+            } else setCallNotice('Call ended.');
+          }
+          cleanUpCallMedia();
+          return;
+        }
+        if (role === 'caller') {
+          if (data.ringingAt && current.status === 'calling') updateActiveCall({ status: 'ringing' });
+          if (data.answer && pc.signalingState === 'have-local-offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            stopRingtoneRef.current?.();
+            stopRingtoneRef.current = null;
+            if (activeCallRef.current?.status !== 'connected') updateActiveCall({ status: 'connecting' });
+          }
+        }
+        await applyRemoteCandidates(pc, remoteCandidates(data, role));
+        if (data.currentType && data.currentTypeBy !== user?.id && data.currentType !== activeCallRef.current?.callType) {
+          if (data.currentType === 'audio') {
+            const videoSender = pc.getTransceivers().find(item => item.receiver.track.kind === 'video')?.sender;
+            if (videoSender) await videoSender.replaceTrack(null).catch(() => {});
+            localStreamRef.current?.getVideoTracks().forEach(track => { track.enabled = false; });
+          }
+          updateActiveCall({ callType: data.currentType });
+        }
+      }).catch(error => console.warn('Call update failed:', error));
+    }, error => console.warn('Call listener failed:', error));
+  }, [user?.id, applyRemoteCandidates, cleanUpCallMedia, logMissedCall, updateActiveCall]);
+
+  /** Hang up / cancel and write the final call-history fields. */
+  const hangUp = useCallback(async (missedReason?: string) => {
+    stopRingtoneRef.current?.();
+    stopRingtoneRef.current = null;
+    const call = activeCallRef.current;
+    const callId = call?.id;
+    const now = Date.now();
+    cleanUpCallMedia();
+    if (!call || !callId || !user) return;
+    const connectedAt = call.startedAt && call.status === 'connected' ? call.startedAt : null;
+    const update = connectedAt
+      ? { endedAt: now, endedBy: user.id, duration: Math.max(0, Math.round((now - connectedAt) / 1000)) }
+      : call.isCaller && call.status !== 'connecting'
+        ? { status: 'missed', reason: missedReason || 'cancelled', endedAt: now, endedBy: user.id, duration: 0 }
+        : { endedAt: now, endedBy: user.id, duration: 0 };
+    await updateDoc(doc(firestore, 'calls', callId), update).catch(error => console.warn('Could not save call end:', error));
+    if (call.isCaller && !connectedAt && call.status !== 'connecting') logMissedCall(call);
+  }, [user?.id, cleanUpCallMedia, logMissedCall]);
+  const hangUpRef = useRef(hangUp);
+  hangUpRef.current = hangUp;
 
   // Start outgoing call
   const startCall = async (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => {
-    if (!user || isSettingUpCallRef.current || activeCallRef.current || incomingCall) return;
-
+    if (!user || !targetUserId || targetUserId === user.id) return;
+    if (isSettingUpCallRef.current || activeCallRef.current || incomingCallRef.current) {
+      setCallNotice('Finish your current call first.');
+      return;
+    }
     isSettingUpCallRef.current = true;
     cleanUpCallMedia();
+    isSettingUpCallRef.current = true;
+    unlockCallAudio();
 
-    // 1. Show Calling popup immediately
-    const newCall: ActiveCall = {
-      startedAt: Date.now(),
-      partnerId: targetUserId,
-      partnerName: targetName,
-      partnerAvatar: targetAvatar,
-      callType,
-      isCaller: true,
-      status: 'calling'
-    };
-    setActiveCall(newCall);
+    const callRef = doc(collection(firestore, 'calls'));
+    const newCall: ActiveCall = { id: callRef.id, startedAt: undefined, partnerId: targetUserId, partnerName: targetName, partnerAvatar: targetAvatar, callType, isCaller: true, status: 'calling' };
     activeCallRef.current = newCall;
+    setActiveCall(newCall);
 
-    // Start outgoing ringtone
-    stopRingtoneRef.current = startCallTone('outgoing');
-
-    let setupStage = 'getUserMedia';
+    let stage = 'getUserMedia';
     try {
-      // 2. Ask for camera/mic permission
-      const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
-        video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
-      });
+      // Ask for microphone (and camera) permission.
+      const { stream, videoFallback } = await getCallMedia(callType);
+      if (activeCallRef.current?.id !== callRef.id) { stream.getTracks().forEach(track => track.stop()); return; }
+      if (videoFallback) setCallNotice('No camera found, so this call is starting with audio only.');
+      stopRingtoneRef.current = startCallTone('outgoing');
 
-      if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
-        stream.getTracks().forEach(t => t.stop());
-        isSettingUpCallRef.current = false;
+      stage = 'creating the call';
+      let markDocReady: () => void = () => {};
+      let markDocFailed: (error: unknown) => void = () => {};
+      const docReady = new Promise<void>((resolve, reject) => { markDocReady = resolve; markDocFailed = reject; });
+      docReady.catch(() => {});
+      const pc = await createPeer(callRef.id, 'caller', stream, callType, docReady);
+      if (activeCallRef.current?.id !== callRef.id) { pc.close(); return; }
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const createdAt = Date.now();
+      const base: CallDoc = {
+        callerId: user.id, callerName: user.name || 'User', callerAvatar: user.avatar || '',
+        receiverId: targetUserId, receiverName: targetName || 'User', receiverAvatar: targetAvatar || '',
+        type: callType, callType, status: 'ringing', offer: { type: offer.type, sdp: offer.sdp }, answer: null,
+        callerCandidates: [], receiverCandidates: [], duration: 0, createdAt
+      };
+      try {
+        await setDoc(callRef, base);
+        markDocReady();
+      } catch (error) {
+        markDocFailed(error);
+        throw error;
+      }
+      if (activeCallRef.current?.id !== callRef.id) {
+        // Cancelled while the call was being created.
+        updateDoc(callRef, { status: 'missed', reason: 'cancelled', endedAt: Date.now(), endedBy: user.id }).catch(() => {});
         return;
       }
-
-      localStreamRef.current = stream;
-
-      setupStage = 'loading ICE configuration';
-      const iceConfig = await getCallIceConfig();
-      setupStage = 'constructing RTCPeerConnection';
-      const pc = new RTCPeerConnection({ ...iceConfig, iceCandidatePoolSize: 10 });
-      peerConnectionRef.current = pc;
-      pc.oniceconnectionstatechange = () => {
-        if (pc.iceConnectionState === 'failed') {
-          console.error('[Call] ICE connection failed', { iceConnectionState: pc.iceConnectionState });
-        }
-      };
-
-      // Attach the ICE handler NOW, before any description is set. Candidates are produced as soon as
-      // setLocalDescription runs; attaching later (after a network write) silently dropped them and the
-      // other side could not connect back, which caused one-way / no audio.
-      const earlyCandidates: RTCIceCandidateInit[] = [];
-      let iceDocId = '';
-      pc.onicecandidate = (event) => {
-        if (!event.candidate) return;
-        const cand = event.candidate.toJSON();
-        earlyCandidates.push(cand);
-        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-          socketRef.current.send(JSON.stringify({
-            type: 'call:ice-candidate',
-            rawType: 'ice_candidate',
-            targetUserId,
-            candidate: cand
-          }));
-        }
-        if (iceDocId) {
-          updateDoc(doc(firestore, 'calls', iceDocId), { callerCandidates: arrayUnion(cand) })
-            .catch(error => logCallSetupError('Publishing caller ICE candidate', error));
-        }
-      };
-
-      setupStage = 'adding local media tracks';
-      stream.getTracks().forEach(track => {
-        track.enabled = true;
-        if (pc.signalingState === 'closed') throw new Error('Peer connection closed before adding local media tracks');
-        pc.addTrack(track, stream);
-      });
-      if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
-
-      pc.ontrack = event => {
-        event.track.enabled = true;
-        event.track.onunmute = () => publishRemoteTracks(event.track);
-        event.track.onmute = () => publishRemoteTracks(event.track);
-        event.track.onended = () => publishRemoteTracks();
-        publishRemoteTracks(event.track);
-      };
-
-      // 4. Create SDP Offer
-      setupStage = 'creating SDP offer';
-      const offer = await pc.createOffer();
-      setupStage = 'setting local SDP description';
-      await pc.setLocalDescription(offer);
-
-      // 5. Create Call Document in Firestore 'calls' collection
-      setupStage = 'signaling the call';
-      let callDocId = '';
-      try {
-        const callDoc = await addDoc(collection(firestore, 'calls'), {
-          caller: {
-            id: user.id,
-            name: user.name,
-            avatar: user.avatar
-          },
-          receiver: {
-            id: targetUserId,
-            name: targetName,
-            avatar: targetAvatar
-          },
-          callerId: user.id,
-          callerName: user.name,
-          callerAvatar: user.avatar,
-          receiverId: targetUserId,
-          receiverName: targetName,
-          receiverAvatar: targetAvatar,
-          type: callType,
-          callType,
-          status: 'ringing',
-          offer: {
-            type: offer.type,
-            sdp: offer.sdp
-          },
-          answer: null,
-          callerCandidates: [],
-          receiverCandidates: [],
-          createdAt: Date.now()
-        });
-
-        callDocId = callDoc.id;
-        currentCallDocIdRef.current = callDocId;
-        setActiveCall(prev => { const updated=prev?{...prev,id:callDocId}:null;if(updated)activeCallRef.current=updated;return updated; });
-
-        // Publish the candidates gathered while the call document was being created
-        iceDocId = callDocId;
-        if (earlyCandidates.length > 0) {
-          updateDoc(doc(firestore, 'calls', callDocId), { callerCandidates: arrayUnion(...earlyCandidates) }).catch(() => {});
-        }
-
-      } catch (firestoreErr) {
-        logCallSetupError('Creating Firestore call document; trying WebSocket fallback', firestoreErr);
-      }
-
-      // Also trigger over WebSocket backup channel immediately
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          type: 'call:initiate',
-          rawType: 'call_initiate',
-          callerId: user.id,
-          callerName: user.name,
-          callerAvatar: user.avatar,
-          receiverId: targetUserId,
-          callType,
-          offer
-        }));
-      }
+      watchCallDoc(callRef.id, 'caller');
     } catch (err) {
-      logCallSetupError(setupStage, err);
-      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to start this call.' : 'Could not start the call. Check your microphone, camera, and network, then try again.');
+      logCallSetupError(stage, err);
+      setCallNotice(stage === 'getUserMedia' ? callMediaErrorMessage(err, callType, 'start') : 'Could not start the call. Check your internet connection and try again.');
+      if (stage !== 'getUserMedia') updateDoc(callRef, { status: 'missed', reason: 'failed', endedAt: Date.now(), endedBy: user.id }).catch(() => {});
       cleanUpCallMedia();
     } finally {
       isSettingUpCallRef.current = false;
     }
   };
 
-  // Accept incoming call
+  // Accept incoming call (runs from the Answer tap, so the permission prompt and audio playback are allowed)
   const acceptCall = async () => {
-    if (!incomingCall || !user) return;
-
-    // Unlock audio playback synchronously from the Answer button gesture.
+    const call = incomingCallRef.current;
+    if (!call || !user) return;
     callAudioElementRef.current?.play().catch(() => {});
+    unlockCallAudio();
+    stopRingtoneRef.current?.();
+    stopRingtoneRef.current = null;
+    const callRef = doc(firestore, 'calls', call.id);
+    const accepted: ActiveCall = { id: call.id, partnerId: call.callerId, partnerName: call.callerName, partnerAvatar: call.callerAvatar, callType: call.callType, isCaller: false, status: 'connecting' };
+    showIncomingCall(null);
+    activeCallRef.current = accepted;
+    setActiveCall(accepted);
+    currentCallDocIdRef.current = call.id;
 
-    if (stopRingtoneRef.current) {
-      stopRingtoneRef.current();
-      stopRingtoneRef.current = null;
-    }
-
-    const callDocId = incomingCall.id;
-    const callerId = incomingCall.callerId;
-    const callType = incomingCall.callType;
-    const offer = incomingCall.offer;
-
-    const acceptedCall: ActiveCall = {
-      id: callDocId,
-      partnerId: callerId,
-      partnerName: incomingCall.callerName,
-      partnerAvatar: incomingCall.callerAvatar,
-      callType,
-      isCaller: false,
-      status: 'connected'
-    };
-    setActiveCall(acceptedCall);
-    activeCallRef.current = acceptedCall;
-    currentCallDocIdRef.current = callDocId;
-    setIncomingCall(null);
-
+    let media: Awaited<ReturnType<typeof getCallMedia>>;
     try {
-      // Media and peer connection are prepared on the incoming ring screen where possible.
-      const prepared = preparedIncomingRef.current?.id === callDocId
-        ? await preparedIncomingRef.current.promise
-        : await (async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({
-              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0, sampleRate: 48000, channelCount: 1 } as MediaTrackConstraints,
-              video: callType === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
-            });
-            const pc = new RTCPeerConnection({ ...(await getCallIceConfig()), iceCandidatePoolSize: 10 });
-            stream.getTracks().forEach(track => pc.addTrack(track, stream));
-            if (callType === 'audio') pc.addTransceiver('video', { direction: 'sendrecv' });
-            if (offer) await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            return { pc, stream };
-          })();
-      const { pc, stream } = prepared;
-      if (!activeCallRef.current || activeCallRef.current.status === 'ended') {
-        stream.getTracks().forEach(t => t.stop());
-        pc.close();
+      media = await getCallMedia(call.callType);
+    } catch (err) {
+      setCallNotice(callMediaErrorMessage(err, call.callType, 'accept'));
+      updateDoc(callRef, { status: 'declined', reason: 'no_permission', endedAt: Date.now(), endedBy: user.id }).catch(() => {});
+      cleanUpCallMedia();
+      return;
+    }
+    try {
+      const snapshot = await getDoc(callRef);
+      const data = snapshot.data() as CallDoc | undefined;
+      if (!data || data.status !== 'ringing' || data.endedAt || !data.offer) {
+        media.stream.getTracks().forEach(track => track.stop());
+        setCallNotice('This call has already ended.');
+        cleanUpCallMedia();
         return;
       }
-      localStreamRef.current = stream;
-      peerConnectionRef.current = pc;
-
-      // Send our candidates from the very first one (see startCall): the caller needs them to reach us.
-      pc.onicecandidate = (event) => {
-        if (!event.candidate) return;
-        const cand = event.candidate.toJSON();
-        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-          socketRef.current.send(JSON.stringify({
-            type: 'call:ice-candidate',
-            rawType: 'ice_candidate',
-            targetUserId: callerId,
-            candidate: cand
-          }));
-        }
-        if (callDocId && !callDocId.startsWith('ws_')) {
-          updateDoc(doc(firestore, 'calls', callDocId), { receiverCandidates: arrayUnion(cand) }).catch(() => {});
-        }
-      };
-
-      pc.ontrack = event => {
-        event.track.enabled = true;
-        event.track.onunmute = () => publishRemoteTracks(event.track);
-        event.track.onmute = () => publishRemoteTracks(event.track);
-        event.track.onended = () => publishRemoteTracks();
-        publishRemoteTracks(event.track);
-      };
-
-      // 3. Set Remote Description (Caller's Offer)
-      if (offer && !pc.remoteDescription && pc.signalingState !== 'closed') {
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        while (pendingCandidatesRef.current.length > 0) {
-          const cand = pendingCandidatesRef.current.shift();
-          if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-        }
-      }
-
-      // 4. Create Answer
+      if (activeCallRef.current?.id !== call.id) { media.stream.getTracks().forEach(track => track.stop()); return; }
+      if (media.videoFallback) setCallNotice('No camera found, so you joined with audio only.');
+      const pc = await createPeer(call.id, 'receiver', media.stream, call.callType);
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      await applyRemoteCandidates(pc, remoteCandidates(data, 'receiver'));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
-      // Deliver the answer over the live signaling socket.
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          type: 'call:answer',
-          rawType: 'call_answer',
-          callerId,
-          receiverId: user.id,
-          answer: { type: answer.type, sdp: answer.sdp }
-        }));
-      }
-
-      // 5. Update Call Document in Firestore 'calls' collection
-      if (callDocId && !callDocId.startsWith('ws_')) {
-        try {
-          await updateDoc(doc(firestore, 'calls', callDocId), {
-            status: 'connected',
-            answer: {
-              type: answer.type,
-              sdp: answer.sdp
-            }
-          });
-
-        } catch (e) {
-          console.warn('Could not update call doc on accept:', e);
-        }
-      }
-
+      watchCallDoc(call.id, 'receiver');
+      await updateDoc(callRef, { status: 'answered', answer: { type: answer.type, sdp: answer.sdp }, answeredAt: Date.now() });
     } catch (err) {
       console.error('Failed to answer call:', err);
-      setCallNotice(err instanceof DOMException && err.name === 'NotAllowedError' ? 'Allow microphone and camera access to accept this call.' : 'Could not connect the call. Check your devices and network, then try again.');
+      setCallNotice('Could not connect the call. Check your internet connection and try again.');
+      updateDoc(callRef, { endedAt: Date.now(), endedBy: user.id }).catch(() => {});
       cleanUpCallMedia();
     }
   };
 
   const rejectCall = async () => {
-    if (stopRingtoneRef.current) {
-      stopRingtoneRef.current();
-      stopRingtoneRef.current = null;
-    }
-
-    if (incomingCall) {
-      const callDocId = incomingCall.id;
-      if (callDocId && !callDocId.startsWith('ws_')) {
-        try {
-          await updateDoc(doc(firestore, 'calls', callDocId), { status: 'declined' });
-        } catch {}
-      }
-
-      if (socketRef.current && user && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          type: 'call:rejected',
-          rawType: 'call_reject',
-          callerId: incomingCall.callerId,
-          receiverId: user.id,
-          reason: 'declined'
-        }));
-      }
-    }
-
-    cleanUpCallMedia();
+    stopRingtoneRef.current?.();
+    stopRingtoneRef.current = null;
+    const call = incomingCallRef.current;
+    showIncomingCall(null);
+    if (call && user) await updateDoc(doc(firestore, 'calls', call.id), { status: 'declined', reason: 'declined', endedAt: Date.now(), endedBy: user.id }).catch(() => {});
   };
 
-  const endCall = async () => {
-    if (stopRingtoneRef.current) {
-      stopRingtoneRef.current();
-      stopRingtoneRef.current = null;
-    }
+  const endCall = () => hangUp();
 
-    const docId = currentCallDocIdRef.current;
-    if (docId && !docId.startsWith('ws_')) {
-      try {
-        await updateDoc(doc(firestore, 'calls', docId), { status: 'ended' });
-      } catch {}
-    }
-
-    if (activeCall && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: 'call:end',
-        rawType: 'call_end',
-        targetUserId: activeCall.partnerId
-      }));
-    }
-
-    if (activeCall && activeCall.isCaller && activeCall.status !== 'connected') logMissedCall(activeCall);
-
-    cleanUpCallMedia();
-  };
-
+  // Caller side: nobody's device rang -> unavailable; rang but no answer -> missed.
   useEffect(() => {
-    if (!activeCall || !activeCall.isCaller || activeCall.status === 'connected') return;
-    const callKey=activeCall.id;
-    const timer=window.setTimeout(()=>{
-      const current=activeCallRef.current;
-      if(current&&current.isCaller&&current.status!=='connected'&&current.id===callKey){
-        logMissedCall(current);
-        void endCall();
-        setCallNotice('No answer. A missed call was added to your chat.');
-      }
-    },45000);
-    return()=>window.clearTimeout(timer);
-  },[activeCall?.id,activeCall?.status,activeCall?.isCaller,logMissedCall]);
+    if (!activeCall?.isCaller || !activeCall.id || (activeCall.status !== 'calling' && activeCall.status !== 'ringing')) return;
+    const callId = activeCall.id;
+    const status = activeCall.status;
+    const timer = window.setTimeout(() => {
+      const current = activeCallRef.current;
+      if (!current || current.id !== callId || current.status !== status) return;
+      setCallNotice(status === 'calling' ? unavailableMessage(current.partnerName, 'unavailable') : `${current.partnerName} didn't answer. A missed call was added to your chat.`);
+      void hangUp(status === 'calling' ? 'unavailable' : 'no_answer');
+    }, status === 'calling' ? CALL_DELIVERY_TIMEOUT_MS : CALL_ANSWER_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeCall?.id, activeCall?.status, activeCall?.isCaller, hangUp]);
+
+  // Closing the tab mid-call: tell the other side (best effort).
+  useEffect(() => {
+    const onUnload = () => { if (activeCallRef.current) void hangUpRef.current(); else if (incomingCallRef.current) void rejectCallRef.current(); };
+    window.addEventListener('pagehide', onUnload);
+    return () => window.removeEventListener('pagehide', onUnload);
+  }, []);
+  const rejectCallRef = useRef(rejectCall);
+  rejectCallRef.current = rejectCall;
 
   const sendTyping = (receiverId: string, isTyping: boolean) => {
     if (!socketRef.current || !user || socketRef.current.readyState !== WebSocket.OPEN) return;
@@ -1255,10 +1017,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const switchCallType = useCallback((callType: 'audio' | 'video') => {
     const call = activeCallRef.current;
     if (!call) return;
-    setActiveCall(current => current ? { ...current, callType } : null);
-    activeCallRef.current = { ...call, callType };
-    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: 'call-switch-type', targetUserId: call.partnerId, callType }));
-  }, []);
+    updateActiveCall({ callType });
+    if (call.id && user?.id) updateDoc(doc(firestore, 'calls', call.id), { currentType: callType, currentTypeBy: user.id }).catch(() => {});
+  }, [updateActiveCall, user?.id]);
 
   return (
     <SocketContext.Provider

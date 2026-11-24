@@ -235,6 +235,9 @@ const CallScreenView: React.FC = () => {
     const s = secs % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
+  const statusLabel = (prefix = '') => !activeCall ? '' : activeCall.status === 'connected' ? `${prefix}${formatTime(callDuration)}`
+    : activeCall.status === 'ringing' ? 'Ringing…' : activeCall.status === 'connecting' ? 'Connecting…' : activeCall.isCaller ? 'Calling…' : 'Connecting…';
+  const remoteVideoLive = Boolean(remoteStream?.getVideoTracks().some(track => !track.muted && track.readyState === 'live'));
 
   // 1. Incoming Call Ringing Screen
   if (incomingCall) {
@@ -289,7 +292,7 @@ const CallScreenView: React.FC = () => {
           <div>
             <p className="text-sm font-bold truncate max-w-[120px]">{activeCall.partnerName}</p>
             <p className="text-xs text-emerald-400 font-mono">
-              {activeCall.status === 'connected' ? formatTime(callDuration) : 'Calling...'}
+              {statusLabel()}
             </p>
           </div>
           <button
@@ -325,7 +328,7 @@ const CallScreenView: React.FC = () => {
               <div>
                 <h4 className="text-sm font-semibold">{activeCall.partnerName}</h4>
                 <p className="text-xs text-emerald-400 font-mono">
-                  {activeCall.status === 'connected' ? `Connected • ${formatTime(callDuration)}` : 'Calling...'}
+                  {statusLabel('Connected • ')}
                 </p>
               </div>
             </div>
@@ -340,10 +343,10 @@ const CallScreenView: React.FC = () => {
 
           {/* Main Video & Audio Area */}
           <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-blue-900">
-            {activeCall.callType === 'video' && Boolean(remoteStream?.getVideoTracks().some(track => !track.muted && track.readyState === 'live')) ? (
+            {activeCall.callType === 'video' ? (
               <>
                 {/* Full Screen Remote Video */}
-                {remoteStream && remoteStream.getVideoTracks().length > 0 ? (
+                {remoteStream && remoteVideoLive ? (
                   <video
                     ref={(el) => {
                       remoteVideoRef.current = el;
@@ -371,11 +374,9 @@ const CallScreenView: React.FC = () => {
                       </span>
                     </div>
                     <p className="mt-5 text-base font-medium text-white">
-                      {remoteStream?.getVideoTracks().length && remoteStream.getVideoTracks().every(track => track.muted) ? 'Their camera is off' : activeCall.status === 'connected' ? 'Video connecting...' : 'Waiting for answer...'}
+                      {activeCall.status === 'connected' ? (remoteStream?.getVideoTracks().length ? 'Their camera is off' : 'Video connecting…') : statusLabel()}
                     </p>
-                    {activeCall.status !== 'connected' && (
-                      <p className="mt-1 text-xs text-blue-100/70">Connecting peer-to-peer via WebRTC...</p>
-                    )}
+                    <p className="mt-1 text-lg font-bold text-white">{activeCall.partnerName}</p>
                   </div>
                 )}
 
@@ -418,7 +419,7 @@ const CallScreenView: React.FC = () => {
                 </div>
                 <h3 className="text-2xl font-bold text-white mt-6">{activeCall.partnerName}</h3>
                 <p className="mt-1 font-mono text-sm font-semibold text-blue-200">
-                  {activeCall.status === 'connected' ? `In Call (${formatTime(callDuration)})` : 'Ringing...'}
+                  {statusLabel()}
                 </p>
 
 
@@ -539,7 +540,7 @@ export const CallScreen: React.FC = () => {
       <CallScreenView />
       {callNotice && (
         <div
-          className="fixed top-4 left-1/2 -translate-x-1/2 z-[120] max-w-sm w-[calc(100%-2rem)] bg-slate-900 text-white text-sm rounded-2xl shadow-2xl px-4 py-3 flex items-start gap-3"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000] max-w-sm w-[calc(100%-2rem)] bg-slate-900 text-white text-sm rounded-2xl shadow-2xl px-4 py-3 flex items-start gap-3"
           role="status"
         >
           <span className="flex-1 leading-snug">{callNotice}</span>

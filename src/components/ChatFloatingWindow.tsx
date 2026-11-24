@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, Message } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
+import { avatarClick } from './AvatarViewer';
 import { api } from '../services/api';
 import { assetUrl } from '../services/apiBase';
 import { VoiceRecorder } from './VoiceRecorder';
@@ -334,7 +335,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
       <div className="px-3.5 py-2.5 bg-white border-b border-slate-100 flex items-center justify-between shadow-xs">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="relative">
-            <img src={partner.avatar} alt={partner.name} className="w-9 h-9 rounded-full object-cover" />
+            <img src={partner.avatar} alt={partner.name} title="View profile picture" onClick={avatarClick({ userId: partner.id, name: partner.name, avatar: partner.avatar })} className="w-9 h-9 cursor-pointer rounded-full object-cover" />
             {isPartnerOnline && (
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-2 ring-white" />
             )}
