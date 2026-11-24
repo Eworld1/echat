@@ -119,7 +119,23 @@ export interface Story extends MediaEdit {
   views: number;
   createdAt: number;
   fromReelId: string;
+  /** Multi-photo stories (TikTok-style carousel): up to 10 photos, or 1 video. mediaUrl = mediaUrls[0]. */
+  mediaUrls?: string[];
+  mediaTypes?: MediaType[];
+  caption?: string;
+  hashtags?: string[];
+  /** Background music (mirrors soundUrl / soundName / soundArtist). */
+  musicUrl?: string;
+  musicTitle?: string;
+  musicArtist?: string;
+  likesCount?: number;
+  commentsCount?: number;
+  savesCount?: number;
+  sharesCount?: number;
+  isActive?: boolean;
 }
+
+export interface StoryComment { id: string; storyId: string; authorId: string; authorName: string; authorAvatar: string; text: string; createdAt: number }
 
 export interface ReelComment {
   id: string;
@@ -204,6 +220,18 @@ function toStory(id: string, data: DocumentData): Story {
     coverUrl: str(data.coverUrl),
     stickers: arr<StorySticker>(data.stickers),
     allowedViewers: arr<string>(data.allowedViewers),
+    mediaUrls: arr<string>(data.mediaUrls).filter(url => typeof url === 'string' && url).slice(0, 10),
+    mediaTypes: arr<string>(data.mediaTypes).map(type => (type === 'video' ? 'video' : 'image') as MediaType),
+    caption: str(data.caption),
+    hashtags: arr<string>(data.hashtags).filter(tag => typeof tag === 'string'),
+    musicUrl: str(data.musicUrl) || str(data.soundUrl),
+    musicTitle: str(data.musicTitle) || str(data.soundName),
+    musicArtist: str(data.musicArtist) || str(data.soundArtist),
+    likesCount: Math.max(0, num(data.likesCount)),
+    commentsCount: Math.max(0, num(data.commentsCount)),
+    savesCount: Math.max(0, num(data.savesCount)),
+    sharesCount: Math.max(0, num(data.sharesCount)),
+    isActive: data.isActive !== false,
     expiresAt: num(data.expiresAt),
     views: num(data.views),
     createdAt: num(data.createdAt),
@@ -442,7 +470,7 @@ export async function createStory(input: NewStory): Promise<string> {
   const ref = doc(collection(db, 'stories'));
   const now = Date.now();
   await setDoc(ref, clean({ ...input, views: 0, createdAt: now, expiresAt: now + STORY_TTL_MS }));
-  if (input.soundId) void bumpSoundUse(input.soundId);
+  if (/^(trend|sfx)_\d{2}$/.test(input.soundId)) void bumpSoundUse(input.soundId); // built-in library only
   return ref.id;
 }
 
@@ -458,11 +486,96 @@ export function listenStories(uid: string, onStories: (stories: Story[]) => void
   );
 }
 
+/**
+ * One view per person: storyViews/{storyId}_{uid} is created together with views + 1
+ * (firestore.rules refuse a second one), so reloading never inflates the count.
+ */
 const storyViewedThisSession = new Set<string>();
-export function recordStoryView(id: string): void {
-  if (storyViewedThisSession.has(id)) return;
-  storyViewedThisSession.add(id);
-  void updateDoc(doc(db, 'stories', id), { views: increment(1) }).catch(() => storyViewedThisSession.delete(id));
+export function recordStoryView(id: string, uid = '', ownerId = ''): void {
+  const key = `${id}_${uid}`;
+  if (!uid || storyViewedThisSession.has(key)) return;
+  storyViewedThisSession.add(key);
+  const viewRef = doc(db, 'storyViews', key);
+  void getDoc(viewRef).then(snapshot => {
+    if (snapshot.exists()) return;
+    const batch = writeBatch(db);
+    batch.set(viewRef, { storyId: id, userId: uid, ownerId, viewedAt: Date.now() });
+    batch.update(doc(db, 'stories', id), { views: increment(1) });
+    return batch.commit();
+  }).catch(() => { /* already viewed, or offline */ });
+}
+
+// ---- story likes / saves / comments / shares (TikTok-style rail) ----
+export function listenMyStoryLikes(uid: string, onIds: (ids: Set<string>) => void): Unsubscribe {
+  if (!uid) { onIds(new Set()); return () => {}; }
+  return onSnapshot(query(collection(db, 'storyLikes'), where('userId', '==', uid)), snapshot => onIds(new Set(snapshot.docs.map(item => str(item.data().storyId)))), () => onIds(new Set()));
+}
+export async function setStoryLike(storyId: string, uid: string, liked: boolean): Promise<void> {
+  const batch = writeBatch(db);
+  const likeRef = doc(db, 'storyLikes', `${storyId}_${uid}`);
+  if (liked) batch.set(likeRef, { storyId, userId: uid, createdAt: Date.now() }); else batch.delete(likeRef);
+  batch.update(doc(db, 'stories', storyId), { likesCount: increment(liked ? 1 : -1) });
+  await batch.commit();
+}
+export function listenMyStorySaves(uid: string, onIds: (ids: Set<string>) => void): Unsubscribe {
+  if (!uid) { onIds(new Set()); return () => {}; }
+  return onSnapshot(query(collection(db, 'storySaves'), where('userId', '==', uid)), snapshot => onIds(new Set(snapshot.docs.map(item => str(item.data().storyId)))), () => onIds(new Set()));
+}
+export async function setStorySave(storyId: string, uid: string, saved: boolean): Promise<void> {
+  const batch = writeBatch(db);
+  const saveRef = doc(db, 'storySaves', `${storyId}_${uid}`);
+  if (saved) batch.set(saveRef, { storyId, userId: uid, savedAt: Date.now() }); else batch.delete(saveRef);
+  batch.update(doc(db, 'stories', storyId), { savesCount: increment(saved ? 1 : -1) });
+  await batch.commit();
+}
+export function listenStoryComments(storyId: string, onComments: (comments: StoryComment[]) => void, onError: (error: Error) => void): Unsubscribe {
+  return onSnapshot(query(collection(db, 'storyComments'), where('storyId', '==', storyId)), snapshot => {
+    onComments(snapshot.docs.map(item => {
+      const data = item.data();
+      return { id: item.id, storyId: str(data.storyId), authorId: str(data.authorId), authorName: str(data.authorName) || 'EChat user', authorAvatar: str(data.authorAvatar), text: str(data.text), createdAt: num(data.createdAt) };
+    }).sort((a, b) => a.createdAt - b.createdAt));
+  }, onError);
+}
+export async function addStoryComment(storyId: string, author: { id: string; name: string; avatar: string }, text: string): Promise<void> {
+  const body = text.trim().slice(0, 500);
+  if (!body) throw new Error('Write a comment first.');
+  const commentRef = doc(collection(db, 'storyComments'));
+  const batch = writeBatch(db);
+  batch.set(commentRef, { storyId, authorId: author.id, authorName: author.name.slice(0, 120), authorAvatar: author.avatar.slice(0, 1000), text: body, createdAt: Date.now() });
+  batch.update(doc(db, 'stories', storyId), { commentsCount: increment(1), lastCommentId: commentRef.id });
+  await batch.commit();
+}
+export async function deleteStoryComment(commentId: string): Promise<void> {
+  await deleteDoc(doc(db, 'storyComments', commentId));
+}
+export function countStoryShare(storyId: string): void {
+  void updateDoc(doc(db, 'stories', storyId), { sharesCount: increment(1) }).catch(() => {});
+}
+
+/** New TikTok-style story: up to 10 photos (or 1 video) + caption + background music. */
+export type NewCarouselStory = Omit<NewStory, 'mediaUrl' | 'mediaType' | 'coverUrl'> & { mediaUrls: string[]; mediaTypes: MediaType[]; coverUrl?: string };
+export async function createCarouselStory(input: NewCarouselStory): Promise<string> {
+  const mediaUrls = input.mediaUrls.slice(0, 10);
+  const mediaTypes = input.mediaTypes.slice(0, mediaUrls.length);
+  if (!mediaUrls.length) throw new Error('Add at least one photo or video.');
+  return createStory({
+    ...input,
+    mediaUrl: mediaUrls[0],
+    mediaType: mediaTypes[0] || 'image',
+    coverUrl: input.coverUrl || mediaUrls[0],
+    mediaUrls,
+    mediaTypes,
+    caption: (input.caption || '').slice(0, 2200),
+    hashtags: (input.hashtags || []).slice(0, 20),
+    musicUrl: input.soundUrl,
+    musicTitle: input.soundName,
+    musicArtist: input.soundArtist,
+    likesCount: 0,
+    commentsCount: 0,
+    savesCount: 0,
+    sharesCount: 0,
+    isActive: true
+  });
 }
 export async function deleteStory(id: string): Promise<void> {
   await deleteDoc(doc(db, 'stories', id));

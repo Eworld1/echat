@@ -66,7 +66,7 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats' && document[0] != 'reelReports' && document[0] != 'marketFavorites' && document[0] != 'calls' && document[0] != 'posts' && document[0] != 'verificationCodes' && document[0] != 'verificationSends';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats' && document[0] != 'reelReports' && document[0] != 'marketFavorites' && document[0] != 'calls' && document[0] != 'posts' && document[0] != 'verificationCodes' && document[0] != 'verificationSends' && document[0] != 'storyLikes' && document[0] != 'storySaves' && document[0] != 'storyComments' && document[0] != 'storyViews';
     }
 
     // ---------------- GAMES HUB ----------------
@@ -518,6 +518,30 @@ service cloud.firestore {
       allow delete: if signedIn() && resource.data.userId == request.auth.uid;
     }
 
+    // Stories (single media, or TikTok-style carousel: up to 10 photos / 1 video + caption + music).
+    // Counters only move together with the matching like / save / comment / view document.
+    function storyPath(storyId) {
+      return /databases/$(database)/documents/stories/$(storyId);
+    }
+
+    function storyViewAdded(storyId) {
+      let viewPath = /databases/$(database)/documents/storyViews/$(storyId + '_' + request.auth.uid);
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views']) &&
+        request.resource.data.views == resource.data.get('views', 0) + 1 &&
+        !exists(viewPath) && existsAfter(viewPath);
+    }
+
+    function storyCommentAdded(storyId) {
+      let commentId = request.resource.data.get('lastCommentId', '');
+      let commentPath = /databases/$(database)/documents/storyComments/$(commentId);
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['commentsCount', 'lastCommentId']) &&
+        commentId is string && commentId.size() > 0 &&
+        !exists(commentPath) && existsAfter(commentPath) &&
+        getAfter(commentPath).data.storyId == storyId &&
+        getAfter(commentPath).data.authorId == request.auth.uid &&
+        request.resource.data.commentsCount == resource.data.get('commentsCount', 0) + 1;
+    }
+
     match /stories/{storyId} {
       allow read: if signedIn() && request.auth.uid in resource.data.allowedViewers;
       allow create: if verifiedUser() &&
@@ -526,10 +550,70 @@ service cloud.firestore {
         validMediaFields(request.resource.data) &&
         request.resource.data.stickers is list && request.resource.data.stickers.size() <= 10 &&
         request.resource.data.views == 0 &&
+        request.resource.data.get('mediaUrls', []) is list && request.resource.data.get('mediaUrls', []).size() <= 10 &&
+        request.resource.data.get('caption', '') is string && request.resource.data.get('caption', '').size() <= 2200 &&
+        request.resource.data.get('likesCount', 0) == 0 && request.resource.data.get('commentsCount', 0) == 0 &&
+        request.resource.data.get('savesCount', 0) == 0 && request.resource.data.get('sharesCount', 0) == 0 &&
         request.resource.data.expiresAt is int &&
         request.resource.data.expiresAt <= request.time.toMillis() + 86400000 + 300000;
-      allow update: if signedIn() && request.auth.uid in resource.data.allowedViewers && viewIncrement();
+      allow update: if signedIn() && request.auth.uid in resource.data.allowedViewers && (
+        storyViewAdded(storyId) ||
+        counterChange('likesCount', /databases/$(database)/documents/storyLikes/$(storyId + '_' + request.auth.uid)) ||
+        counterChange('savesCount', /databases/$(database)/documents/storySaves/$(storyId + '_' + request.auth.uid)) ||
+        storyCommentAdded(storyId) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sharesCount']) &&
+          request.resource.data.sharesCount == resource.data.get('sharesCount', 0) + 1));
       allow delete: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /storyViews/{viewId} {
+      allow get: if signedIn() && viewId.split('_').size() == 2 && viewId.split('_')[1] == request.auth.uid;
+      allow list: if signedIn() && (resource.data.userId == request.auth.uid || resource.data.ownerId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid &&
+        viewId == request.resource.data.storyId + '_' + request.auth.uid &&
+        request.resource.data.keys().hasOnly(['storyId', 'userId', 'ownerId', 'viewedAt']) &&
+        getAfter(storyPath(request.resource.data.storyId)).data.get('views', 0) ==
+          get(storyPath(request.resource.data.storyId)).data.get('views', 0) + 1;
+      allow update, delete: if false;
+    }
+
+    match /storyLikes/{likeId} {
+      allow get: if signedIn() && likeId.split('_').size() == 2 && likeId.split('_')[1] == request.auth.uid;
+      allow list: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid &&
+        likeId == request.resource.data.storyId + '_' + request.auth.uid &&
+        request.resource.data.keys().hasOnly(['storyId', 'userId', 'createdAt']) &&
+        getAfter(storyPath(request.resource.data.storyId)).data.get('likesCount', 0) ==
+          get(storyPath(request.resource.data.storyId)).data.get('likesCount', 0) + 1;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid &&
+        getAfter(storyPath(resource.data.storyId)).data.get('likesCount', 0) ==
+          get(storyPath(resource.data.storyId)).data.get('likesCount', 0) - 1;
+      allow update: if false;
+    }
+
+    match /storySaves/{saveId} {
+      allow get: if signedIn() && saveId.split('_').size() == 2 && saveId.split('_')[1] == request.auth.uid;
+      allow list: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid &&
+        saveId == request.resource.data.storyId + '_' + request.auth.uid &&
+        request.resource.data.keys().hasOnly(['storyId', 'userId', 'savedAt']) &&
+        getAfter(storyPath(request.resource.data.storyId)).data.get('savesCount', 0) ==
+          get(storyPath(request.resource.data.storyId)).data.get('savesCount', 0) + 1;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid &&
+        getAfter(storyPath(resource.data.storyId)).data.get('savesCount', 0) ==
+          get(storyPath(resource.data.storyId)).data.get('savesCount', 0) - 1;
+      allow update: if false;
+    }
+
+    match /storyComments/{commentId} {
+      allow read: if signedIn();
+      allow create: if verifiedUser() && request.resource.data.authorId == request.auth.uid &&
+        request.resource.data.keys().hasOnly(['storyId', 'authorId', 'authorName', 'authorAvatar', 'text', 'createdAt']) &&
+        request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 500 &&
+        getAfter(storyPath(request.resource.data.storyId)).data.get('lastCommentId', '') == commentId;
+      allow update: if false;
+      allow delete: if signedIn() && (resource.data.authorId == request.auth.uid ||
+        get(storyPath(resource.data.storyId)).data.get('userId', '') == request.auth.uid || isAdmin());
     }
 
     match /storyVotes/{voteId} {

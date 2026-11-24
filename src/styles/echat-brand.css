@@ -77,3 +77,16 @@ html.dark .echat-classic :is(.text-blue-600, .text-blue-700, .text-\[\#1877F2\],
 /* Softer, rounder cards across the feed */
 .echat-classic article.rounded-2xl { border-radius: var(--ec-radius); }
 html:not(.dark) .echat-classic article.rounded-2xl.shadow-sm { box-shadow: 0 1px 2px rgba(30, 16, 70, 0.04), 0 8px 24px -14px rgba(46, 16, 101, 0.16); }
+
+/* Stories: double-tap heart pop + like bump */
+@keyframes ec-heart-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.3) rotate(-12deg); }
+  18% { opacity: 1; transform: translate(-50%, -50%) scale(1.15) rotate(-6deg); }
+  32% { transform: translate(-50%, -50%) scale(0.95) rotate(-4deg); }
+  70% { opacity: 1; transform: translate(-50%, -70%) scale(1) rotate(0deg); }
+  100% { opacity: 0; transform: translate(-50%, -120%) scale(0.8) rotate(0deg); }
+}
+.ec-heart-pop { animation: ec-heart-pop 900ms cubic-bezier(.2,.8,.2,1) forwards; }
+@keyframes ec-like-bump { 0% { transform: scale(1); } 40% { transform: scale(1.3); } 100% { transform: scale(1); } }
+.ec-like-bump { animation: ec-like-bump 320ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .ec-heart-pop { animation-duration: 600ms; } .ec-like-bump { animation: none; } }

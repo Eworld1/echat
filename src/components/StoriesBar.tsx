@@ -5,10 +5,11 @@ import { api } from '../services/api';
 import { auth } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
-import { Image as ImageIcon, Plus, Type, X } from 'lucide-react';
+import { Images, Plus, Sparkles, Type, X } from 'lucide-react';
 import { CreateStoryModal } from './CreateStoryModal';
 import { CreateStudio } from './reels/CreateStudio';
-import { StoryViewer, type StoryGroup, type ViewerStory } from './reels/StoryViewer';
+import { StoryViewer, type StoryGroup, type StoryMusic, type ViewerStory } from './reels/StoryViewer';
+import { StoryComposer } from './reels/StoryComposer';
 import { DEFAULT_EDIT, listenStories, type Story as FireStory } from '../services/reels/reelsStore';
 
 interface StoriesBarProps {
@@ -25,11 +26,36 @@ function writeSeen(seen: Set<string>) {
 }
 
 function fromFirestore(story: FireStory): ViewerStory {
+  // New TikTok-style photo stories (mediaUrls) play as a carousel with background music.
+  const photos = story.mediaType === 'image' && story.mediaUrls?.length ? story.mediaUrls : [];
+  const carousel = photos.length > 0 && story.mediaTypes?.length === photos.length;
   return {
     key: `fs_${story.id}`, source: 'firestore', id: story.id, authorId: story.userId, authorName: story.userName, authorAvatar: story.userAvatar,
     createdAt: story.createdAt, kind: story.mediaType, mediaUrl: story.mediaUrl, coverUrl: story.coverUrl,
-    edit: story, stickers: story.stickers, views: story.views
+    edit: story, stickers: story.stickers, views: story.views,
+    carousel,
+    slides: carousel ? photos.map(url => ({ url, kind: 'image' as const })) : undefined,
+    caption: story.caption || '',
+    hashtags: story.hashtags || [],
+    music: story.musicUrl ? { id: story.soundId, url: story.musicUrl, title: story.musicTitle || 'Music', artist: story.musicArtist || '' } : null,
+    likesCount: story.likesCount || 0,
+    commentsCount: story.commentsCount || 0,
+    savesCount: story.savesCount || 0,
+    sharesCount: story.sharesCount || 0
   };
+}
+
+/** ?story=<id> from a shared link (opened once, then removed from the address bar). */
+function takeStoryParam(): string {
+  try { return (new URL(window.location.href).searchParams.get('story') || '').slice(0, 200); } catch { return ''; }
+}
+function clearStoryParam() {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('story')) return;
+    url.searchParams.delete('story');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`);
+  } catch { /* ignore */ }
 }
 function fromLegacy(story: Story): ViewerStory {
   return {
@@ -48,6 +74,10 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
   const [fireStories, setFireStories] = useState<FireStory[]>([]);
   const [seen, setSeen] = useState<Set<string>>(() => readSeen());
   const [viewerGroup, setViewerGroup] = useState<number | null>(null);
+  const [viewerStoryId, setViewerStoryId] = useState('');
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerSound, setComposerSound] = useState<StoryMusic | null>(null);
+  const [linkedStory] = useState(takeStoryParam);
   const [menuOpen, setMenuOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
@@ -104,6 +134,20 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
     });
   }, [fireStories, legacyStories, seen, uid, user]);
 
+  // Shared link (?story=…): open that story once it has loaded (only people allowed to see it can).
+  useEffect(() => {
+    if (!linkedStory || viewerGroup !== null) return;
+    const index = groups.findIndex(group => group.stories.some(story => story.id === linkedStory));
+    if (index >= 0) { setViewerStoryId(linkedStory); setViewerGroup(index); clearStoryParam(); }
+  }, [groups, linkedStory, viewerGroup]);
+  useEffect(() => {
+    if (!linkedStory) return;
+    const timer = window.setTimeout(() => {
+      if (new URL(window.location.href).searchParams.has('story')) { clearStoryParam(); setStoryToast('This story has expired or is only visible to friends.'); }
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [linkedStory]);
+
   const ownGroupIndex = groups.findIndex(group => group.authorId === uid);
   const otherGroups = groups.filter(group => group.authorId !== uid);
 
@@ -159,7 +203,8 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
         <div className="fixed inset-0 z-[215] flex items-end justify-center bg-black/50 sm:items-center" role="dialog" aria-modal="true" aria-label="Add to story" onClick={() => setMenuOpen(false)}>
           <div className="w-full max-w-sm space-y-2 rounded-t-2xl bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:rounded-2xl" onClick={event => event.stopPropagation()}>
             <div className="flex items-center justify-between"><h2 className="font-extrabold text-slate-900">Add to Story</h2><button type="button" onClick={() => setMenuOpen(false)} aria-label="Close" className="grid h-9 w-9 place-items-center rounded-full hover:bg-slate-100"><X size={18} /></button></div>
-            <button type="button" onClick={() => { setMenuOpen(false); setStudioOpen(true); }} className="flex min-h-14 w-full items-center gap-3 rounded-xl bg-[#F2F4F7] px-4 text-left font-bold text-slate-900"><ImageIcon className="text-[#1877F2]" />Photo or video story<span className="ml-auto text-xs font-normal text-slate-500">music, stickers, polls</span></button>
+            <button type="button" onClick={() => { setMenuOpen(false); setComposerSound(null); setComposerOpen(true); }} className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-[#e2c06e] bg-[#fffbeb] px-4 text-left font-bold text-slate-900"><Images className="text-[#b68428]" />Photos &amp; video<span className="ml-auto text-xs font-normal text-slate-500">up to 10 photos + music</span></button>
+            <button type="button" onClick={() => { setMenuOpen(false); setStudioOpen(true); }} className="flex min-h-14 w-full items-center gap-3 rounded-xl bg-[#F2F4F7] px-4 text-left font-bold text-slate-900"><Sparkles className="text-[#1877F2]" />Story studio<span className="ml-auto text-xs font-normal text-slate-500">stickers, polls, effects</span></button>
             <button type="button" onClick={() => { setMenuOpen(false); setTextOpen(true); }} className="flex min-h-14 w-full items-center gap-3 rounded-xl bg-[#F2F4F7] px-4 text-left font-bold text-slate-900"><Type className="text-fuchsia-600" />Text story</button>
           </div>
         </div>
@@ -169,13 +214,16 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
         <StoryViewer
           groups={groups}
           startGroup={viewerGroup}
-          onClose={() => setViewerGroup(null)}
+          startStoryId={viewerStoryId || undefined}
+          onClose={() => { setViewerGroup(null); setViewerStoryId(''); }}
+          onUseSound={music => { setViewerGroup(null); setViewerStoryId(''); setComposerSound(music); setComposerOpen(true); }}
           onSeen={markSeen}
           onReply={handleReply}
           onLegacyView={story => { void api.viewStory(story.id).catch(() => {}); }}
         />
       )}
 
+      {composerOpen && <StoryComposer presetSound={composerSound} onClose={() => setComposerOpen(false)} onCreated={message => { setComposerOpen(false); setStoryToast(message); }} />}
       {studioOpen && <CreateStudio mode="story" onClose={() => setStudioOpen(false)} onCreated={message => { setStudioOpen(false); setStoryToast(message); }} />}
 
       <CreateStoryModal
