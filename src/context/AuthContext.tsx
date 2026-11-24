@@ -8,7 +8,6 @@ import {
   signOut, 
   onAuthStateChanged,
   GoogleAuthProvider,
-  FacebookAuthProvider,
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
@@ -38,7 +37,7 @@ interface AuthContextType {
   devKey: string | null;
   setDevKey: (key: string | null) => void;
   login: (email: string, password: string, remember?: boolean) => Promise<void>;
-  /** Google / Facebook sign-in. New people get `pendingSocialSignup` and must finish with completeSocialSignup. */
+  /** Google sign-in. New people get `pendingSocialSignup` and must finish with completeSocialSignup. */
   loginWithProvider: (provider: SocialProvider, remember?: boolean) => Promise<void>;
   pendingSocialSignup: PendingSocialSignup | null;
   completeSocialSignup: (data: { name: string; dob: string }) => Promise<void>;
@@ -68,7 +67,8 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export type SocialProvider = 'google' | 'facebook';
+// Facebook login was removed: Google is the only social sign-in.
+export type SocialProvider = 'google';
 export interface PendingSocialSignup { provider: SocialProvider; name: string; email: string; photoURL: string }
 
 // "Remember me" off: the sign-in lasts only for this browser session.
@@ -93,7 +93,7 @@ async function applyRememberMe(remember: boolean): Promise<void> {
 /** Plain-language messages for Firebase sign-in errors. */
 export function friendlyAuthError(error: unknown, provider?: SocialProvider): string {
   const code = String((error as { code?: string })?.code || '');
-  const name = provider === 'facebook' ? 'Facebook' : 'Google';
+  const name = 'Google';
   switch (code) {
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
@@ -393,7 +393,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  /** Signed in with Google/Facebook: use the existing EChat profile, or ask the person to finish sign-up. */
+  /** Signed in with Google: use the existing EChat profile, or ask the person to finish sign-up. */
   const finishSocialSignIn = async (firebaseUser: FirebaseUser, provider: SocialProvider) => {
     let profile = await getUserById(firebaseUser.uid);
     if (!profile && firebaseUser.email) profile = await getUserByEmail(firebaseUser.email.toLowerCase());
@@ -416,9 +416,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginWithProvider = async (provider: SocialProvider, remember = true) => {
     await applyRememberMe(remember);
-    const authProvider = provider === 'google' ? new GoogleAuthProvider() : new FacebookAuthProvider();
-    if (authProvider instanceof GoogleAuthProvider) authProvider.setCustomParameters({ prompt: 'select_account' });
-    else authProvider.addScope('email');
+    const authProvider = new GoogleAuthProvider();
+    authProvider.setCustomParameters({ prompt: 'select_account' });
     try {
       const credential = await signInWithPopup(auth, authProvider);
       await finishSocialSignIn(credential.user, provider);
@@ -437,15 +436,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Coming back from a redirect sign-in (see loginWithProvider).
   useEffect(() => {
-    let provider: SocialProvider = 'google';
-    try { provider = sessionStorage.getItem('echat_social_provider') === 'facebook' ? 'facebook' : 'google'; sessionStorage.removeItem('echat_social_provider'); } catch { /* ignore */ }
+    const provider: SocialProvider = 'google';
+    try { sessionStorage.removeItem('echat_social_provider'); } catch { /* ignore */ }
     getRedirectResult(auth).then(result => { if (result?.user) void finishSocialSignIn(result.user, provider); }).catch(error => console.warn('Social sign-in redirect failed:', friendlyAuthError(error, provider)));
   }, []);
 
-  /** First Google/Facebook sign-in: create the EChat profile once the person confirms name + date of birth (18+). */
+  /** First Google sign-in: create the EChat profile once the person confirms name + date of birth (18+). */
   const completeSocialSignup = async (data: { name: string; dob: string }) => {
     const firebaseUser = auth.currentUser;
-    if (!firebaseUser || !pendingSocialSignup) throw new Error('Your sign-in expired. Please continue with Google or Facebook again.');
+    if (!firebaseUser || !pendingSocialSignup) throw new Error('Your sign-in expired. Please continue with Google again.');
     const name = data.name.trim().slice(0, 80) || pendingSocialSignup.name || 'EChat user';
     const email = (firebaseUser.email || pendingSocialSignup.email || '').toLowerCase();
     const newUser: User = {
