@@ -13,7 +13,7 @@ export interface User {
   liveAccess?: 'none' | 'pending' | 'approved' | 'blocked';
   isAdmin?: boolean;
   isVerified?: boolean; isOfficialDeveloper?: boolean;
-  /** Sign-in verification (not the blue badge): set by the server after a 6-digit code, or by Google / phone sign-in. */
+  /** Sign-in verification (not the blue badge): true once the Firebase verification link is clicked, or after Google / phone sign-in. */
   emailVerified?: boolean; phoneVerified?: boolean; phoneNumber?: string;
   boostsCount?: number; boostedBy?: string[];
   isBlocked: boolean; isOnline: boolean; lastSeen: number; createdAt: number;

@@ -1,7 +1,7 @@
 import { compressImage } from '../utils/image';
 import { onProfilePictureChanged } from '../services/profilePhotoPosts';
 import { gradientCover, initialsAvatar } from '../utils/avatar';
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   createUserWithEmailAndPassword,
   sendEmailVerification,
@@ -58,21 +58,23 @@ interface AuthContextType {
     termsAccepted: boolean 
   }) => Promise<void>;
   logout: () => Promise<void>;
-  /** Waiting for a 6-digit code (email sign-up, older unverified account, or phone). */
+  /** Email: waiting for the Firebase verification link to be clicked. Phone: waiting for the SMS code. */
   pendingVerification: PendingVerification | null;
-  /** Email sign-up step 1: send the code. No account exists until the code is confirmed. */
+  /** Email sign-up: creates the Firebase account and sends the verification link (no codes). */
   startEmailSignup: (data: EmailSignupData) => Promise<void>;
-  /** Phone sign-in: check the 6-digit SMS code. */
-  confirmVerificationCode: (code: string) => Promise<void>;
+  /** Phone sign-in: check the SMS code Firebase texted. */
+  confirmSmsCode: (code: string) => Promise<void>;
   /** Email: reload the Firebase user; true (and signed in) once the verification link was clicked. */
   checkEmailVerified: () => Promise<boolean>;
   /** Email: send the Firebase verification link again; resolves with seconds until the next resend. */
   resendVerificationEmail: () => Promise<number>;
-  /** Send a new code; resolves with seconds until the next resend is allowed. */
-  resendVerificationCode: () => Promise<number>;
+  /** Phone: text a new SMS code; resolves with seconds until the next resend is allowed. */
+  resendSmsCode: () => Promise<number>;
   cancelVerification: () => Promise<void>;
   /** Phone sign-in / sign-up: sends an SMS code through Firebase Phone Auth. */
   startPhoneSignIn: (phoneNumber: string, recaptchaContainerId: string, remember?: boolean) => Promise<void>;
+  /** Remove the invisible reCAPTCHA (call when the sign-in screen unmounts). */
+  clearRecaptcha: () => void;
   quickSwitchUser: (userId: string) => Promise<void>;
   updateCurrentUser: (updates: Partial<User>) => Promise<void>;
   /** Merge an already-saved user object (e.g. the server's reply) into the signed-in user. */
@@ -221,7 +223,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [activePage, setActivePage] = useState<Page | null>(null);
   const [pendingSocialSignup, setPendingSocialSignup] = useState<PendingSocialSignup | null>(null);
   const [pendingVerification, setPendingVerification] = useState<PendingVerification | null>(null);
-  const phoneConfirmation = useRef<{ result: ConfirmationResult; containerId: string; verifier: RecaptchaVerifier; remember: boolean } | null>(null);
+  const phoneConfirmation = useRef<{ result: ConfirmationResult; containerId: string; remember: boolean } | null>(null);
+  /** The single invisible reCAPTCHA. Each one gets a brand-new element, so it can never be "already rendered". */
+  const recaptcha = useRef<RecaptchaVerifier | null>(null);
+  const smsInFlight = useRef<Promise<void> | null>(null);
+
+  const clearRecaptcha = useCallback(() => {
+    const verifier = recaptcha.current;
+    recaptcha.current = null;
+    try { verifier?.clear(); } catch { /* already gone */ }
+  }, []);
 
   /** Signed in but email not verified: keep them out of the app and show "Check your email". */
   const holdForVerification = async (firebaseUser: FirebaseUser): Promise<boolean> => {
@@ -401,7 +412,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await applyRememberMe(remember);
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      // Unverified email: no entry. The verify screen opens and sends a code.
+      // Unverified email: no entry. "Please verify your email first" opens with a Resend link button.
       if (await holdForVerification(cred.user)) return;
       const uid = cred.user.uid;
       let profile = await getUserById(uid);
@@ -675,12 +686,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   /** Phone sign-in: check the SMS code. */
-  const confirmVerificationCode = async (code: string) => {
+  const confirmSmsCode = async (code: string) => {
     try {
       const confirmation = phoneConfirmation.current;
-      if (!confirmation) throw new Error('This code has expired. Tap "Resend code" to get a new one.');
+      if (!confirmation) throw new Error('This code has expired. Tap "Resend SMS" to get a new one.');
       const credential = await confirmation.result.confirm(code);
       phoneConfirmation.current = null;
+      clearRecaptcha();
       setPendingVerification(null);
       await finishSocialSignIn(credential.user, 'phone');
     } catch (error) {
@@ -688,20 +700,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const sendSms = async (phoneNumber: string, containerId: string, remember: boolean) => {
-    phoneConfirmation.current?.verifier.clear();
-    const verifier = new RecaptchaVerifier(auth, containerId, { size: 'invisible' });
-    try {
-      const result = await signInWithPhoneNumber(auth, phoneNumber, verifier);
-      phoneConfirmation.current = { result, containerId, verifier, remember };
-    } catch (error) {
-      verifier.clear();
-      throw error;
-    }
+  /**
+   * Texts the SMS code. Only one send at a time; the old reCAPTCHA is cleared and a fresh one is
+   * rendered into a new child element, so double taps / resends never hit "reCAPTCHA has already been rendered".
+   */
+  const sendSms = (phoneNumber: string, containerId: string, remember: boolean): Promise<void> => {
+    if (smsInFlight.current) return smsInFlight.current;
+    const run = (async () => {
+      clearRecaptcha();
+      const host = document.getElementById(containerId);
+      if (!host) throw new Error('Could not start phone verification. Please reload the page and try again.');
+      host.replaceChildren();
+      const slot = document.createElement('div');
+      host.appendChild(slot);
+      const verifier = new RecaptchaVerifier(auth, slot, { size: 'invisible' });
+      recaptcha.current = verifier;
+      try {
+        const result = await signInWithPhoneNumber(auth, phoneNumber, verifier);
+        phoneConfirmation.current = { result, containerId, remember };
+      } catch (error) {
+        clearRecaptcha();
+        throw error;
+      }
+    })();
+    smsInFlight.current = run;
+    return run.finally(() => { smsInFlight.current = null; });
   };
 
   /** Phone: send a new SMS code. */
-  const resendVerificationCode = async (): Promise<number> => {
+  const resendSmsCode = async (): Promise<number> => {
     const pending = pendingVerification;
     if (pending?.kind !== 'phone') return resendVerificationEmail();
     try {
@@ -728,8 +755,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const cancelVerification = async () => {
     const pending = pendingVerification;
     setPendingVerification(null);
-    phoneConfirmation.current?.verifier.clear();
     phoneConfirmation.current = null;
+    clearRecaptcha();
     if (pending?.kind === 'email') await signOut(auth).catch(() => {});
   };
 
@@ -844,10 +871,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       logout, 
       pendingVerification,
       startEmailSignup,
-      confirmVerificationCode,
+      confirmSmsCode,
       checkEmailVerified,
       resendVerificationEmail,
-      resendVerificationCode,
+      resendSmsCode,
+      clearRecaptcha,
       cancelVerification,
       startPhoneSignIn,
       quickSwitchUser, 

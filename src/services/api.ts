@@ -323,17 +323,6 @@ export const api = {
     return readResponse<{ user: User; token: string; liveAuthToken?: string }>(res, 'Login failed');
   },
 
-  /** Verification codes (see server/verification.ts). Codes are only ever emailed, never returned. */
-  async verificationStatus(): Promise<{ ready: boolean; email: boolean; firebaseAdmin: boolean }> {
-    const res = await fetch(apiUrl('/api/verify/status'), { signal: AbortSignal.timeout(8000) });
-    return readResponse(res, 'Could not reach the eChat server');
-  },
-
-  async verifyRequest<T = { success: boolean; expiresInSeconds: number; resendAfterSeconds: number; message?: string }>(path: string, body: Record<string, unknown>): Promise<T> {
-    const res = await fetch(apiUrl(`/api/verify/${path}`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    return readResponse<T>(res, 'Something went wrong. Please try again.');
-  },
-
   async getMe(): Promise<User | null> {
     const res = await fetch(apiUrl('/api/auth/me'), { headers: getHeaders() });
     if (res.status === 401 || res.status === 403) return null;

@@ -21,7 +21,7 @@ export const CodeBoxes: React.FC<{ value: string; onChange: (code: string) => vo
   };
 
   return (
-    <div className="flex justify-center gap-2 sm:gap-2.5" role="group" aria-label="6-digit code">
+    <div className="flex justify-center gap-2 sm:gap-2.5" role="group" aria-label="SMS code">
       {Array.from({ length: 6 }, (_, index) => (
         <input
           key={index}
@@ -58,7 +58,7 @@ export const CodeBoxes: React.FC<{ value: string; onChange: (code: string) => vo
   );
 };
 
-/** Seconds left until "Resend code" is allowed. */
+/** Seconds left until "Resend" is allowed. */
 export function useCountdown(initialSeconds: number): [number, (seconds: number) => void] {
   const [endsAt, setEndsAt] = useState(() => Date.now() + initialSeconds * 1000);
   const [now, setNow] = useState(() => Date.now());
@@ -82,59 +82,40 @@ export function maskTarget(target: string): string {
 }
 
 /**
- * "Enter the 6-digit code we sent to …" step. The parent does the work: onVerify(code) throws with a
- * readable message on failure; onResend() returns the new cool-down in seconds.
+ * Phone only: "Enter the SMS code we sent to …". Email accounts never use codes; they get a
+ * Firebase verification link (see CheckEmailStep). onVerify(code) throws a readable error on failure;
+ * onResend() returns the new cool-down in seconds.
  */
-export const VerifyCodeStep: React.FC<{
+export const SmsCodeStep: React.FC<{
   title: string;
-  target: string;
-  channel: 'email' | 'sms';
+  phoneNumber: string;
   onVerify: (code: string) => Promise<void>;
   onResend: () => Promise<number>;
   onBack?: () => void;
   backLabel?: string;
-  /** Seconds before the first resend (60 after a fresh send, 0 when no code was sent yet). */
   initialCooldown?: number;
-  /** Extra fields shown above the button (e.g. new password). The code is submitted with them. */
-  children?: React.ReactNode;
-  submitLabel?: string;
-  /** Send the first code when this screen opens (used for older accounts that log in unverified). */
-  sendOnOpen?: boolean;
-  note?: React.ReactNode;
-  autoSubmit?: boolean;
-}> = ({ title, target, channel, onVerify, onResend, onBack, backLabel = 'Back', initialCooldown = 60, children, submitLabel = 'Verify', sendOnOpen, note, autoSubmit = true }) => {
+}> = ({ title, phoneNumber, onVerify, onResend, onBack, backLabel = 'Back', initialCooldown = 60 }) => {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [left, restart] = useCountdown(initialCooldown);
   const [resending, setResending] = useState(false);
-  const sentOnOpen = useRef(false);
 
-  const resend = async (silent = false) => {
-    setResending(true); setError(''); if (!silent) setInfo('');
+  const resend = async () => {
+    setResending(true); setError(''); setInfo('');
     try {
       restart(await onResend());
       setCode('');
-      if (!silent) setInfo(`New code sent to ${maskTarget(target)}.`);
+      setInfo(`New SMS code sent to ${maskTarget(phoneNumber)}.`);
     } catch (err) {
-      const retry = (err as { retryAfter?: number }).retryAfter;
-      if (retry && (err as { code?: string }).code === 'resend-too-soon') restart(retry);
-      else setError(err instanceof Error ? err.message : 'Could not send a code.');
-      if (retry) restart(retry);
+      setError(err instanceof Error ? err.message : 'Could not send the SMS code.');
     } finally { setResending(false); }
   };
 
-  useEffect(() => {
-    if (!sendOnOpen || sentOnOpen.current) return;
-    sentOnOpen.current = true;
-    void resend(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sendOnOpen]);
-
   const submit = async (value = code) => {
     if (busy) return;
-    if (value.length !== 6) { setError('Enter the 6-digit code.'); return; }
+    if (value.length !== 6) { setError('Enter the full SMS code.'); return; }
     setBusy(true); setError(''); setInfo('');
     try { await onVerify(value); }
     catch (err) { setError(err instanceof Error ? err.message : 'That code didn\'t work.'); setCode(''); }
@@ -144,23 +125,19 @@ export const VerifyCodeStep: React.FC<{
   return (
     <form onSubmit={event => { event.preventDefault(); void submit(); }} className="space-y-4" noValidate>
       <div className="flex flex-col items-center gap-2 text-center">
-        <span className="grid h-14 w-14 place-items-center rounded-full bg-[#fdf6e3] text-[#a87b22] ring-2 ring-[#e9cf8a]">
-          {channel === 'email' ? <MailCheck size={26} /> : <Smartphone size={26} />}
-        </span>
+        <span className="grid h-14 w-14 place-items-center rounded-full bg-[#fdf6e3] text-[#a87b22] ring-2 ring-[#e9cf8a]"><Smartphone size={26} /></span>
         <h1 className="text-[28px] font-extrabold leading-tight tracking-tight text-[#111111]">{title}</h1>
-        <p className="text-[14px] leading-snug text-[#4b5563]">Enter the 6-digit code we sent to<br /><b className="break-all text-[#111827]">{target}</b></p>
+        <p className="text-[14px] leading-snug text-[#4b5563]">Enter the SMS code we texted to<br /><b className="break-all text-[#111827]">{phoneNumber}</b></p>
       </div>
-      <CodeBoxes value={code} onChange={value => { setCode(value); setError(''); }} onComplete={autoSubmit && !children ? value => void submit(value) : undefined} disabled={busy} invalid={Boolean(error)} />
+      <CodeBoxes value={code} onChange={value => { setCode(value); setError(''); }} onComplete={value => void submit(value)} disabled={busy} invalid={Boolean(error)} />
       {error && <p role="alert" className="text-center text-[13px] font-semibold text-[#dc2626]">{error}</p>}
       {info && !error && <p role="status" className="text-center text-[13px] font-semibold text-[#15803d]">{info}</p>}
-      {children}
-      <button type="submit" disabled={busy || code.length !== 6} className={`${authGoldButton} disabled:cursor-not-allowed`}>{busy ? <><Loader2 size={19} className="animate-spin" />Checking…</> : submitLabel}</button>
+      <button type="submit" disabled={busy || code.length !== 6} className={`${authGoldButton} disabled:cursor-not-allowed`}>{busy ? <><Loader2 size={19} className="animate-spin" />Checking…</> : 'Verify'}</button>
       <div className="text-center text-[13px] text-[#4b5563]">
         {left > 0
-          ? <span>Resend code in <b className="tabular-nums text-[#111827]">{mmss(left)}</b></span>
-          : <button type="button" onClick={() => void resend()} disabled={resending} className={`font-bold ${AUTH_GREEN} hover:underline disabled:opacity-60`}>{resending ? 'Sending…' : 'Resend code'}</button>}
+          ? <span>Resend SMS in <b className="tabular-nums text-[#111827]">{mmss(left)}</b></span>
+          : <button type="button" onClick={() => void resend()} disabled={resending} className={`font-bold ${AUTH_GREEN} hover:underline disabled:opacity-60`}>{resending ? 'Sending…' : 'Resend SMS'}</button>}
       </div>
-      <p className="text-center text-[12px] leading-snug text-[#6b7280]">{note || (channel === 'email' ? 'The code expires in 10 minutes. Check your spam folder if you don\'t see it.' : 'The code expires in a few minutes.')}</p>
       {onBack && <button type="button" onClick={onBack} className="mx-auto flex items-center gap-1 text-[13px] font-semibold text-[#6b7280] hover:text-[#1f4d1f]"><ArrowLeft size={15} />{backLabel}</button>}
     </form>
   );

@@ -116,7 +116,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({ isOpen
       <div className="space-y-4 text-center">
         <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#fdf6e3] text-[#a87b22] ring-2 ring-[#e9cf8a]"><Smartphone size={26} /></span>
         <h1 className="text-[26px] font-extrabold leading-tight text-[#111111]">Use your phone</h1>
-        <p className="text-[14px] leading-snug text-[#4b5563]">Accounts made with a phone number don't use a password. Log in with a 6-digit SMS code instead.</p>
+        <p className="text-[14px] leading-snug text-[#4b5563]">Accounts made with a phone number don't use a password. Log in with a code sent by SMS instead.</p>
         {onUsePhone && <button type="button" onClick={() => { onUsePhone(identifier.trim()); close(); }} className={authGoldButton}>Send SMS Code</button>}
         <button type="button" onClick={() => setStep('request')} className={`text-[13px] font-semibold ${AUTH_GREEN} hover:underline`}>Use my email instead</button>
       </div>

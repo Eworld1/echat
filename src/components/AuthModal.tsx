@@ -4,7 +4,7 @@ import { useAuth, type SocialProvider } from '../context/AuthContext';
 import { initialsAvatar } from '../utils/avatar';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { TermsModal } from './TermsModal';
-import { AUTH_GREEN, AUTH_LIGHT, CheckEmailStep, VerifyCodeStep, authGoldButton, authIconClass, authInputClass } from './VerifyCode';
+import { AUTH_GREEN, AUTH_LIGHT, CheckEmailStep, SmsCodeStep, authGoldButton, authIconClass, authInputClass } from './VerifyCode';
 
 /**
  * EChat sign-in: blurred office photo behind a centred white card with a thin gold border and warm gold glow.
@@ -64,7 +64,7 @@ export const EChatWordmark: React.FC<{ className?: string }> = ({ className = ''
 );
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMode = 'login' }) => {
-  const { login, startEmailSignup, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup, pendingVerification, confirmVerificationCode, checkEmailVerified, resendVerificationEmail, resendVerificationCode, cancelVerification, startPhoneSignIn } = useAuth();
+  const { login, startEmailSignup, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup, pendingVerification, confirmSmsCode, checkEmailVerified, resendVerificationEmail, resendSmsCode, cancelVerification, startPhoneSignIn, clearRecaptcha } = useAuth();
   const [phone, setPhone] = useState('+232 ');
   const [phoneFrom, setPhoneFrom] = useState<'login' | 'register'>('login');
   const [mode, setMode] = useState<Mode>(initialMode);
@@ -91,6 +91,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
   useEffect(() => { if (!error) return; const timer = window.setTimeout(() => setError(''), 7000); return () => window.clearTimeout(timer); }, [error, errorKey]);
   useEffect(() => () => { if (avatarPreview) URL.revokeObjectURL(avatarPreview); }, [avatarPreview]);
   // Finishing a Google sign-up: prefill the name.
+  // The invisible reCAPTCHA belongs to this screen: remove it when the screen goes away.
+  useEffect(() => { if (!isOpen) clearRecaptcha(); return () => clearRecaptcha(); }, [isOpen, clearRecaptcha]);
   useEffect(() => { if (pendingSocialSignup) { setName(current => current || pendingSocialSignup.name); setAgreeTerms(false); } }, [pendingSocialSignup]);
 
   if (!isOpen) return null;
@@ -237,15 +239,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
         backLabel={pending.justSignedUp ? 'Back to Log In' : 'Log out'}
       />
     ) : (
-      <VerifyCodeStep
+      <SmsCodeStep
         key={`phone-${pending.phoneNumber}`}
         title="Verify your phone"
-        target={pending.phoneNumber}
-        channel="sms"
+        phoneNumber={pending.phoneNumber}
         initialCooldown={60}
-        submitLabel="Verify"
-        onVerify={confirmVerificationCode}
-        onResend={resendVerificationCode}
+        onVerify={confirmSmsCode}
+        onResend={resendSmsCode}
         onBack={() => void cancelVerification()}
         backLabel="Change number"
       />
@@ -255,7 +255,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
       <form key="phone" onSubmit={handlePhone} className="space-y-4" noValidate>
         <div className="pb-1 text-center">
           <h1 className="text-[30px] font-extrabold leading-tight tracking-tight text-[#111111]">{phoneFrom === 'register' ? 'Sign up with phone' : 'Log in with phone'}</h1>
-          <p className="mt-1 text-[14px] text-[#4b5563]">We'll text you a 6-digit code to verify your number</p>
+          <p className="mt-1 text-[14px] text-[#4b5563]">We'll text you a code to verify your number</p>
         </div>
         <div className="relative">
           <input type="tel" inputMode="tel" value={phone} onChange={event => setPhone(event.target.value)} placeholder="+232 76 123456" autoComplete="tel" required className={inputClass} style={LIGHT_INPUT} />
