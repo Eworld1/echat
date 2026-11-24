@@ -13,7 +13,12 @@ const PREF_KEY = 'echat_push';            // 'on' | 'off' (null = never asked)
 const TOKEN_KEY = 'echat_push_token';
 const ASKED_KEY = 'echat_push_asked_at';
 const ASK_AGAIN_MS = 7 * 24 * 60 * 60 * 1000;
-const VAPID_KEY = (import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined)?.trim() || undefined;
+/**
+ * Web Push certificate (Firebase Console → Project settings → Cloud Messaging → Web configuration).
+ * This is the PUBLIC key of the pair, so it is safe in the code; VITE_FIREBASE_VAPID_KEY overrides it.
+ */
+const ECHAT_VAPID_KEY = 'BCIfjwZ3c3BrCk3UN4S7EyZmwhYvmuHMDDmLVlKEaGu5CzK9TQisPv8mSlaYmw8PKGHqEQsaTVyg_5Sql5lwqX4';
+const VAPID_KEY = (import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined)?.trim() || ECHAT_VAPID_KEY;
 export const PUSH_CHANGED_EVENT = 'echat:push-changed';
 
 export type PushState = 'unsupported' | 'blocked' | 'off' | 'on';
@@ -67,7 +72,7 @@ export async function enablePush(): Promise<PushState> {
   write(ASKED_KEY, String(Date.now()));
   if (permission !== 'granted') { changed(); return permission === 'denied' ? 'blocked' : 'off'; }
   const { getMessaging, getToken } = await import('firebase/messaging');
-  const token = await getToken(getMessaging(app), { serviceWorkerRegistration: await serviceWorker(), ...(VAPID_KEY ? { vapidKey: VAPID_KEY } : {}) });
+  const token = await getToken(getMessaging(app), { serviceWorkerRegistration: await serviceWorker(), vapidKey: VAPID_KEY });
   if (!token) throw new Error('Could not turn on notifications. Please try again.');
   await callServer('/api/push/token', { token, platform: isInstalledApp() ? 'pwa' : 'browser' });
   write(TOKEN_KEY, token);
