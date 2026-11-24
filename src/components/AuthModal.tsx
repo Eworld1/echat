@@ -1,583 +1,362 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertCircle, ArrowRight, Calendar, Camera, Compass, Eye, EyeOff, Heart, Loader2, Lock, Mail, MessageCircle, Moon, Radio, ShoppingBag, Sun, User as UserIcon, Video, X } from 'lucide-react';
+import { useAuth, type SocialProvider } from '../context/AuthContext';
+import { usePreferences } from '../context/PreferencesContext';
 import { initialsAvatar } from '../utils/avatar';
 import { BrandFooter } from './BrandFooter';
-import React, { useEffect, useRef, useState } from 'react';
-import { useAuth } from '../context/AuthContext';
+import { GlowLogo } from './BrandLogo';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { TermsModal } from './TermsModal';
-import { api } from '../services/api';
-import type { SiteConfig } from '../types';
-import { Calendar, Video, Sparkles, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose?: () => void;
+  /** "Continue as Guest to explore" (read-only preview of EChat). */
+  onContinueAsGuest?: () => void;
+  /** Open straight on "Create Account" (e.g. from the guest preview). */
+  initialMode?: 'login' | 'register';
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
-  const { login, register } = useAuth();
-  const [tab, setTab] = useState<'login' | 'register'>('login');
+type Mode = 'login' | 'register';
 
-  // Form states
+const adultCutoff = () => new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0];
+const ageFrom = (dob: string) => {
+  const birth = new Date(dob);
+  if (Number.isNaN(birth.getTime())) return 0;
+  const today = new Date();
+  const age = today.getFullYear() - birth.getFullYear();
+  const beforeBirthday = today.getMonth() < birth.getMonth() || (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate());
+  return beforeBirthday ? age - 1 : age;
+};
+
+const inputClass = 'peer h-[52px] w-full rounded-2xl border border-violet-200/70 bg-white/80 pl-11 pr-4 text-[15px] text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-500/15 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-violet-400 dark:focus:bg-white/10';
+const iconClass = 'pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 transition peer-focus:text-violet-500';
+const primaryButton = 'ec-gradient relative flex min-h-[52px] w-full items-center justify-center gap-2 overflow-hidden rounded-2xl px-5 text-base font-bold text-white shadow-lg shadow-violet-600/30 transition hover:brightness-110 hover:shadow-violet-600/40 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-400/40 active:scale-[0.99] disabled:cursor-wait disabled:opacity-70';
+
+const GoogleIcon = () => (
+  <svg viewBox="0 0 48 48" className="h-5 w-5" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" /><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" /><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" /><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" /></svg>
+);
+const FacebookIcon = () => (
+  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path fill="#1877F2" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.25h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z" /><path fill="#fff" d="m16.67 15.56.53-3.49h-3.33V9.82c0-.96.47-1.89 1.96-1.89h1.51V4.96s-1.37-.24-2.68-.24c-2.74 0-4.53 1.67-4.53 4.69v2.66H7.08v3.49h3.05V24a12.2 12.2 0 0 0 3.74 0v-8.44h2.8z" /></svg>
+);
+
+/** Left panel: animated brand gradient + a little "live stream" preview. */
+const BrandPanel: React.FC = () => {
+  const [viewers, setViewers] = useState(1284);
+  useEffect(() => {
+    const timer = window.setInterval(() => setViewers(count => count + Math.floor(Math.random() * 9) - 2), 1600);
+    return () => window.clearInterval(timer);
+  }, []);
+  const comments = [
+    { name: 'Aminata', text: 'Greetings from Freetown 🇸🇱', color: 'from-pink-400 to-rose-500' },
+    { name: 'Mohamed', text: 'This stream is fire 🔥🔥', color: 'from-sky-400 to-blue-600' },
+  ];
+  return (
+    <section aria-label="EChat" className="ec-gradient-animated relative hidden min-h-dvh overflow-hidden text-white lg:flex lg:flex-col lg:justify-between lg:p-12 xl:p-16">
+      {/* glowing orbs */}
+      <span aria-hidden="true" className="ec-float-slow absolute -left-24 top-10 h-80 w-80 rounded-full bg-fuchsia-500/40 blur-3xl" />
+      <span aria-hidden="true" className="ec-float absolute -right-16 top-1/3 h-72 w-72 rounded-full bg-cyan-400/30 blur-3xl" />
+      <span aria-hidden="true" className="ec-float-delay absolute bottom-0 left-1/3 h-96 w-96 rounded-full bg-indigo-500/40 blur-3xl" />
+      <span aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:22px_22px] [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+
+      <div className="relative flex items-center gap-4">
+        <GlowLogo size={64} />
+        <div>
+          <p className="text-3xl font-black tracking-tight">EChat</p>
+          <p className="text-sm font-semibold text-white/75">Sierra Leone's social home</p>
+        </div>
+      </div>
+
+      <div className="relative">
+        <h1 className="max-w-xl text-5xl font-black leading-[1.05] tracking-tight xl:text-6xl">
+          Chat. Stream.<br /><span className="bg-gradient-to-r from-pink-200 via-white to-cyan-200 bg-clip-text text-transparent">Connect.</span>
+        </h1>
+        <p className="mt-4 max-w-md text-lg text-white/80">Messages, HD calls, live streams, Reels and a marketplace - all in one place.</p>
+
+        {/* Live preview */}
+        <div className="ec-float mt-10 w-full max-w-[420px] overflow-hidden rounded-[28px] border border-white/20 bg-black/30 shadow-2xl shadow-black/40 backdrop-blur-xl">
+          <div className="relative aspect-[16/10] overflow-hidden bg-gradient-to-br from-violet-900 via-indigo-900 to-fuchsia-900">
+            <span aria-hidden="true" className="absolute left-1/2 top-[30%] h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-pink-500 to-violet-600 opacity-60 blur-2xl" />
+            <div className="absolute left-1/2 top-[30%] grid h-20 w-20 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-gradient-to-br from-pink-400 via-fuchsia-500 to-indigo-500 text-4xl font-black shadow-xl ring-4 ring-white/20">K</div>
+            <div className="absolute left-3 top-3 flex items-center gap-2">
+              <span className="ec-pulse-ring flex items-center gap-1 rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-black tracking-wider">● LIVE</span>
+              <span className="rounded-md bg-black/45 px-2 py-0.5 text-[11px] font-bold">👁 {viewers.toLocaleString()}</span>
+            </div>
+            <div className="absolute bottom-3 left-3 right-14 space-y-1.5">
+              {comments.map((comment, index) => (
+                <div key={comment.name} className="ec-fade-up flex items-center gap-2 rounded-full bg-black/40 py-1 pl-1 pr-3 text-[12px] backdrop-blur" style={{ animationDelay: `${index * 0.6 + 0.3}s` }}>
+                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full bg-gradient-to-br ${comment.color} text-[10px] font-black`}>{comment.name[0]}</span>
+                  <b className="font-bold">{comment.name}</b><span className="truncate text-white/85">{comment.text}</span>
+                </div>
+              ))}
+            </div>
+            <div aria-hidden="true" className="absolute bottom-3 right-3 flex flex-col items-center gap-1 text-lg">
+              <span className="ec-float-delay">💜</span><span className="ec-float">❤️</span><span className="ec-float-slow">🔥</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 px-4 py-3">
+            <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-sm font-black">K</span>
+            <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">Kadiatu is live</p><p className="truncate text-xs text-white/65">Friday night music session 🎶</p></div>
+            <Heart size={18} className="text-pink-300" fill="currentColor" />
+          </div>
+        </div>
+      </div>
+
+      <div className="relative flex flex-wrap gap-2 text-sm font-semibold">
+        {[{ icon: <MessageCircle size={15} />, label: 'Private chats' }, { icon: <Video size={15} />, label: 'HD video calls' }, { icon: <Radio size={15} />, label: 'Go live' }, { icon: <ShoppingBag size={15} />, label: 'Marketplace' }].map(item => (
+          <span key={item.label} className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 backdrop-blur">{item.icon}{item.label}</span>
+        ))}
+      </div>
+    </section>
+  );
+};
+
+export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onContinueAsGuest, initialMode = 'login' }) => {
+  const { login, register, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup } = useAuth();
+  const { resolvedTheme, setTheme } = usePreferences();
+  const [mode, setMode] = useState<Mode>(initialMode);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [welcomeConfig, setWelcomeConfig] = useState<SiteConfig>({});
+  const [remember, setRemember] = useState(() => { try { return localStorage.getItem('echat_session_only') !== '1'; } catch { return true; } });
   const [name, setName] = useState('');
   const [dob, setDob] = useState('');
-  const [bio, setBio] = useState('');
-  const [location, setLocation] = useState('');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [agreeTerms, setAgreeTerms] = useState(false);
 
-  const [errorMsg, setErrorMsg] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
-  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
+  const [error, setError] = useState('');
+  const [errorKey, setErrorKey] = useState(0);
+  const [busy, setBusy] = useState<'' | 'email' | SocialProvider>('');
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(false);
 
-  useEffect(() => {
-    api.getSiteConfig().then(setWelcomeConfig).catch(() => {});
-  }, []);
+  useEffect(() => { if (!error) return; const timer = window.setTimeout(() => setError(''), 7000); return () => window.clearTimeout(timer); }, [error, errorKey]);
+  useEffect(() => () => { if (avatarPreview) URL.revokeObjectURL(avatarPreview); }, [avatarPreview]);
+  // Finishing a Google/Facebook sign-up: prefill the name.
+  useEffect(() => { if (pendingSocialSignup) { setName(current => current || pendingSocialSignup.name); setAgreeTerms(false); } }, [pendingSocialSignup]);
 
   if (!isOpen) return null;
 
-  const calculateAge = (dobString: string): number => {
-    const birthDate = new Date(dobString);
-    if (isNaN(birthDate.getTime())) return 0;
-    const today = new Date();
-    let age = today.getFullYear() - birthDate.getFullYear();
-    const monthDiff = today.getMonth() - birthDate.getMonth();
-    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-      age--;
-    }
-    return age;
+  const fail = (message: string) => { setError(message); setErrorKey(key => key + 1); };
+  const switchMode = (next: Mode) => { setMode(next); setError(''); setShowPassword(false); };
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy('email'); setError('');
+    try { await login(email, password, remember); onClose?.(); } catch (err) { fail(err instanceof Error ? err.message : 'Login failed. Please check your details.'); } finally { setBusy(''); }
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setErrorMsg('');
+  const checkAdult = () => {
+    if (!dob) return 'Please enter your date of birth.';
+    if (ageFrom(dob) < 18) return 'You must be at least 18 years old to join EChat.';
+    if (!agreeTerms) return 'Please read and agree to the EChat Terms & Conditions.';
+    return '';
+  };
+
+  const handleRegister = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    const problem = checkAdult() || (password.length < 6 ? 'Password should be at least 6 characters.' : '');
+    if (problem) { fail(problem); return; }
+    setBusy('email'); setError('');
     try {
-      await login(email, password);
+      await register({ name: name.trim(), email, password, dob, avatarFile: avatarFile ?? undefined, bio: 'Excited to be on Echat! 👋', location: 'Global', termsAccepted: true });
       onClose?.();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Login failed. Please check your credentials.');
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (err) { fail(err instanceof Error ? err.message : 'Could not create your account.'); } finally { setBusy(''); }
   };
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg('');
-
-    if (!dob) {
-      setErrorMsg('Date of Birth is required.');
-      return;
-    }
-
-    const age = calculateAge(dob);
-    if (age < 18) {
-      setErrorMsg('You must be at least 18 years old to register on Echat.');
-      return;
-    }
-
-    if (!agreeTerms) {
-      setErrorMsg('You must read and agree to the EChat Terms & Conditions to create an account.');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      await register({
-        name,
-        email,
-        password,
-        dob,
-        avatarFile: avatarFile ?? undefined,
-        bio: bio || 'Excited to be on Echat! 👋',
-        location: location || 'Global',
-        termsAccepted: true
-      });
-      onClose?.();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Registration failed');
-    } finally {
-      setIsLoading(false);
-    }
+  const handleSocial = async (provider: SocialProvider) => {
+    if (busy) return;
+    setBusy(provider); setError('');
+    try { await loginWithProvider(provider, remember); } catch (err) { fail(err instanceof Error ? err.message : 'Sign-in failed. Please try again.'); } finally { setBusy(''); }
   };
 
-  if (String(tab) === 'login') {
-    const communityImage = '/images/welcome-bg.jpg';
-    const thumbnails = [
-      { label: 'Community member one', position: '10% center' },
-      { label: 'Community member two', position: '34% center' },
-      { label: 'Community member three', position: '57% center' },
-      { label: 'Community member four', position: '88% center' }
-    ];
+  const handleCompleteSocial = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    const problem = (!name.trim() ? 'Please enter your name.' : '') || checkAdult();
+    if (problem) { fail(problem); return; }
+    setBusy('email'); setError('');
+    try { await completeSocialSignup({ name, dob }); onClose?.(); } catch (err) { fail(err instanceof Error ? err.message : 'Could not finish sign-up.'); } finally { setBusy(''); }
+  };
 
-    return (
-      <div className="fixed inset-0 z-50 grid min-h-dvh w-full grid-cols-1 overflow-y-auto bg-[#F0F2F5] lg:grid-cols-2 lg:overflow-hidden">
-        <section aria-label="Echat community" className="flex min-h-0 flex-col bg-white lg:h-dvh">
-          <div className="min-h-[34dvh] flex-1 overflow-hidden bg-slate-200 lg:min-h-0">
-            <img
-              src={communityImage}
-              alt="Smiling Echat community member wearing a black suit"
-              className="h-full min-h-[34dvh] w-full object-cover object-[58%_center] lg:min-h-0"
-            />
-          </div>
-          <div className="grid h-[104px] shrink-0 grid-cols-4 gap-2 bg-white p-2.5 sm:h-[128px] sm:gap-3 sm:p-3 lg:h-[22%] lg:min-h-[150px] lg:max-h-[230px]">
-            {thumbnails.map(item => (
-              <div key={item.label} className="min-w-0 overflow-hidden rounded-xl bg-slate-100">
-                <img
-                  src={communityImage}
-                  alt={item.label}
-                  className="h-full w-full object-cover"
-                  style={{ objectPosition: item.position }}
-                />
-              </div>
-            ))}
-          </div>
-        </section>
+  const pickAvatar = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { fail('Please choose an image file.'); return; }
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+  };
 
-        <main className="flex min-h-[58dvh] flex-col items-center justify-center bg-[#F0F2F5] px-4 pb-8 pt-14 sm:px-8 lg:h-dvh lg:min-h-0 lg:px-10 lg:py-12">
-          <div className="relative w-full max-w-[480px] rounded-2xl bg-white px-6 pb-6 pt-[4.5rem] shadow-[0_8px_30px_rgba(0,0,0,0.12)] sm:px-10 sm:pb-8">
-            <img
-              src="/logo.png"
-              alt="EchatSl logo"
-              className="absolute left-1/2 top-0 h-[88px] w-[88px] -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-black object-cover shadow-md"
-            />
-            <h1 className="mb-6 text-center text-2xl font-bold tracking-tight text-[#1C1E21] sm:text-[30px]">
-              Welcome back to Echat
-            </h1>
+  const termsCheckbox = (
+    <label className="flex cursor-pointer select-none items-start gap-3 rounded-2xl border border-violet-200/60 bg-violet-50/60 p-3 text-[13px] leading-snug text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
+      <input type="checkbox" checked={agreeTerms} onChange={event => setAgreeTerms(event.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-violet-600" />
+      <span>I'm 18 or older and agree to the <button type="button" onClick={() => setTermsOpen(true)} className="font-bold text-violet-700 hover:underline dark:text-violet-300">EChat Terms & Conditions</button> and Community Guidelines.</span>
+    </label>
+  );
 
-            {errorMsg && (
-              <div role="alert" aria-live="polite" className="mb-4 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
-                <AlertCircle size={18} className="shrink-0 text-red-500" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
+  const passwordField = (autoComplete: string, placeholder: string) => (
+    <div className="relative">
+      <input id={`echat-${autoComplete}`} type={showPassword ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} required minLength={autoComplete === 'new-password' ? 6 : undefined} className={`${inputClass} pr-12`} />
+      <Lock size={18} className={iconClass} />
+      <button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} className="absolute right-1.5 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-slate-400 transition hover:bg-violet-50 hover:text-violet-600 dark:hover:bg-white/10">
+        {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+      </button>
+    </div>
+  );
 
-            <form onSubmit={handleLogin} className="space-y-4">
-              <label className="sr-only" htmlFor="echat-login-email">Email address</label>
-              <input
-                id="echat-login-email"
-                type="email"
-                value={email}
-                onChange={event => setEmail(event.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
-                className="h-[54px] w-full rounded-xl border border-[#CCD0D5] bg-white px-4 text-base text-[#1C1E21] outline-none transition placeholder:text-[#606770] focus:border-[#1877F2] focus:ring-2 focus:ring-blue-100"
-                required
-              />
+  const dobField = (
+    <div className="relative">
+      <input type="date" value={dob} max={adultCutoff()} onChange={event => setDob(event.target.value)} required aria-label="Date of birth" className={inputClass} />
+      <Calendar size={18} className={iconClass} />
+      <span className="mt-1 block px-1 text-[11px] text-slate-500 dark:text-slate-400">Date of birth · you must be 18+</span>
+    </div>
+  );
 
-              <label className="sr-only" htmlFor="echat-login-password">Password</label>
-              <div className="relative">
-                <input
-                  id="echat-login-password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={event => setPassword(event.target.value)}
-                  placeholder="........"
-                  autoComplete="current-password"
-                  className="h-[54px] w-full rounded-xl border border-[#CCD0D5] bg-white py-3 pl-4 pr-14 text-base text-[#1C1E21] outline-none transition placeholder:text-[#606770] focus:border-[#1877F2] focus:ring-2 focus:ring-blue-100"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(value => !value)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  aria-pressed={showPassword}
-                  className="absolute right-1 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-[#1877F2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1877F2]"
-                >
-                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                </button>
-              </div>
+  const socialButtons = (
+    <div className="grid grid-cols-2 gap-3">
+      {(['google', 'facebook'] as const).map(provider => (
+        <button key={provider} type="button" onClick={() => void handleSocial(provider)} disabled={Boolean(busy)}
+          className="flex min-h-[50px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white/90 text-sm font-bold text-slate-800 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md disabled:opacity-60 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:border-violet-400/50">
+          {busy === provider ? <Loader2 size={18} className="animate-spin" /> : provider === 'google' ? <GoogleIcon /> : <FacebookIcon />}
+          {provider === 'google' ? 'Google' : 'Facebook'}
+        </button>
+      ))}
+    </div>
+  );
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="mt-2 flex min-h-[54px] w-full items-center justify-center rounded-xl bg-[#1877F2] px-5 py-3 text-lg font-bold text-white shadow-sm transition hover:bg-[#166FE5] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 disabled:cursor-wait disabled:opacity-60"
-              >
-                {isLoading ? 'Signing in...' : 'Log in'}
-              </button>
+  const divider = (label: string) => (
+    <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wider text-slate-400"><span className="h-px flex-1 bg-slate-200 dark:bg-white/10" />{label}<span className="h-px flex-1 bg-slate-200 dark:bg-white/10" /></div>
+  );
 
-              <div className="pt-1 text-center">
-                <button
-                  type="button"
-                  onClick={() => setIsForgotModalOpen(true)}
-                  className="min-h-11 px-3 text-sm font-semibold text-[#1877F2] hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1877F2]"
-                >
-                  Forgotten password?
-                </button>
-              </div>
-
-              <div className="border-t border-[#DADDE1] pt-5">
-                <button
-                  type="button"
-                  onClick={() => { setTab('register'); setErrorMsg(''); }}
-                  className="min-h-[52px] w-full rounded-xl bg-[#42B72A] px-5 py-3 text-base font-bold text-white transition hover:bg-[#36A420] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-green-200"
-                >
-                  Create new account
-                </button>
-              </div>
-            </form>
-          </div>
-
-          <p className="mt-5 text-center text-sm text-[#606770]">
-            Don&apos;t have an account?{' '}
-            <button
-              type="button"
-              onClick={() => { setTab('register'); setErrorMsg(''); }}
-              className="font-semibold text-[#1877F2] underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1877F2]"
-            >
-              Sign up
-            </button>
-          </p>
-
-          <BrandFooter className="mt-8" />
-
-          <ForgotPasswordModal
-            isOpen={isForgotModalOpen}
-            onClose={() => setIsForgotModalOpen(false)}
-            onSuccess={() => {
-              setIsForgotModalOpen(false);
-              setTab('login');
-            }}
-          />
-        </main>
-
-        <TermsModal
-          isOpen={isTermsModalOpen}
-          onClose={() => setIsTermsModalOpen(false)}
-          onAccept={() => setAgreeTerms(true)}
-          showAcceptButton={true}
-        />
-      </div>
+  let card: React.ReactNode;
+  if (pendingSocialSignup) {
+    card = (
+      <form key="social" onSubmit={handleCompleteSocial} className="ec-slide-in-right space-y-4">
+        <div className="flex items-center gap-3">
+          <img src={pendingSocialSignup.photoURL || initialsAvatar(name || '?')} alt="" className="h-14 w-14 rounded-full object-cover ring-4 ring-violet-200 dark:ring-violet-500/30" />
+          <div className="min-w-0"><h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">Almost there!</h2><p className="truncate text-sm text-slate-500 dark:text-slate-400">{pendingSocialSignup.email || 'Finish creating your EChat account'}</p></div>
+        </div>
+        <div className="relative"><input value={name} onChange={event => setName(event.target.value)} placeholder="Your name" autoComplete="name" required maxLength={80} className={inputClass} /><UserIcon size={18} className={iconClass} /></div>
+        {dobField}
+        {termsCheckbox}
+        <button type="submit" disabled={Boolean(busy)} className={primaryButton}>{busy ? <><Loader2 size={19} className="animate-spin" />Creating your account…</> : <>Finish & enter EChat<ArrowRight size={18} /></>}</button>
+        <button type="button" onClick={() => void cancelSocialSignup()} className="w-full text-center text-sm font-semibold text-slate-500 hover:text-violet-600 dark:text-slate-400">Cancel and use another account</button>
+      </form>
+    );
+  } else if (mode === 'login') {
+    card = (
+      <form key="login" onSubmit={handleLogin} className="ec-fade-up space-y-4" noValidate={false}>
+        <div className="mb-1">
+          <h2 className="text-[28px] font-black tracking-tight text-slate-900 dark:text-white">Welcome back 👋</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Log in to keep chatting, streaming and connecting.</p>
+        </div>
+        <div className="relative"><input id="echat-login-email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Email address" autoComplete="email" required className={inputClass} /><Mail size={18} className={iconClass} /></div>
+        {passwordField('current-password', 'Password')}
+        <div className="flex items-center justify-between gap-2 text-sm">
+          <label className="flex cursor-pointer select-none items-center gap-2 font-medium text-slate-600 dark:text-slate-300">
+            <input type="checkbox" checked={remember} onChange={event => setRemember(event.target.checked)} className="h-4 w-4 accent-violet-600" />Remember me
+          </label>
+          <button type="button" onClick={() => setForgotOpen(true)} className="font-bold text-violet-700 hover:underline dark:text-violet-300">Forgot Password?</button>
+        </div>
+        <button type="submit" disabled={Boolean(busy)} className={primaryButton}>
+          {busy === 'email' ? <><Loader2 size={19} className="animate-spin" />Logging in…</> : <>Log in<ArrowRight size={18} /></>}
+        </button>
+        {divider('or continue with')}
+        {socialButtons}
+        <p className="pt-1 text-center text-sm text-slate-600 dark:text-slate-400">New to EChat? <button type="button" onClick={() => switchMode('register')} className="font-extrabold text-violet-700 hover:underline dark:text-violet-300">Create Account</button></p>
+      </form>
+    );
+  } else {
+    card = (
+      <form key="register" onSubmit={handleRegister} className="ec-slide-in-right space-y-3.5">
+        <div className="mb-1">
+          <h2 className="text-[28px] font-black tracking-tight text-slate-900 dark:text-white">Create your account ✨</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">It's free and takes less than a minute.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={() => avatarInputRef.current?.click()} className="group relative h-16 w-16 shrink-0 rounded-full" aria-label="Choose a profile picture">
+            <img src={avatarPreview || initialsAvatar(name || '?')} alt="" className="h-16 w-16 rounded-full object-cover ring-4 ring-violet-100 dark:ring-violet-500/25" />
+            <span className="ec-gradient absolute -bottom-0.5 -right-0.5 grid h-7 w-7 place-items-center rounded-full text-white ring-2 ring-white dark:ring-[#140f2b]"><Camera size={14} /></span>
+          </button>
+          <div className="relative min-w-0 flex-1"><input value={name} onChange={event => setName(event.target.value)} placeholder="Full name" autoComplete="name" required maxLength={80} className={inputClass} /><UserIcon size={18} className={iconClass} /></div>
+          <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={event => { pickAvatar(event.target.files?.[0]); event.target.value = ''; }} />
+        </div>
+        <div className="relative"><input type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Email address" autoComplete="email" required className={inputClass} /><Mail size={18} className={iconClass} /></div>
+        {passwordField('new-password', 'Create a password (6+ characters)')}
+        {dobField}
+        {termsCheckbox}
+        <button type="submit" disabled={Boolean(busy)} className={primaryButton}>
+          {busy === 'email' ? <><Loader2 size={19} className="animate-spin" />Creating account…</> : <>Create Account<ArrowRight size={18} /></>}
+        </button>
+        {divider('or sign up with')}
+        {socialButtons}
+        <p className="text-center text-sm text-slate-600 dark:text-slate-400">Already on EChat? <button type="button" onClick={() => switchMode('login')} className="font-extrabold text-violet-700 hover:underline dark:text-violet-300">Log in</button></p>
+      </form>
     );
   }
 
+  const dark = resolvedTheme === 'dark';
   return (
-    <div className="fixed inset-0 z-50 isolate flex min-h-[100dvh] w-full items-center justify-center overflow-y-auto bg-black p-4 sm:p-6">
-      {/* Blur-fill keeps the whole source photo visible on portrait screens without black bars or cropped faces. */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 scale-110 bg-cover bg-center bg-no-repeat blur-2xl" style={{ backgroundImage: "url('/images/welcome-bg.webp')" }} />
-      <img aria-hidden="true" src="/images/welcome-bg.webp" alt="" className="pointer-events-none absolute inset-0 h-full w-full object-contain" />
-      {/* Dark tint overlay for readability */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/60 to-black/75 backdrop-blur-[2px]" />
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#f7f5ff] dark:bg-[#0b0820]">
+      <div className="grid min-h-dvh lg:grid-cols-[1.08fr_1fr]">
+        <BrandPanel />
 
-      <div className="relative z-10 w-full max-w-4xl flex flex-col lg:flex-row items-center justify-between gap-8 py-6 my-auto">
-        
-        {/* Left Brand Column */}
-        <div className="w-full lg:w-1/2 space-y-5 text-center lg:text-left text-white drop-shadow-md">
-          <div className="flex items-center justify-center lg:justify-start gap-3">
-            <img src="/logo-mark-blue.svg" alt="Echat logo" className="h-14 w-14 object-contain" />
-            <h1 className="text-4xl sm:text-5xl font-black text-white tracking-tight">
-              {welcomeConfig.welcomeTitle || welcomeConfig.appName || 'EchatSl'}
-            </h1>
-          </div>
+        <main className="relative flex min-h-dvh flex-col overflow-hidden">
+          {/* soft colour wash behind the card */}
+          <span aria-hidden="true" className="ec-float-slow pointer-events-none absolute -right-20 -top-24 h-80 w-80 rounded-full bg-violet-400/25 blur-3xl dark:bg-violet-600/25" />
+          <span aria-hidden="true" className="ec-float pointer-events-none absolute -bottom-24 -left-16 h-80 w-80 rounded-full bg-pink-400/20 blur-3xl dark:bg-fuchsia-600/20" />
+          <span aria-hidden="true" className="pointer-events-none absolute left-1/3 top-1/2 h-64 w-64 rounded-full bg-sky-400/15 blur-3xl" />
 
-          <p className="text-xl sm:text-2xl font-light text-slate-100 leading-snug max-w-md mx-auto lg:mx-0">
-            {welcomeConfig.welcomeSubtitle || 'Connect with friends, share 24-hour stories, and make calls with the people in your life.'}
-          </p>
-
-          <div className="space-y-3 pt-2 hidden sm:block max-w-md mx-auto lg:mx-0 text-slate-200 text-sm">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-white/15 backdrop-blur-md text-blue-300 flex items-center justify-center border border-white/20">
-                <Video size={16} />
-              </div>
-              <span className="font-medium">HD Audio and Video Calls built-in</span>
+          <div className="relative flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+14px)] sm:px-8">
+            <div className="flex items-center gap-2.5 lg:invisible">
+              <GlowLogo size={40} />
+              <span className="ec-gradient-text text-2xl font-black tracking-tight">EChat</span>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-white/15 backdrop-blur-md text-amber-300 flex items-center justify-center border border-white/20">
-                <Sparkles size={16} />
-              </div>
-              <span className="font-medium">24-Hour Stories & real-time updates</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-white/15 backdrop-blur-md text-emerald-300 flex items-center justify-center border border-white/20">
-                <Calendar size={16} />
-              </div>
-              <span className="font-medium">18+ community verified with Date of Birth</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Auth Card: Glassmorphic Semi-transparent Design */}
-        <div className="w-full lg:w-[420px] bg-white/90 backdrop-blur-xl rounded-3xl p-6 sm:p-8 shadow-2xl border border-white/40">
-          
-          {/* Tabs */}
-          <div className="grid grid-cols-2 p-1 bg-slate-200/70 backdrop-blur-md rounded-2xl mb-5">
-            <button
-              onClick={() => { setTab('login'); setErrorMsg(''); }}
-              className={`py-2 text-xs font-bold rounded-xl transition ${
-                tab === 'login' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Log In
-            </button>
-            <button
-              onClick={() => { setTab('register'); setErrorMsg(''); }}
-              className={`py-2 text-xs font-bold rounded-xl transition ${
-                tab === 'register' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Create Account
+            <button type="button" onClick={() => setTheme(dark ? 'light' : 'dark')} aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} title={dark ? 'Light mode' : 'Dark mode'}
+              className="ec-glass grid h-11 w-11 place-items-center rounded-full text-slate-700 shadow-sm transition hover:scale-105 dark:text-amber-200">
+              {dark ? <Sun size={19} /> : <Moon size={19} />}
             </button>
           </div>
 
-          {errorMsg && (
-            <div className="p-3 bg-red-50/95 border border-red-200 text-red-700 text-xs font-semibold rounded-xl mb-4 flex items-center gap-2">
-              <AlertCircle size={16} className="text-red-500 shrink-0" />
-              <span>{errorMsg}</span>
+          <div className="relative flex flex-1 flex-col items-center justify-center px-4 py-6 sm:px-8">
+            {/* Phone: brand hero above the form */}
+            <div className="mb-6 text-center lg:hidden">
+              <p className="text-[34px] font-black leading-tight tracking-tight text-slate-900 dark:text-white">Chat. Stream. <span className="ec-gradient-text">Connect.</span></p>
+              <div className="mt-3 flex flex-wrap justify-center gap-1.5 text-xs font-semibold text-violet-800 dark:text-violet-200">
+                {['💬 Chats', '📹 Calls', '🔴 Live', '🛍️ Marketplace'].map(chip => <span key={chip} className="rounded-full bg-violet-100/80 px-2.5 py-1 dark:bg-white/10">{chip}</span>)}
+              </div>
             </div>
-          )}
 
-          {tab === 'login' ? (
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full p-3.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden transition"
-                  required
-                />
-              </div>
+            <div key={errorKey} className={`ec-glass w-full max-w-[440px] rounded-[28px] p-6 shadow-2xl shadow-violet-900/10 sm:p-8 ${error ? 'ec-shake' : ''}`}>
+              {card}
+            </div>
 
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Enter your password"
-                    autoComplete="current-password"
-                    className="w-full p-3.5 pr-12 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden transition"
-                    required
-                  />
-                  <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-500 hover:text-blue-600 rounded-lg">
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold text-base shadow-md transition cursor-pointer"
-              >
-                {isLoading ? 'Signing in...' : 'Log In'}
+            {onContinueAsGuest && !pendingSocialSignup && (
+              <button type="button" onClick={onContinueAsGuest} className="group mt-5 flex min-h-11 items-center gap-2 rounded-full px-5 text-sm font-bold text-slate-600 transition hover:bg-white/70 hover:text-violet-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white">
+                <Compass size={17} className="transition group-hover:rotate-45" />Continue as Guest to explore
               </button>
-
-              <div className="text-center pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsForgotModalOpen(true)}
-                  className="text-xs text-blue-600 hover:underline font-semibold"
-                >
-                  Forgotten password?
-                </button>
-              </div>
-            </form>
-          ) : (
-            <form onSubmit={handleRegister} className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Full Name
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="e.g. John Doe"
-                  className="w-full p-2.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full p-2.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Create a strong password"
-                    autoComplete="new-password"
-                    className="w-full p-2.5 pr-11 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
-                    required
-                  />
-                  <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 text-slate-500 hover:text-blue-600 rounded-lg">
-                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </div>
-
-              {/* Date of Birth Field (Required, 18+ only) */}
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>Date of Birth <span className="text-red-500">*</span></span>
-                  <span className="text-[10px] text-slate-500 font-normal">Must be at least 18 years old</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={dob}
-                    max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0]}
-                    onChange={e => setDob(e.target.value)}
-                    className="w-full p-2.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Profile picture: chosen directly from the device gallery (no preset photos) */}
-              <div className="pt-1">
-                <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
-                  Profile Picture
-                </label>
-                <div className="flex items-center gap-3">
-                  <img
-                    src={avatarPreview || initialsAvatar(name || '?')}
-                    alt="Your profile picture"
-                    className="w-14 h-14 rounded-full object-cover border border-slate-200 bg-slate-100"
-                  />
-                  <div className="flex flex-col items-start gap-1">
-                    <button
-                      type="button"
-                      onClick={() => avatarInputRef.current?.click()}
-                      className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition"
-                    >
-                      {avatarFile ? 'Change photo' : 'Choose from gallery'}
-                    </button>
-                    <span className="text-[10px] text-slate-400">Optional. You can add or change it later.</span>
-                  </div>
-                  <input
-                    ref={avatarInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={e => {
-                      const file = e.target.files?.[0];
-                      e.target.value = '';
-                      if (!file) return;
-                      if (!file.type.startsWith('image/')) {
-                        setErrorMsg('Please choose an image file.');
-                        return;
-                      }
-                      if (avatarPreview) URL.revokeObjectURL(avatarPreview);
-                      setAvatarFile(file);
-                      setAvatarPreview(URL.createObjectURL(file));
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Bio (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={bio}
-                  onChange={e => setBio(e.target.value)}
-                  placeholder="Share something about yourself"
-                  className="w-full p-2.5 bg-white/80 border border-slate-300 rounded-xl text-sm focus:bg-white focus:border-blue-600 focus:outline-hidden"
-                />
-              </div>
-
-              {/* Task 4: Terms and Conditions Checkbox */}
-              <div className="pt-2 bg-slate-50/80 p-3 rounded-xl border border-slate-200">
-                <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={agreeTerms}
-                    onChange={e => setAgreeTerms(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                    required
-                  />
-                  <span className="leading-tight">
-                    I agree to the{' '}
-                    <button
-                      type="button"
-                      onClick={() => setIsTermsModalOpen(true)}
-                      className="text-blue-600 font-bold hover:underline cursor-pointer"
-                    >
-                      EChat Terms & Conditions
-                    </button>
-                    , Anti-Impersonation Safeguards, and Community Guidelines.
-                  </span>
-                </label>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isLoading || !agreeTerms}
-                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl font-bold text-base shadow-md transition cursor-pointer mt-3 flex items-center justify-center gap-2"
-              >
-                {isLoading ? 'Creating Account...' : 'Sign Up for Echat'}
-              </button>
-            </form>
-          )}
-
-          {/* Footer Link to Terms & Conditions */}
-          <div className="mt-4 pt-3 border-t border-slate-200/80 text-center text-[11px] text-slate-500 flex items-center justify-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsTermsModalOpen(true)}
-              className="text-slate-600 hover:text-blue-600 hover:underline font-medium cursor-pointer"
-            >
-              Terms & Conditions
-            </button>
-            <span>•</span>
-            <span className="text-slate-400">18+ Platform Safety</span>
-            <span>•</span>
-            <span className="text-slate-400">© 2026 EChat</span>
+            )}
           </div>
 
-        </div>
+          <BrandFooter className="relative pb-[calc(20px+env(safe-area-inset-bottom))]" />
+        </main>
       </div>
 
-      <ForgotPasswordModal
-        isOpen={isForgotModalOpen}
-        onClose={() => setIsForgotModalOpen(false)}
-        onSuccess={() => {
-          setIsForgotModalOpen(false);
-          setTab('login');
-        }}
-      />
+      {/* Error toast */}
+      {error && (
+        <div role="alert" aria-live="assertive" className="ec-fade-up fixed left-1/2 top-[calc(env(safe-area-inset-top)+16px)] z-[70] flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-2xl bg-gradient-to-r from-rose-600 to-red-500 px-4 py-3 text-sm font-semibold text-white shadow-2xl shadow-rose-600/40">
+          <AlertCircle size={20} className="mt-0.5 shrink-0" />
+          <span className="flex-1 leading-snug">{error}</span>
+          <button type="button" onClick={() => setError('')} aria-label="Dismiss" className="-mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-full hover:bg-white/20"><X size={16} /></button>
+        </div>
+      )}
 
-      <TermsModal
-        isOpen={isTermsModalOpen}
-        onClose={() => setIsTermsModalOpen(false)}
-        onAccept={() => setAgreeTerms(true)}
-        showAcceptButton={true}
-      />
+      <ForgotPasswordModal isOpen={forgotOpen} onClose={() => setForgotOpen(false)} onSuccess={() => { setForgotOpen(false); switchMode('login'); }} />
+      <TermsModal isOpen={termsOpen} onClose={() => setTermsOpen(false)} onAccept={() => setAgreeTerms(true)} showAcceptButton />
     </div>
   );
 };
-

@@ -1,0 +1,79 @@
+/*
+ * EChat brand: deep purple + electric blue + pink.
+ * The signed-in app (.echat-classic) was built with Facebook-blue utility classes; these rules re-skin
+ * them in one place (like dark.css does for dark mode) so every screen picks up the EChat colours.
+ */
+:root {
+  --ec-purple: #5b21b6;
+  --ec-violet: #7c3aed;
+  --ec-blue: #2563eb;
+  --ec-electric: #3b82f6;
+  --ec-cyan: #22d3ee;
+  --ec-pink: #ec4899;
+  --ec-gradient: linear-gradient(135deg, #6d28d9 0%, #2563eb 55%, #db2777 100%);
+  --ec-gradient-soft: linear-gradient(135deg, rgba(124, 58, 237, 0.12), rgba(37, 99, 235, 0.1) 55%, rgba(236, 72, 153, 0.12));
+  --ec-radius: 20px;
+}
+
+/* ---------- reusable brand helpers ---------- */
+.ec-gradient { background-image: var(--ec-gradient); }
+.ec-gradient-text { background-image: var(--ec-gradient); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.ec-gradient-animated { background-image: linear-gradient(120deg, #4c1d95, #6d28d9, #2563eb, #0ea5e9, #db2777, #6d28d9); background-size: 300% 300%; animation: ec-gradient-shift 14s ease infinite; }
+.ec-glow { filter: drop-shadow(0 0 18px rgba(139, 92, 246, 0.65)) drop-shadow(0 0 36px rgba(236, 72, 153, 0.35)); }
+.ec-glass { background: rgba(255, 255, 255, 0.72); backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%); border: 1px solid rgba(255, 255, 255, 0.55); }
+html.dark .ec-glass { background: rgba(17, 12, 40, 0.68); border-color: rgba(255, 255, 255, 0.1); }
+.ec-card { border-radius: var(--ec-radius); box-shadow: 0 1px 2px rgba(30, 16, 70, 0.04), 0 8px 24px -12px rgba(46, 16, 101, 0.18); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.ec-card-hover:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(30, 16, 70, 0.05), 0 16px 32px -14px rgba(76, 29, 149, 0.32); }
+.ec-float { animation: ec-float 6s ease-in-out infinite; }
+.ec-float-slow { animation: ec-float 9s ease-in-out infinite; }
+.ec-float-delay { animation: ec-float 7s ease-in-out 1.5s infinite; }
+.ec-pulse-ring { animation: ec-pulse-ring 2s ease-out infinite; }
+.ec-fade-up { animation: ec-fade-up 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.ec-slide-in-right { animation: ec-slide-in-right 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.ec-shake { animation: ec-shake 0.4s ease; }
+.ec-golive { background-image: linear-gradient(135deg, #ec4899, #f43f5e 45%, #8b5cf6); box-shadow: 0 10px 28px -10px rgba(236, 72, 153, 0.75); transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease; }
+.ec-golive:hover { transform: translateY(-1px) scale(1.01); filter: saturate(1.15); box-shadow: 0 14px 34px -10px rgba(236, 72, 153, 0.9); }
+.ec-story-ring { background-image: conic-gradient(from 210deg, #ec4899, #8b5cf6, #3b82f6, #22d3ee, #ec4899); }
+
+@keyframes ec-gradient-shift { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes ec-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
+@keyframes ec-pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0.55); } 100% { box-shadow: 0 0 0 12px rgba(236, 72, 153, 0); } }
+@keyframes ec-fade-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes ec-slide-in-right { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes ec-shake { 0%, 100% { transform: none; } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ec-gradient-animated, .ec-float, .ec-float-slow, .ec-float-delay, .ec-pulse-ring, .ec-fade-up, .ec-slide-in-right, .ec-shake { animation: none !important; }
+}
+
+/* ---------- app shell background ---------- */
+html:not(.dark) .echat-classic {
+  background-color: #f6f4fd;
+  background-image:
+    radial-gradient(900px 500px at 0% -10%, rgba(124, 58, 237, 0.08), transparent 60%),
+    radial-gradient(800px 500px at 100% 0%, rgba(236, 72, 153, 0.06), transparent 60%),
+    radial-gradient(700px 600px at 50% 110%, rgba(37, 99, 235, 0.06), transparent 60%);
+  background-attachment: fixed;
+}
+html.dark .echat-classic { background-color: #0d0a1f; }
+
+/* ---------- re-skin Facebook blue -> EChat ---------- */
+.echat-classic :is(.bg-blue-600, .bg-\[\#1877F2\], .bg-\[\#1877f2\]) { background-color: var(--ec-violet); background-image: linear-gradient(135deg, #7c3aed, #2563eb); }
+.echat-classic :is(.hover\:bg-blue-700, .hover\:bg-\[\#166FE5\], .hover\:bg-blue-500):hover { background-color: #6d28d9; background-image: linear-gradient(135deg, #6d28d9, #1d4ed8); }
+.echat-classic :is(.text-blue-600, .text-blue-700, .text-\[\#1877F2\], .text-\[\#1877f2\], .text-\[\#0A2A6B\]) { color: #6d28d9; }
+.echat-classic :is(.hover\:text-blue-600, .hover\:text-\[\#1877F2\]):hover { color: #7c3aed; }
+.echat-classic :is(.border-blue-600, .border-blue-500, .border-\[\#1877F2\]) { border-color: var(--ec-violet); }
+.echat-classic :is(.focus\:border-blue-500, .focus\:border-blue-600, .focus\:border-\[\#1877F2\]):focus { border-color: var(--ec-violet); }
+.echat-classic :is(.focus\:ring-blue-100, .focus\:ring-blue-200, .focus\:ring-blue-300, .focus\:ring-blue-500):focus { --tw-ring-color: rgba(124, 58, 237, 0.28); }
+html:not(.dark) .echat-classic .bg-blue-50 { background-color: #f3edff; }
+html:not(.dark) .echat-classic .bg-blue-100 { background-color: #ebe2ff; }
+html:not(.dark) .echat-classic .bg-\[\#E7F0FD\] { background-color: #f1eaff; }
+html:not(.dark) .echat-classic .hover\:bg-\[\#E7F0FD\]:hover { background-color: #f1eaff; }
+html.dark .echat-classic :is(.bg-blue-50, .bg-\[\#E7F0FD\]) { background-color: rgba(124, 58, 237, 0.16); }
+html.dark .echat-classic .bg-blue-100 { background-color: rgba(124, 58, 237, 0.24); }
+html.dark .echat-classic :is(.text-blue-600, .text-blue-700, .text-\[\#1877F2\], .text-\[\#0A2A6B\]) { color: #c4b5fd; }
+.echat-classic .selection\:bg-blue-600 ::selection, .echat-classic.selection\:bg-blue-600 ::selection { background-color: #7c3aed; }
+
+/* Softer, rounder cards across the feed */
+.echat-classic article.rounded-2xl { border-radius: var(--ec-radius); }
+html:not(.dark) .echat-classic article.rounded-2xl.shadow-sm { box-shadow: 0 1px 2px rgba(30, 16, 70, 0.04), 0 8px 24px -14px rgba(46, 16, 101, 0.16); }

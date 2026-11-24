@@ -20,6 +20,7 @@ import { ECHAT_V2_ENABLED } from './config/featureFlags';
 import type { V2MarketListing } from './services/v2Market';
 import { Film, Home, Menu, MessageSquare, ShoppingBag } from 'lucide-react';
 
+const GuestExplore = lazy(() => import('./components/GuestExplore').then(module => ({ default: module.GuestExplore })));
 const AuthModal = lazy(() => import('./components/AuthModal').then(module => ({ default: module.AuthModal })));
 const AdminDashboard = lazy(() => import('./components/AdminDashboard').then(module => ({ default: module.AdminDashboard })));
 const ChatFloatingWindow = lazy(() => import('./components/ChatFloatingWindow').then(module => ({ default: module.ChatFloatingWindow })));
@@ -63,6 +64,8 @@ export function MainApp() {
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [activeChatPartner, setActiveChatPartner] = useState<User | null>(null);
   const [activeDmUserId, setActiveDmUserId] = useState<string | null>(null);
+  // Signed-out screens: login form, sign-up form, or the read-only guest preview.
+  const [guestScreen, setGuestScreen] = useState<'login' | 'register' | 'explore'>('login');
   const [isMessengerDrawerOpen, setIsMessengerDrawerOpen] = useState(false);
   const [showBackToast, setShowBackToast] = useState(false);
   const currentViewRef = useRef(currentView);
@@ -286,8 +289,8 @@ export function MainApp() {
   if (isLoading) {
     const checkingLiveLogin = ['/live', '/go-live'].includes(window.location.pathname);
     return (
-      <div className="min-h-screen bg-[#F0F2F5] flex flex-col items-center justify-center text-slate-500">
-        <div className="w-12 h-12 rounded-full border-4 border-blue-600 border-t-transparent animate-spin mb-4" />
+      <div className="min-h-screen bg-[#f6f4fd] flex flex-col items-center justify-center text-slate-500 dark:bg-[#0b0820]">
+        <div className="mb-4 h-12 w-12 animate-spin rounded-full border-4 border-violet-600 border-t-pink-400/20" />
         <h2 className="text-xl font-bold text-slate-800">{checkingLiveLogin ? 'Checking login…' : 'Loading EchatSL...'}</h2>
         <p className="text-xs text-slate-400 mt-1">{checkingLiveLogin ? 'Waiting for Firebase sign-in to finish' : 'Connecting to real-time socket engine'}</p>
       </div>
@@ -297,14 +300,16 @@ export function MainApp() {
   if (!user) {
     return (
       <Suspense fallback={<SplashScreen />}>
-        <AuthModal isOpen={true} />
+        {guestScreen === 'explore'
+          ? <GuestExplore onLogin={() => setGuestScreen('login')} onSignUp={() => setGuestScreen('register')} />
+          : <AuthModal key={guestScreen} isOpen={true} initialMode={guestScreen === 'register' ? 'register' : 'login'} onContinueAsGuest={() => setGuestScreen('explore')} />}
       </Suspense>
     );
   }
 
   return (
     <Suspense fallback={<div className="grid min-h-screen place-items-center bg-[#F0F2F5] text-sm font-semibold text-slate-600">Loading Echat…</div>}>
-    <div className="echat-classic min-h-screen bg-[#F2F4F7] flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
+    <div className="echat-classic min-h-screen flex flex-col text-slate-900 selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
       <InstallAppBanner />
       {/* TEMP DISABLED FOR V2 ROLLBACK: {splashHidden && <UpgradePrompt />} */}
@@ -319,7 +324,7 @@ export function MainApp() {
 
       {mobileMenuOpen && <>
         <button type="button" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} className="fixed inset-0 z-[80] bg-black/55 min-[1025px]:hidden" />
-        <LeftSidebar currentView={currentView} onNavigate={handleMobileSidebarNavigate} onOpenMessenger={() => { setMobileMenuOpen(false); handleNavigate('messages'); }} mobileDrawer onClose={() => setMobileMenuOpen(false)} />
+        <LeftSidebar currentView={currentView} onNavigate={handleMobileSidebarNavigate} onOpenMessenger={() => { setMobileMenuOpen(false); handleNavigate('messages'); }} onGoLive={() => { setMobileMenuOpen(false); setIsGoLiveOpen(true); }} mobileDrawer onClose={() => setMobileMenuOpen(false)} />
       </>}
 
       {activePage && <div className="mx-auto w-full max-w-7xl px-4 pt-2"><div className="flex items-center justify-between rounded-xl bg-blue-700 px-4 py-2 text-xs font-semibold text-white">You are posting as {activePage.name}<button onClick={() => switchIdentity(null)} className="underline">Switch back to Personal</button></div></div>}
@@ -331,6 +336,7 @@ export function MainApp() {
           currentView={currentView}
           onNavigate={handleNavigate}
           onOpenMessenger={() => handleNavigate('messages')}
+          onGoLive={() => setIsGoLiveOpen(true)}
         />
 
         {/* Central Stage */}
@@ -340,7 +346,8 @@ export function MainApp() {
             <Feed
               onOpenChat={handleOpenChat}
               onViewProfile={(uid) => handleNavigate('profile', uid)}
-              onOpenGoLive={() => handleNavigate('live')}
+              onOpenGoLive={() => setIsGoLiveOpen(true)}
+              onOpenSection={target => target === 'marketplace' ? navigateMarket('/marketplace/mine') : handleNavigate(target === 'live' ? 'live' : target === 'messages' ? 'messages' : 'feed')}
             />
           )}
 
@@ -406,7 +413,7 @@ export function MainApp() {
         </main>
 
         {/* Right Contacts Sidebar (Desktop XL) */}
-        {currentView !== 'dashboard' && currentView !== 'live' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} /></div>}
+        {currentView !== 'dashboard' && currentView !== 'live' && <div className="hidden xl:block"><RightSidebar onOpenChat={handleOpenChat} onViewProfile={uid => handleNavigate('profile', uid)} onWatchLive={stream => setActiveViewerStream(stream)} onOpenLive={() => handleNavigate('live')} /></div>}
       </div>
 
       <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur min-[769px]:hidden">

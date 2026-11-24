@@ -6,7 +6,16 @@ import {
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signOut, 
-  onAuthStateChanged 
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  FacebookAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
+  type User as FirebaseUser
 } from 'firebase/auth';
 import { 
   doc, 
@@ -28,7 +37,12 @@ interface AuthContextType {
   isDeveloper: boolean;
   devKey: string | null;
   setDevKey: (key: string | null) => void;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, remember?: boolean) => Promise<void>;
+  /** Google / Facebook sign-in. New people get `pendingSocialSignup` and must finish with completeSocialSignup. */
+  loginWithProvider: (provider: SocialProvider, remember?: boolean) => Promise<void>;
+  pendingSocialSignup: PendingSocialSignup | null;
+  completeSocialSignup: (data: { name: string; dob: string }) => Promise<void>;
+  cancelSocialSignup: () => Promise<void>;
   register: (data: { 
     name: string; 
     email: string; 
@@ -53,6 +67,52 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export type SocialProvider = 'google' | 'facebook';
+export interface PendingSocialSignup { provider: SocialProvider; name: string; email: string; photoURL: string }
+
+// "Remember me" off: the sign-in lasts only for this browser session.
+const SESSION_ONLY_KEY = 'echat_session_only';
+const SESSION_ALIVE_KEY = 'echat_session_alive';
+try {
+  if (localStorage.getItem(SESSION_ONLY_KEY) === '1' && !sessionStorage.getItem(SESSION_ALIVE_KEY)) {
+    ['echat_user_id', 'echat_token', 'echat_live_auth'].forEach(key => localStorage.removeItem(key));
+  }
+  sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
+} catch { /* storage blocked */ }
+
+async function applyRememberMe(remember: boolean): Promise<void> {
+  try {
+    if (remember) localStorage.removeItem(SESSION_ONLY_KEY);
+    else localStorage.setItem(SESSION_ONLY_KEY, '1');
+    sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
+  } catch { /* storage blocked */ }
+  await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence).catch(() => {});
+}
+
+/** Plain-language messages for Firebase sign-in errors. */
+export function friendlyAuthError(error: unknown, provider?: SocialProvider): string {
+  const code = String((error as { code?: string })?.code || '');
+  const name = provider === 'facebook' ? 'Facebook' : 'Google';
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+    case 'auth/invalid-login-credentials':
+      return 'Wrong email or password. Please try again.';
+    case 'auth/invalid-email': return 'That email address doesn\'t look right.';
+    case 'auth/user-disabled': return 'This account has been disabled. Contact EChat support.';
+    case 'auth/too-many-requests': return 'Too many attempts. Wait a few minutes, or reset your password.';
+    case 'auth/network-request-failed': return 'No internet connection. Check your network and try again.';
+    case 'auth/operation-not-allowed': return `${name} sign-in isn't switched on yet. An admin must enable it in Firebase → Authentication → Sign-in method.`;
+    case 'auth/unauthorized-domain': return `This website isn't approved for ${name} sign-in yet. An admin must add it in Firebase → Authentication → Settings → Authorized domains.`;
+    case 'auth/account-exists-with-different-credential': return 'This email already has an EChat account with a different sign-in method. Log in with your email and password.';
+    case 'auth/popup-blocked': return `Your browser blocked the ${name} window. Allow pop-ups and try again.`;
+    case 'auth/email-already-in-use': return 'An account with this email address already exists.';
+    case 'auth/weak-password': return 'Password should be at least 6 characters.';
+    default: return (error as Error)?.message || 'Something went wrong. Please try again.';
+  }
+}
 
 // Keeps the Express server's copy of the user in step with the real (Firebase) profile.
 function syncServerProfile(profile: { name: string; avatar: string; coverPhoto: string; bio: string; location: string }): void {
@@ -98,6 +158,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [devKey, setDevKeyState] = useState<string | null>(() => localStorage.getItem('echat_dev_key'));
   const [myPages, setMyPages] = useState<Page[]>([]);
   const [activePage, setActivePage] = useState<Page | null>(null);
+  const [pendingSocialSignup, setPendingSocialSignup] = useState<PendingSocialSignup | null>(null);
 
   useEffect(() => {
     const onProfileUpdated = (event: Event) => {
@@ -253,9 +314,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
-  const login = async (email: string, password: string) => {
-    setIsLoading(true);
+  const login = async (email: string, password: string, remember = true) => {
+    // No global isLoading here: it swapped the login page for the loading screen, so a failed
+    // login came back to an empty form without its error message. The form shows its own spinner.
     const cleanEmail = email.toLowerCase().trim();
+    await applyRememberMe(remember);
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
       const uid = cred.user.uid;
@@ -324,12 +387,104 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem('echat_token', res.token || res.user.id);
         if (res.liveAuthToken) localStorage.setItem('echat_live_auth', res.liveAuthToken);
         setUser(res.user);
-      } catch (backendErr) {
-        throw firebaseErr;
+      } catch {
+        throw new Error(friendlyAuthError(firebaseErr));
       }
-    } finally {
-      setIsLoading(false);
     }
+  };
+
+  /** Signed in with Google/Facebook: use the existing EChat profile, or ask the person to finish sign-up. */
+  const finishSocialSignIn = async (firebaseUser: FirebaseUser, provider: SocialProvider) => {
+    let profile = await getUserById(firebaseUser.uid);
+    if (!profile && firebaseUser.email) profile = await getUserByEmail(firebaseUser.email.toLowerCase());
+    if (profile && isRemovedDemoAccount(profile)) {
+      await signOut(auth);
+      throw new Error('This legacy demo account was removed. Please use your personal account.');
+    }
+    if (!profile) {
+      setPendingSocialSignup({ provider, name: firebaseUser.displayName || '', email: firebaseUser.email || '', photoURL: firebaseUser.photoURL || '' });
+      return;
+    }
+    setPendingSocialSignup(null);
+    localStorage.setItem('echat_user_id', profile.id);
+    localStorage.setItem('echat_token', profile.id);
+    updateDoc(doc(db, 'users', profile.id), { isOnline: true, lastSeen: Date.now() }).catch(() => {});
+    setUser(profile);
+    syncServerProfile(profile);
+    setUser(await withServerSocial(profile));
+  };
+
+  const loginWithProvider = async (provider: SocialProvider, remember = true) => {
+    await applyRememberMe(remember);
+    const authProvider = provider === 'google' ? new GoogleAuthProvider() : new FacebookAuthProvider();
+    if (authProvider instanceof GoogleAuthProvider) authProvider.setCustomParameters({ prompt: 'select_account' });
+    else authProvider.addScope('email');
+    try {
+      const credential = await signInWithPopup(auth, authProvider);
+      await finishSocialSignIn(credential.user, provider);
+    } catch (error) {
+      const code = String((error as { code?: string })?.code || '');
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return;
+      // Some phones/in-app browsers can't open pop-ups: continue in the same tab instead.
+      if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
+        try { sessionStorage.setItem('echat_social_provider', provider); } catch { /* ignore */ }
+        await signInWithRedirect(auth, authProvider);
+        return;
+      }
+      throw new Error(friendlyAuthError(error, provider));
+    }
+  };
+
+  // Coming back from a redirect sign-in (see loginWithProvider).
+  useEffect(() => {
+    let provider: SocialProvider = 'google';
+    try { provider = sessionStorage.getItem('echat_social_provider') === 'facebook' ? 'facebook' : 'google'; sessionStorage.removeItem('echat_social_provider'); } catch { /* ignore */ }
+    getRedirectResult(auth).then(result => { if (result?.user) void finishSocialSignIn(result.user, provider); }).catch(error => console.warn('Social sign-in redirect failed:', friendlyAuthError(error, provider)));
+  }, []);
+
+  /** First Google/Facebook sign-in: create the EChat profile once the person confirms name + date of birth (18+). */
+  const completeSocialSignup = async (data: { name: string; dob: string }) => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser || !pendingSocialSignup) throw new Error('Your sign-in expired. Please continue with Google or Facebook again.');
+    const name = data.name.trim().slice(0, 80) || pendingSocialSignup.name || 'EChat user';
+    const email = (firebaseUser.email || pendingSocialSignup.email || '').toLowerCase();
+    const newUser: User = {
+      id: firebaseUser.uid,
+      name,
+      email,
+      dob: data.dob,
+      passwordHash: '',
+      avatar: /^https:\/\//.test(pendingSocialSignup.photoURL) ? pendingSocialSignup.photoURL : initialsAvatar(name),
+      coverPhoto: gradientCover(name),
+      bio: 'Excited to be on Echat! 👋',
+      location: 'Global',
+      work: '',
+      education: '',
+      role: 'user',
+      isVerified: false,
+      isOfficialDeveloper: false,
+      boostsCount: 0,
+      boostedBy: [],
+      isBlocked: false,
+      isOnline: true,
+      lastSeen: Date.now(),
+      createdAt: Date.now(),
+      friends: [],
+      friendRequestsSent: [],
+      friendRequestsReceived: []
+    };
+    await setDoc(doc(db, 'users', newUser.id), { ...newUser, termsAccepted: true, signInProvider: pendingSocialSignup.provider });
+    localStorage.setItem('echat_user_id', newUser.id);
+    localStorage.setItem('echat_token', newUser.id);
+    setPendingSocialSignup(null);
+    setUser(newUser);
+    syncServerProfile(newUser);
+    setUser(await withServerSocial(newUser));
+  };
+
+  const cancelSocialSignup = async () => {
+    setPendingSocialSignup(null);
+    await signOut(auth).catch(() => {});
   };
 
   const register = async (data: { 
@@ -343,7 +498,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     location?: string; 
     termsAccepted: boolean 
   }) => {
-    setIsLoading(true);
     const cleanEmail = data.email.toLowerCase().trim();
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, data.password);
@@ -413,9 +567,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else if (err?.code === 'auth/invalid-email') {
         throw new Error('The email address is invalid.');
       }
-      throw err;
-    } finally {
-      setIsLoading(false);
+      throw new Error(friendlyAuthError(err));
     }
   };
 
@@ -515,6 +667,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       logout, 
       quickSwitchUser, 
       updateCurrentUser, 
+      loginWithProvider,
+      pendingSocialSignup,
+      completeSocialSignup,
+      cancelSocialSignup,
       updateUser, 
       refreshUser,
       myPages,

@@ -10,18 +10,22 @@ import { PostCard } from './PostCard';
 import { ProfilePhotoPostCard } from './ProfilePhotoPostCard';
 import { listenProfilePhotoPosts, type ProfilePhotoPost } from '../services/profilePhotoPosts';
 import { CreatePostModal } from './CreatePostModal';
+import { DashboardHeader } from './DashboardHeader';
 import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown } from 'lucide-react';
 
 interface FeedProps {
   onOpenChat: (user: User) => void;
   onViewProfile: (userId: string) => void;
   onOpenGoLive: () => void;
+  /** Stat cards on the dashboard header open these sections. */
+  onOpenSection?: (target: 'profile' | 'live' | 'messages' | 'marketplace') => void;
 }
 
 export const Feed: React.FC<FeedProps> = ({
   onOpenChat,
   onViewProfile,
   onOpenGoLive,
+  onOpenSection,
 }) => {
   const { user } = useAuth();
   const { t } = usePreferences();
@@ -143,13 +147,21 @@ export const Feed: React.FC<FeedProps> = ({
         </div>
       )}
 
+      {/* Welcome, today's date, Go Live and my stats */}
+      <DashboardHeader onGoLive={onOpenGoLive} onOpen={target => (target === 'profile' && user ? onViewProfile(user.id) : onOpenSection?.(target))} />
+
+      {/* 24-Hour Stories (circles) */}
+      <div className="ec-card bg-white px-3 pt-3 dark:bg-[#161033]">
+        <StoriesBar onOpenChatWithUser={onOpenChat} />
+      </div>
+
       {/* Post Composer Card */}
-      <div className="bg-white rounded-2xl p-4 shadow-xs border border-slate-200">
-        <div className="flex items-center gap-3 pb-3 border-b border-slate-100">
-          <UserAvatar src={user?.avatar} name={user?.name || 'You'} size={40} onClick={() => user && onViewProfile(user.id)} className="ring-1 ring-slate-200" />
+      <div className="ec-card bg-white p-4 dark:bg-[#161033]">
+        <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-white/10">
+          <span className="ec-story-ring shrink-0 rounded-full p-[2px]"><UserAvatar src={user?.avatar} name={user?.name || 'You'} size={40} onClick={() => user && onViewProfile(user.id)} className="ring-2 ring-white dark:ring-[#161033]" /></span>
           <button
             onClick={() => setIsCreateModalOpen(true)}
-            className="flex-1 bg-slate-100 hover:bg-slate-200/80 text-slate-500 text-left text-sm px-4 py-2.5 rounded-full transition cursor-pointer"
+            className="flex-1 rounded-full bg-violet-50 px-4 py-3 text-left text-sm text-slate-500 transition hover:bg-violet-100/80 cursor-pointer dark:bg-white/5 dark:text-slate-400 dark:hover:bg-white/10"
           >
             {t('composer_mind', { name: user?.name?.split(' ')[0] || '' })}
           </button>
@@ -158,7 +170,7 @@ export const Feed: React.FC<FeedProps> = ({
         <div className="grid grid-cols-3 pt-2 text-xs font-semibold text-slate-600">
           <button
             onClick={onOpenGoLive}
-            className="py-2 hover:bg-rose-50/70 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-rose-600 font-bold"
+            className="py-2 hover:bg-pink-50 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-pink-600 font-bold dark:hover:bg-white/5"
           >
             <Video size={18} className="text-rose-500" />
             <span className="hidden sm:inline">{t('go_live')}</span>
@@ -182,8 +194,6 @@ export const Feed: React.FC<FeedProps> = ({
         </div>
       </div>
 
-      {/* 24-Hour Stories Reel */}
-      <StoriesBar onOpenChatWithUser={onOpenChat} />
 
       {/* Posts Stream */}
       {isLoading ? (

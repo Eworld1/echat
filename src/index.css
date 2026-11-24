@@ -1,6 +1,10 @@
 @import "tailwindcss" source(none);
 @source "./";
 @import "./dark.css";
+@import "./styles/echat-brand.css";
+
+/* dark: utilities follow the in-app theme switch (html.dark), not just the phone setting */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer utilities {
   .mirror {
@@ -34,9 +38,8 @@ header.sticky { padding-top: env(safe-area-inset-top); }
 }
 
 /* Classic Echat keeps its routes and behavior while using the refreshed solid palette. */
-.echat-classic { color:#111827; background:#F0F2F5; }
-.echat-classic header.sticky { background:#fff; border-color:#D9DDE3; }
+/* EChat brand (purple / electric blue / pink): see styles/echat-brand.css. The old rules here that
+   banned purple/violet/indigo colours inside the app were removed with the brand refresh. */
+.echat-classic { color:#111827; }
+html.dark .echat-classic { color:#e2e8f0; }
 .echat-classic aside button > div[class*="bg-"] { background-color:#F0F2F5!important; color:#0A2A6B!important; }
-.echat-classic [class*="bg-purple-"],.echat-classic [class*="bg-violet-"],.echat-classic [class*="bg-fuchsia-"],.echat-classic [class*="bg-indigo-"] { background-color:#E8EEF7!important; }
-.echat-classic [class*="text-purple-"],.echat-classic [class*="text-violet-"],.echat-classic [class*="text-fuchsia-"],.echat-classic [class*="text-indigo-"] { color:#0A2A6B!important; }
-.echat-classic [class*="border-purple-"],.echat-classic [class*="border-violet-"],.echat-classic [class*="border-fuchsia-"],.echat-classic [class*="border-indigo-"] { border-color:#B9C9E1!important; }

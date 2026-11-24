@@ -120,8 +120,8 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
   };
 
   const ring = (group: StoryGroup) => group.stories.some(story => !seen.has(story.key))
-    ? 'bg-gradient-to-tr from-[#1877F2] via-fuchsia-500 to-amber-400'
-    : 'bg-slate-300';
+    ? 'ec-story-ring'
+    : 'bg-slate-300 dark:bg-white/20';
 
   if (!user) return null;
   const ownGroup = ownGroupIndex >= 0 ? groups[ownGroupIndex] : null;
@@ -129,7 +129,7 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
   return (
     <>
       {storyToast && <div role="status" aria-live="polite" className="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-[210] -translate-x-1/2 rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-xl">{storyToast}</div>}
-      <div className="flex items-start justify-start gap-4 overflow-x-auto pb-3 scrollbar-none select-none sm:justify-center">
+      <div className="flex items-start justify-start gap-4 overflow-x-auto pb-3 scrollbar-none select-none ">
         {/* Your Story */}
         <div className="relative flex w-[68px] shrink-0 flex-col items-center gap-1.5 text-center sm:w-[76px]">
           <button
@@ -140,7 +140,7 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
           >
             <img src={avatarSrc(user.avatar, user.name || '')} alt={user.name || 'Your story'} data-avatar="" data-name={user.name || ''} className="h-full w-full rounded-full border-2 border-white object-cover" />
           </button>
-          <button type="button" onClick={() => setMenuOpen(true)} aria-label="Add to story" className="absolute right-0 top-[48px] grid h-7 w-7 place-items-center rounded-full border-2 border-white bg-[#1877F2] text-white shadow sm:top-[54px]"><Plus size={17} /></button>
+          <button type="button" onClick={() => setMenuOpen(true)} aria-label="Add to story" className="ec-gradient absolute right-0 top-[48px] grid h-7 w-7 place-items-center rounded-full border-2 border-white text-white shadow sm:top-[54px]"><Plus size={17} /></button>
           <span className="w-full truncate text-xs font-semibold text-slate-800">Your Story</span>
         </div>
 

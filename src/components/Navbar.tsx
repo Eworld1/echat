@@ -1,4 +1,5 @@
 import { usePreferences } from '../context/PreferencesContext';
+import { BrandWordmark, GlowLogo } from './BrandLogo';
 import { initialsAvatar } from '../utils/avatar';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
@@ -454,7 +455,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const unreadMessageCount = notifications.filter(n => !n.read && n.type === 'message').length;
 
   return (
-    <header className={`sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} bg-white border-b border-slate-200/90 shadow-2xs`}>
+    <header className={`ec-glass sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} border-x-0 border-t-0 border-b border-violet-100/80 shadow-[0_6px_24px_-16px_rgba(76,29,149,0.35)] dark:border-white/10`}>
       <div className="mx-auto grid h-auto w-full max-w-7xl grid-cols-[80px_minmax(0,1fr)_auto] grid-rows-[56px_48px] items-center gap-x-2 px-3 sm:px-4 max-[768px]:grid-rows-[56px] min-[1025px]:grid-cols-[220px_minmax(180px,320px)_minmax(260px,1fr)_auto] min-[1025px]:grid-rows-[64px]">
         
         {/* Left: Brand Logo & Global Search Bar */}
@@ -462,8 +463,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="col-start-1 row-start-1 flex min-w-0 shrink-0 items-center gap-1 group min-[1025px]:w-[220px]">
             <button type="button" onClick={onOpenMenu} aria-label="Open navigation menu" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-700 hover:bg-slate-100 min-[1025px]:hidden"><Menu size={22}/></button>
             <button type="button" onClick={() => onNavigate('feed')} aria-label="Go to Echat home" className="flex min-w-0 shrink-0 cursor-pointer items-center gap-2">
-              <img src="/logo-mark-blue.svg" alt="" className="h-8 w-8 shrink-0 object-contain transition group-hover:scale-105 min-[1025px]:hidden" />
-              <img src="/logo-blue.svg" alt="Echat" className="hidden h-10 w-[190px] shrink-0 object-contain object-left min-[1025px]:block" />
+              <span className="min-[1025px]:hidden"><GlowLogo size={32} /></span>
+              <span className="hidden transition group-hover:scale-[1.02] min-[1025px]:block"><BrandWordmark size={36} /></span>
             </button>
           </div>
 
@@ -485,8 +486,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onChange={handleSearchChange}
                 onKeyDown={openFullSearch}
                 onFocus={() => setShowSearchDropdown(true)}
-                placeholder={window.innerWidth <= 768 ? 'Search' : 'Search EChat'}
-                className="h-10 w-full min-w-0 rounded-full border border-transparent bg-slate-100 py-1.5 pl-9 pr-10 text-xs shadow-inner transition placeholder-slate-400 hover:bg-slate-100/80 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 sm:text-sm"
+                placeholder={window.innerWidth <= 768 ? 'Search EChat' : 'Search people, posts, streams…'}
+                aria-label="Search people, posts and streams"
+                className="h-10 w-full min-w-0 rounded-full border border-violet-100 bg-violet-50/70 py-1.5 pl-9 pr-10 text-xs transition placeholder-slate-400 hover:bg-violet-50 focus:border-violet-400 focus:bg-white focus:ring-4 focus:ring-violet-500/15 dark:border-white/10 dark:bg-white/5 dark:focus:bg-white/10 sm:text-sm"
               />
 
               <div className="absolute right-2.5 flex items-center gap-1">
@@ -918,7 +920,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Messenger Icon */}
           <button
             onClick={onOpenMessenger}
-            className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:relative min-[1025px]:flex min-[1025px]:h-10 min-[1025px]:w-10 cursor-pointer"
+            className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-50 text-violet-800 transition hover:-translate-y-0.5 hover:bg-violet-100 hover:shadow-md hover:shadow-violet-500/15 min-[1025px]:relative min-[1025px]:flex min-[1025px]:h-10 min-[1025px]:w-10 cursor-pointer dark:bg-white/5 dark:text-violet-200 dark:hover:bg-white/10"
             title="Open Messenger"
           >
             <MessageSquare size={19} />
@@ -943,7 +945,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   }
                 }
               }}
-              className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 min-[1025px]:relative min-[1025px]:flex min-[1025px]:h-10 min-[1025px]:w-10 cursor-pointer"
+              className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-50 text-violet-800 transition hover:-translate-y-0.5 hover:bg-violet-100 hover:shadow-md hover:shadow-violet-500/15 min-[1025px]:relative min-[1025px]:flex min-[1025px]:h-10 min-[1025px]:w-10 cursor-pointer dark:bg-white/5 dark:text-violet-200 dark:hover:bg-white/10"
               title="Notifications"
             >
               <Bell size={19} />
