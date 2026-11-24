@@ -40,12 +40,13 @@ import {
   BarChart3,
   Menu,
   Ticket,
-  Wallet as WalletIcon
+  Wallet as WalletIcon,
+  Gamepad2
 } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
 
-export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'wallet' | 'adminWallet' | 'myTickets' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
+export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'wallet' | 'adminWallet' | 'games' | 'myTickets' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
 
 interface NavbarProps {
   currentView: AppView;
@@ -1116,6 +1117,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ['groups', 'Groups', UsersRound],
                   ['events', 'Events', CalendarDays],
                   ['wallet', 'Wallet', WalletIcon],
+                  ['games', 'Games', Gamepad2],
                   ['myTickets', 'My Tickets', Ticket],
                   ['dashboard', 'Dashboard', BarChart3],
                   ['saved', 'Saved Posts', Bookmark]

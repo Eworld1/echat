@@ -28,6 +28,7 @@ const FriendsView = lazy(() => import('./components/FriendsView').then(module =>
 const GoLiveModal = lazy(() => import('./components/GoLiveModal').then(module => ({ default: module.GoLiveModal })));
 const Groups = lazy(() => import('./pages/Groups').then(module => ({ default: module.Groups })));
 const Jobs = lazy(() => import('./pages/Jobs').then(module => ({ default: module.Jobs })));
+const Games = lazy(() => import('./pages/Games').then(module => ({ default: module.Games })));
 const Wallet = lazy(() => import('./pages/Wallet').then(module => ({ default: module.Wallet })));
 const AdminWallet = lazy(() => import('./pages/AdminWallet').then(module => ({ default: module.AdminWallet })));
 const MyTickets = lazy(() => import('./pages/MyTickets').then(module => ({ default: module.MyTickets })));
@@ -44,7 +45,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard').then(module => ({ defau
 const V2Market = lazy(() => import('./pages/v2/V2Market').then(module => ({ default: module.V2Market })));
 const V2MarketOrders = lazy(() => import('./pages/v2/V2MarketOrders').then(module => ({ default: module.V2MarketOrders })));
 
-const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'messages','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/jobs':'jobs','/events':'events','/my-tickets':'myTickets','/wallet':'wallet','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders','/search':'search' };
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'messages','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/jobs':'jobs','/events':'events','/my-tickets':'myTickets','/wallet':'wallet','/games':'games','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders','/search':'search' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
@@ -88,7 +89,7 @@ export function MainApp() {
         setCurrentView('feed');
         return;
       }
-      const route = path === '/admin/wallet' || path === '/admin/wallet/' ? 'adminWallet' : path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : path.startsWith('/marketplace/') ? 'marketplace' : path.startsWith('/events/') ? 'events' : classicRoutes[path];
+      const route = path === '/admin/wallet' || path === '/admin/wallet/' ? 'adminWallet' : path.startsWith('/admin/') ? 'admin' : path.startsWith('/live/') ? 'feed' : path.startsWith('/marketplace/') ? 'marketplace' : path.startsWith('/events/') ? 'events' : path.startsWith('/games/') ? 'games' : classicRoutes[path];
       if (route) {
         if (route === 'marketplace') setMarketRoute(path);
         if (route === 'admin' && !isLoading && !canAdmin) {
@@ -175,7 +176,7 @@ export function MainApp() {
   ) => {
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',messages:'/messages',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',jobs:'/jobs',events:'/events',wallet:'/wallet',adminWallet:'/admin/wallet',myTickets:'/my-tickets',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search'};
+    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',messages:'/messages',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',jobs:'/jobs',events:'/events',wallet:'/wallet',games:'/games',adminWallet:'/admin/wallet',myTickets:'/my-tickets',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search'};
     const routePath=view==='marketplace' ? (targetRoute?.startsWith('/marketplace/') ? targetRoute : '/marketplace') : routeByView[view];
     if(view==='marketplace')setMarketRoute(routePath);
     window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${window.location.search}`);
@@ -378,6 +379,8 @@ export function MainApp() {
           {currentView === 'myTickets' && <MyTickets />}
 
           {currentView === 'wallet' && <Wallet />}
+
+          {currentView === 'games' && <Games />}
 
           {currentView === 'adminWallet' && <AdminWallet />}
 

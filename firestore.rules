@@ -59,7 +59,123 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats';
+    }
+
+    // ---------------- GAMES HUB ----------------
+    // Rooms: anyone signed in can view (to join by link/code). Only members change a room; a
+    // non-member can only add themselves to a waiting room that has space. Member identity
+    // (game, seats, creation) can't be rewritten, and recorded stats can't be "un-recorded".
+    function gameRoomDoc(roomId) {
+      return /databases/$(database)/documents/gameRooms/$(roomId);
+    }
+
+    match /gameRooms/{roomId} {
+      allow read: if signedIn();
+      allow create: if signedIn() &&
+        roomId.matches('^[A-Z0-9]{6}$') &&
+        request.resource.data.game in ['tictactoe', 'chess', 'checkers', 'ludo'] &&
+        request.resource.data.hostId == request.auth.uid &&
+        request.resource.data.playerIds == [request.auth.uid] &&
+        request.resource.data.players.size() == 1 &&
+        request.resource.data.status == 'waiting' &&
+        request.resource.data.maxPlayers is int &&
+        request.resource.data.maxPlayers >= 2 && request.resource.data.maxPlayers <= 4 &&
+        request.resource.data.statsRecorded.size() == 0 &&
+        request.resource.data.winnerIds.size() == 0 &&
+        request.resource.data.round == 1;
+      allow update: if signedIn() &&
+        request.resource.data.game == resource.data.game &&
+        request.resource.data.maxPlayers == resource.data.maxPlayers &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.players.size() == request.resource.data.playerIds.size() &&
+        (
+          // member move / state update (same seats)
+          (request.auth.uid in resource.data.playerIds &&
+            request.resource.data.playerIds == resource.data.playerIds &&
+            request.resource.data.hostId in request.resource.data.playerIds &&
+            request.resource.data.round == resource.data.round &&
+            request.resource.data.statsRecorded.hasAll(resource.data.statsRecorded)) ||
+          // rematch: new round, same or fewer seats (players who left are dropped)
+          (request.auth.uid in resource.data.playerIds &&
+            resource.data.status == 'finished' &&
+            request.resource.data.round == resource.data.round + 1 &&
+            request.resource.data.playerIds.size() >= 2 &&
+            resource.data.playerIds.hasAll(request.resource.data.playerIds) &&
+            request.resource.data.hostId in request.resource.data.playerIds &&
+            request.resource.data.statsRecorded.size() == 0) ||
+          // join a waiting room with space
+          (resource.data.status == 'waiting' &&
+            !(request.auth.uid in resource.data.playerIds) &&
+            request.resource.data.playerIds.size() == resource.data.playerIds.size() + 1 &&
+            request.resource.data.playerIds.size() <= resource.data.maxPlayers &&
+            request.resource.data.playerIds.hasAll(resource.data.playerIds) &&
+            request.resource.data.playerIds.hasAll([request.auth.uid]) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players', 'playerIds', 'version', 'updatedAt'])) ||
+          // leave a waiting room
+          (resource.data.status == 'waiting' &&
+            request.auth.uid in resource.data.playerIds &&
+            !(request.auth.uid in request.resource.data.playerIds) &&
+            request.resource.data.playerIds.size() == resource.data.playerIds.size() - 1 &&
+            resource.data.playerIds.hasAll(request.resource.data.playerIds) &&
+            request.resource.data.hostId in request.resource.data.playerIds &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players', 'playerIds', 'hostId', 'version', 'updatedAt']))
+        );
+      allow delete: if signedIn() && resource.data.hostId == request.auth.uid && resource.data.status == 'waiting' && resource.data.playerIds.size() <= 1;
+
+      match /messages/{messageId} {
+        allow read: if signedIn();
+        allow create: if signedIn() &&
+          request.resource.data.keys().hasOnly(['senderId', 'name', 'text', 'kind', 'createdAt']) &&
+          request.resource.data.senderId == request.auth.uid &&
+          request.auth.uid in get(gameRoomDoc(roomId)).data.playerIds &&
+          request.resource.data.text is string && request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 200 &&
+          request.resource.data.name is string && request.resource.data.name.size() <= 80 &&
+          request.resource.data.kind in ['text', 'emoji'] &&
+          request.resource.data.createdAt is int;
+        allow update, delete: if false;
+      }
+    }
+
+    // Stats: public (leaderboard). Each player writes only their own doc, and a win / loss / draw
+    // can only be added once per finished room round, matching that room's result.
+    function statDelta(field) {
+      return request.resource.data.get(field, 0) - resource.data.get(field, 0);
+    }
+
+    function gameResultRecorded(uid) {
+      let roomId = request.resource.data.get('lastRoomId', '');
+      let before = get(gameRoomDoc(roomId)).data;
+      let after = getAfter(gameRoomDoc(roomId)).data;
+      return roomId is string && roomId.size() > 0 &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['wins', 'losses', 'draws', 'games', 'lastRoomId', 'name', 'avatar', 'updatedAt']) &&
+        before.status == 'finished' &&
+        uid in before.playerIds &&
+        !(uid in before.statsRecorded) &&
+        uid in after.statsRecorded &&
+        statDelta('games') == 1 &&
+        ((before.draw == true && statDelta('draws') == 1 && statDelta('wins') == 0 && statDelta('losses') == 0) ||
+         (before.draw != true && uid in before.winnerIds && statDelta('wins') == 1 && statDelta('losses') == 0 && statDelta('draws') == 0) ||
+         (before.draw != true && !(uid in before.winnerIds) && statDelta('losses') == 1 && statDelta('wins') == 0 && statDelta('draws') == 0));
+    }
+
+    match /gameStats/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly(['uid', 'name', 'avatar', 'wins', 'losses', 'draws', 'games', 'snakeHigh', 'lastRoomId', 'updatedAt']) &&
+        request.resource.data.uid == uid &&
+        request.resource.data.wins == 0 && request.resource.data.losses == 0 && request.resource.data.draws == 0 &&
+        request.resource.data.games == 0 && request.resource.data.snakeHigh == 0 &&
+        request.resource.data.name is string && request.resource.data.name.size() <= 80;
+      allow update: if signedIn() && request.auth.uid == uid &&
+        request.resource.data.name is string && request.resource.data.name.size() <= 80 &&
+        request.resource.data.avatar is string && request.resource.data.avatar.size() <= 1000 &&
+        (gameResultRecorded(uid) ||
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['snakeHigh', 'name', 'avatar', 'updatedAt']) &&
+            request.resource.data.snakeHigh is int &&
+            request.resource.data.snakeHigh > resource.data.snakeHigh &&
+            request.resource.data.snakeHigh <= 10000));
+      allow delete: if false;
     }
 
     // ---------------- WALLET (Step 1: top-up + admin approval) ----------------

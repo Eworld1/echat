@@ -21,6 +21,7 @@
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^4.3.4",
     "canvas-confetti": "^1.9.4",
+    "chess.js": "1.4.0",
     "dotenv": "^17.2.3",
     "emoji-picker-react": "^5.1.4",
     "express": "^4.21.2",
