@@ -32,6 +32,11 @@ export interface MediaPlayerHandle {
   /** Current position in media seconds (absolute, not relative to trim start). */
   currentTime: () => number;
   seek: (seconds: number) => void;
+  /**
+   * Mute / unmute immediately, inside the tap handler. iPhone only allows sound when it is turned on
+   * during the user's tap, so this must not wait for a React re-render.
+   */
+  setMutedNow: (muted: boolean) => void;
 }
 
 interface MediaPlayerProps {
@@ -71,6 +76,16 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
   callbacks.current = { onProgress, onEnded, onSoundBlocked };
   const editRef = useRef(edit);
   editRef.current = edit;
+  const [buffering, setBuffering] = useState(mediaType === 'video');
+  const [pageVisible, setPageVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden');
+  const activeRef = useRef(false);
+
+  // Stop sound when the app goes to the background; resume when it comes back.
+  useEffect(() => {
+    const onVisibility = () => setPageVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   useEffect(() => { if (mediaType === 'image') injectKenBurns(); }, [mediaType]);
   useEffect(() => { preloadEffects(edit.effects.map(effect => effect.url)); }, [edit.effects]);
@@ -91,7 +106,21 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
     lastTime.current = seconds - 0.001;
   };
 
-  useImperativeHandle(handleRef, () => ({ currentTime: readTime, seek: seekTo }));
+  const setMutedNow = (value: boolean) => {
+    const video = videoRef.current;
+    const music = musicRef.current;
+    if (video) {
+      video.muted = value || editRef.current.originalVolume === 0;
+      if (!value && activeRef.current && video.paused) void video.play().catch(() => {});
+    }
+    if (music) {
+      music.muted = value;
+      if (!value && activeRef.current && editRef.current.soundUrl) void music.play().catch(() => {});
+      if (value) music.pause();
+    }
+  };
+
+  useImperativeHandle(handleRef, () => ({ currentTime: readTime, seek: seekTo, setMutedNow }));
 
   // Volumes / speed (iOS ignores element volume; 0 still mutes via `muted`).
   useEffect(() => {
@@ -109,7 +138,8 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
   }, [muted, edit.originalVolume]);
 
   // Play / pause everything together.
-  const shouldPlay = active && !paused;
+  const shouldPlay = active && !paused && pageVisible;
+  activeRef.current = shouldPlay;
   useEffect(() => {
     const video = videoRef.current;
     const music = musicRef.current;
@@ -186,6 +216,11 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
         muted
         preload={preload}
         onLoadedMetadata={event => { const value = event.currentTarget.duration; if (Number.isFinite(value)) { setMediaDuration(value); onDuration?.(value); } }}
+        onLoadStart={() => setBuffering(true)}
+        onWaiting={() => setBuffering(true)}
+        onPlaying={() => setBuffering(false)}
+        onCanPlay={() => setBuffering(false)}
+        onError={() => setBuffering(false)}
         className="h-full w-full object-contain"
         style={{ filter }}
       />
@@ -220,6 +255,11 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
           style={{ left: `${overlay.x}%`, top: `${overlay.y}%`, color: overlay.color, fontSize: `${overlay.size}cqw`, textShadow: overlay.kind === 'text' ? '0 2px 6px rgba(0,0,0,.7)' : undefined }}
         >{overlay.text}</span>
       ))}
+      {mediaType === 'video' && buffering && active && (
+        <div className="pointer-events-none absolute inset-0 z-[5] grid place-items-center" aria-label="Loading video" role="status">
+          <span className="h-12 w-12 animate-spin rounded-full border-4 border-white/30 border-t-white" />
+        </div>
+      )}
       {children}
     </div>
   );

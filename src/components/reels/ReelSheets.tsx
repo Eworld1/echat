@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Bookmark, BookmarkCheck, Copy, Heart, Link2, MessageCircle, Music2, Pause, Play, Repeat2, Send, Share2, SquarePlus, Trash2, Users, X } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Copy, EyeOff, Flag, Heart, Link2, Loader2, MessageCircle, Music2, Pause, Pencil, Play, Repeat2, Send, Share2, SquarePlus, Trash2, Users, X } from 'lucide-react';
 import { api } from '../../services/api';
 import {
-  addReelComment, createStory, deleteReel, listenMyCommentLikes, listenReelComments, reelSound, saveSound, setCommentLike, storyFromReel, unsaveSound,
+  addReelComment, createStory, deleteReel, hideReel, listenMyCommentLikes, listenReelComments, REEL_REPORT_REASONS, reelSound, reportReel, saveSound, setCommentLike, storyFromReel, unsaveSound, updateReelCaption,
   type Reel, type ReelComment, type SavedSound
 } from '../../services/reels/reelsStore';
 import type { StudioPreset } from './CreateStudio';
@@ -168,27 +168,151 @@ export const SoundSheet: React.FC<{ reel: Reel; viewer: Viewer | null; savedSoun
   );
 };
 
-// ---------------- More ----------------
-export const MoreSheet: React.FC<{ reel: Reel; viewer: Viewer | null; onClose: () => void; onStudio: (preset: StudioPreset) => void; onToast: (message: string) => void; onDeleted: () => void }> = ({ reel, viewer, onClose, onStudio, onToast, onDeleted }) => {
+// ---------------- More (⋯) ----------------
+type MoreView = 'menu' | 'confirmDelete' | 'editCaption' | 'report';
+
+export const MoreSheet: React.FC<{
+  reel: Reel;
+  viewer: Viewer | null;
+  saved: boolean;
+  onSave: (saved: boolean) => void;
+  onClose: () => void;
+  onStudio: (preset: StudioPreset) => void;
+  onToast: (message: string) => void;
+  /** Called right after a successful delete so the feed drops the reel instantly. */
+  onDeleted: (reelId: string) => void;
+  /** "Not interested": hide from this feed. */
+  onHidden: (reelId: string) => void;
+}> = ({ reel, viewer, saved, onSave, onClose, onStudio, onToast, onDeleted, onHidden }) => {
   const sound = reelSound(reel);
-  const isOwner = viewer?.uid === reel.creatorId;
+  const isOwner = Boolean(viewer && viewer.uid === reel.creatorId);
+  const [view, setView] = useState<MoreView>('menu');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [caption, setCaption] = useState(reel.caption);
+
   const option = (icon: React.ReactNode, label: string, onClick: () => void, danger = false) => (
     <button type="button" onClick={onClick} className={`flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold hover:bg-[#F2F4F7] ${danger ? 'text-rose-600' : 'text-slate-800'}`}>{icon}{label}</button>
   );
+  const copyLink = () => {
+    void navigator.clipboard.writeText(reelLink(reel.id)).then(() => { onToast('Link copied'); onClose(); }).catch(() => onToast(reelLink(reel.id)));
+  };
+  const addToStory = () => {
+    if (!viewer) { onToast('Sign in to add to your Story.'); return; }
+    void createStory(storyFromReel(reel, { id: viewer.uid, name: viewer.name, avatar: viewer.avatar, friends: viewer.friends })).then(() => { onToast('Added to your Story'); onClose(); }).catch(err => onToast(err instanceof Error ? err.message : 'Could not add to Story.'));
+  };
+
+  const confirmDelete = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await deleteReel(reel.id);
+      onDeleted(reel.id);
+      onToast('Reel deleted');
+      onClose();
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      setError(code === 'permission-denied' ? 'Only the owner can delete this reel.' : err instanceof Error ? err.message : 'Could not delete. Try again.');
+      setBusy(false);
+    }
+  };
+
+  const saveCaption = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await updateReelCaption(reel.id, caption);
+      onToast('Caption updated');
+      onClose();
+    } catch (err) {
+      setError((err as { code?: string })?.code === 'permission-denied' ? 'Could not save (deploy the latest Firestore rules).' : err instanceof Error ? err.message : 'Could not save.');
+      setBusy(false);
+    }
+  };
+
+  const sendReport = async (reason: string) => {
+    if (!viewer) { onToast('Sign in to report.'); return; }
+    setBusy(true);
+    try {
+      await reportReel(reel, viewer.uid, reason);
+      onToast('Thanks — we will review this reel');
+    } catch (err) {
+      // A second report from the same person is refused by the rules; treat it as already reported.
+      onToast((err as { code?: string })?.code === 'permission-denied' ? 'You already reported this reel' : 'Could not send the report.');
+    }
+    onClose();
+  };
+
+  if (view === 'confirmDelete') {
+    return (
+      <div className="fixed inset-0 z-[95] grid place-items-center bg-black/60 p-4" role="alertdialog" aria-modal="true" aria-labelledby="delete-reel-title" aria-describedby="delete-reel-text">
+        <div className="w-full max-w-sm rounded-2xl bg-white p-5 text-center shadow-2xl">
+          <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-rose-100 text-rose-600"><Trash2 size={22} /></span>
+          <h2 id="delete-reel-title" className="text-lg font-extrabold text-slate-900">Delete reel?</h2>
+          <p id="delete-reel-text" className="mt-1 text-sm text-slate-600">Are you sure you want to delete this reel? This cannot be undone</p>
+          {error && <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-2 text-sm text-rose-700">{error}</p>}
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <button type="button" disabled={busy} onClick={() => { setView('menu'); setError(''); }} className="min-h-11 rounded-xl border border-slate-300 bg-white text-sm font-bold text-slate-700">Cancel</button>
+            <button type="button" disabled={busy} onClick={() => void confirmDelete()} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-rose-600 text-sm font-bold text-white disabled:opacity-70">{busy && <Loader2 size={16} className="animate-spin" />}Delete</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'editCaption') {
+    return (
+      <Sheet title="Edit caption" onClose={onClose}>
+        <div className="space-y-3 p-4">
+          <textarea value={caption} onChange={event => setCaption(event.target.value)} maxLength={2200} rows={5} autoFocus placeholder="Write a caption… #hashtags"
+            className="w-full resize-none rounded-xl border border-slate-300 p-3 text-sm outline-none focus:border-[#1877F2]" />
+          <p className="text-right text-xs text-slate-500">{caption.length}/2200</p>
+          {error && <p role="alert" className="rounded-xl bg-rose-50 p-2 text-sm text-rose-700">{error}</p>}
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => setView('menu')} className="min-h-11 rounded-xl border border-slate-300 text-sm font-bold text-slate-700">Cancel</button>
+            <button type="button" disabled={busy} onClick={() => void saveCaption()} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#1877F2] text-sm font-bold text-white disabled:opacity-60">{busy && <Loader2 size={16} className="animate-spin" />}Save</button>
+          </div>
+        </div>
+      </Sheet>
+    );
+  }
+
+  if (view === 'report') {
+    return (
+      <Sheet title="Report reel" onClose={onClose}>
+        <div className="space-y-1 p-3">
+          <p className="px-3 pb-1 text-sm text-slate-600">Why are you reporting this reel?</p>
+          {REEL_REPORT_REASONS.map(reason => (
+            <button key={reason} type="button" disabled={busy} onClick={() => void sendReport(reason)} className="flex min-h-12 w-full items-center rounded-xl px-3 text-left text-sm font-semibold text-slate-800 hover:bg-[#F2F4F7] disabled:opacity-60">{reason}</button>
+          ))}
+        </div>
+      </Sheet>
+    );
+  }
+
   return (
-    <Sheet title="More" onClose={onClose}>
+    <Sheet title={isOwner ? 'Your reel' : 'More'} onClose={onClose}>
       <div className="space-y-1 p-3">
-        {option(<Users size={18} />, 'Duet (side-by-side)', () => { if (!viewer) { onToast('Sign in to duet.'); return; } onStudio({ duetOf: { reelId: reel.id, mediaUrl: reel.mediaUrl, mediaType: reel.mediaType, creatorName: reel.creatorName, trimStart: reel.trimStart, trimEnd: reel.trimEnd }, sound: null }); })}
-        {option(<Repeat2 size={18} />, 'Remix / Use template', () => { if (!viewer) { onToast('Sign in to remix.'); return; } onStudio({ sound, caption: reel.caption, remixOf: reel.id }); })}
-        {option(<SquarePlus size={18} />, 'Add to Story', () => {
-          if (!viewer) { onToast('Sign in to add to your Story.'); return; }
-          void createStory(storyFromReel(reel, { id: viewer.uid, name: viewer.name, avatar: viewer.avatar, friends: viewer.friends })).then(() => { onToast('Added to your Story'); onClose(); }).catch(error => onToast(error instanceof Error ? error.message : 'Could not add to Story.'));
-        })}
-        {option(<Link2 size={18} />, 'Copy link', () => { void navigator.clipboard.writeText(reelLink(reel.id)).then(() => { onToast('Link copied'); onClose(); }); })}
-        {isOwner && option(<Trash2 size={18} />, 'Delete reel', () => {
-          if (!window.confirm('Delete this reel? This cannot be undone.')) return;
-          void deleteReel(reel.id).then(() => { onToast('Reel deleted'); onDeleted(); onClose(); }).catch(error => onToast(error instanceof Error ? error.message : 'Could not delete.'));
-        }, true)}
+        {isOwner ? (
+          <>
+            {option(<Pencil size={18} />, 'Edit Caption', () => setView('editCaption'))}
+            {option(<Trash2 size={18} />, 'Delete Reel', () => setView('confirmDelete'), true)}
+            <div className="my-1 border-t border-slate-100" />
+            {option(<Link2 size={18} />, 'Copy Link', copyLink)}
+            {option(<SquarePlus size={18} />, 'Add to Story', addToStory)}
+          </>
+        ) : (
+          <>
+            {option(saved ? <BookmarkCheck size={18} /> : <Bookmark size={18} />, saved ? 'Remove from Saved' : 'Save', () => { onSave(!saved); onClose(); })}
+            {option(<Flag size={18} />, 'Report', () => { if (!viewer) { onToast('Sign in to report.'); return; } setView('report'); }, true)}
+            {option(<EyeOff size={18} />, 'Not Interested', () => { hideReel(reel.id); onHidden(reel.id); onToast("Got it — you'll see fewer reels like this"); onClose(); })}
+            {option(<Link2 size={18} />, 'Copy Link', copyLink)}
+            <div className="my-1 border-t border-slate-100" />
+            {option(<Users size={18} />, 'Duet (side-by-side)', () => { if (!viewer) { onToast('Sign in to duet.'); return; } onStudio({ duetOf: { reelId: reel.id, mediaUrl: reel.mediaUrl, mediaType: reel.mediaType, creatorName: reel.creatorName, trimStart: reel.trimStart, trimEnd: reel.trimEnd }, sound: null }); })}
+            {option(<Repeat2 size={18} />, 'Remix / Use template', () => { if (!viewer) { onToast('Sign in to remix.'); return; } onStudio({ sound, caption: reel.caption, remixOf: reel.id }); })}
+            {option(<SquarePlus size={18} />, 'Add to Story', addToStory)}
+          </>
+        )}
       </div>
     </Sheet>
   );

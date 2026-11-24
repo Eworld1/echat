@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bookmark, Eye, Heart, MessageCircle, MoreHorizontal, Music2, Play, Share2, Volume2, VolumeX } from 'lucide-react';
+import { Bookmark, Eye, Heart, MessageCircle, MoreHorizontal, Music2, Pause, Play, Share2, Volume2, VolumeX } from 'lucide-react';
 import { followCreator, listenFollowingState, unfollowCreator } from '../../services/liveDiscovery';
-import { MediaPlayer } from './MediaPlayer';
+import { MediaPlayer, type MediaPlayerHandle } from './MediaPlayer';
 import { reelSound, recordReelView, type Reel } from '../../services/reels/reelsStore';
 import type { Viewer } from './ReelSheets';
 
-const MARQUEE_CSS = '@keyframes echatMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } } @keyframes echatHeartPop { 0% { transform: translate(-50%,-50%) scale(0.3); opacity: 0; } 15% { transform: translate(-50%,-50%) scale(1.2); opacity: 1; } 30% { transform: translate(-50%,-50%) scale(0.95); } 80% { opacity: 1; } 100% { transform: translate(-50%,-70%) scale(1); opacity: 0; } }';
+const MARQUEE_CSS = '@keyframes echatMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } } @keyframes echatSoundFlash { 0% { opacity: 0; transform: translate(-50%,-50%) scale(.7); } 20% { opacity: 1; transform: translate(-50%,-50%) scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } } @keyframes echatHeartPop { 0% { transform: translate(-50%,-50%) scale(0.3); opacity: 0; } 15% { transform: translate(-50%,-50%) scale(1.2); opacity: 1; } 30% { transform: translate(-50%,-50%) scale(0.95); } 80% { opacity: 1; } 100% { transform: translate(-50%,-70%) scale(1); opacity: 0; } }';
 let cssInjected = false;
 function injectCss() {
   if (cssInjected || typeof document === 'undefined') return;
@@ -27,7 +27,8 @@ interface ReelViewProps {
   viewer: Viewer | null;
   liked: boolean;
   saved: boolean;
-  onToggleMute: () => void;
+  /** Set the shared Reels sound setting (called inside the tap so phones allow sound). */
+  onSetMuted: (muted: boolean) => void;
   onLike: (liked: boolean) => void;
   onSave: (saved: boolean) => void;
   onComments: () => void;
@@ -36,11 +37,18 @@ interface ReelViewProps {
   onMore: () => void;
   onViewProfile?: (userId: string) => void;
   onSoundBlocked: () => void;
+  /** Gives the page the active reel's player so the header sound button can apply instantly. */
+  onActivePlayer?: (player: MediaPlayerHandle | null) => void;
 }
 
 /** One full-screen Reel (TikTok-style): double-tap like, right action bar, creator + caption + sound marquee. */
-export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = true, nearby, muted, viewer, liked, saved, onToggleMute, onLike, onSave, onComments, onShare, onSound, onMore, onViewProfile, onSoundBlocked }) => {
+export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = true, nearby, muted, viewer, liked, saved, onSetMuted, onLike, onSave, onComments, onShare, onSound, onMore, onViewProfile, onSoundBlocked, onActivePlayer }) => {
   const [paused, setPaused] = useState(false);
+  const [held, setHeld] = useState(false);
+  const [flash, setFlash] = useState<{ id: number; muted: boolean } | null>(null);
+  const player = useRef<MediaPlayerHandle>(null);
+  const holdTimer = useRef<number | null>(null);
+  const holding = useRef(false);
   const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([]);
   const [following, setFollowing] = useState(false);
   const [followBusy, setFollowBusy] = useState(false);
@@ -51,15 +59,45 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
 
   useEffect(() => { injectCss(); }, []);
   useEffect(() => { if (active) { setPaused(!autoplay); recordReelView(reel.id); } }, [active, reel.id, autoplay]);
+  useEffect(() => {
+    if (!active) return;
+    onActivePlayer?.(player.current);
+    return () => onActivePlayer?.(null);
+  }, [active, nearby, onActivePlayer]);
   useEffect(() => (viewer && !isOwn ? listenFollowingState(viewer.uid, reel.creatorId, setFollowing) : undefined), [viewer?.uid, reel.creatorId, isOwn]);
 
+  /** Mute / unmute: applied to the video immediately (inside the tap), then saved for every reel. */
+  const toggleSound = () => {
+    const next = !muted;
+    player.current?.setMutedNow(next);
+    onSetMuted(next);
+    const id = Date.now();
+    setFlash({ id, muted: next });
+    window.setTimeout(() => setFlash(current => (current?.id === id ? null : current)), 700);
+  };
+
+  // Press and hold = pause while held (like Instagram / Facebook Reels).
+  const onPressStart = () => {
+    holding.current = false;
+    if (holdTimer.current) window.clearTimeout(holdTimer.current);
+    holdTimer.current = window.setTimeout(() => { holding.current = true; setHeld(true); }, 280);
+  };
+  const onPressEnd = () => {
+    if (holdTimer.current) window.clearTimeout(holdTimer.current);
+    holdTimer.current = null;
+    if (holding.current) setHeld(false);
+  };
+
   const onTap = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (holding.current) { holding.current = false; return; } // end of a hold, not a tap
     const now = Date.now();
     const box = event.currentTarget.getBoundingClientRect();
     if (now - lastTap.current < 300) {
+      const wasPausedTap = singleTapTimer.current !== null;
       if (singleTapTimer.current) window.clearTimeout(singleTapTimer.current);
       singleTapTimer.current = null;
       lastTap.current = 0;
+      if (!wasPausedTap) toggleSound(); // first tap changed the sound; put it back
       const id = now;
       setHearts(current => [...current, { id, x: ((event.clientX - box.left) / box.width) * 100, y: ((event.clientY - box.top) / box.height) * 100 }]);
       window.setTimeout(() => setHearts(current => current.filter(heart => heart.id !== id)), 1000);
@@ -67,7 +105,10 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
       return;
     }
     lastTap.current = now;
-    singleTapTimer.current = window.setTimeout(() => { setPaused(value => !value); singleTapTimer.current = null; }, 300);
+    // Paused (autoplay off) → tap plays. Playing → tap toggles sound. Sound must change inside the tap,
+    // so it isn't delayed; a double-tap toggles it twice (back to the same state) and likes.
+    if (paused) { singleTapTimer.current = window.setTimeout(() => { setPaused(false); singleTapTimer.current = null; }, 260); return; }
+    toggleSound();
   };
 
   const toggleFollow = async () => {
@@ -95,16 +136,25 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
           coverUrl={reel.coverUrl}
           edit={reel}
           duet={reel.duetOf}
+          ref={player}
           active={active}
           muted={muted}
-          paused={paused}
+          paused={paused || held}
           preload={active ? 'auto' : 'metadata'}
           onSoundBlocked={onSoundBlocked}
         />
       ) : reel.coverUrl ? <img src={reel.coverUrl} alt="" loading="lazy" className="h-full w-full object-cover opacity-80" /> : null}
 
-      <div className="absolute inset-0 z-10" onClick={onTap} aria-hidden="true" />
+      <div className="absolute inset-0 z-10 select-none" onClick={onTap} onPointerDown={onPressStart} onPointerUp={onPressEnd} onPointerCancel={onPressEnd} onPointerLeave={onPressEnd} onContextMenu={event => event.preventDefault()} aria-hidden="true" />
       {paused && active && <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white"><Play size={30} className="ml-1" /></div>}
+      {held && active && <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white"><Pause size={28} /></div>}
+      {flash && <div key={flash.id} className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-20 w-20 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white" style={{ animation: 'echatSoundFlash .7s ease-out forwards' }} role="status" aria-label={flash.muted ? 'Sound off' : 'Sound on'}>{flash.muted ? <VolumeX size={36} /> : <Volume2 size={36} />}</div>}
+
+      {/* sound button on the video (top right) */}
+      <button type="button" onClick={toggleSound} aria-label={muted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!muted}
+        className="absolute right-3 top-3 z-30 flex min-h-10 items-center gap-1.5 rounded-full bg-black/55 px-3 text-sm font-bold text-white backdrop-blur-sm">
+        {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}<span aria-hidden="true">{muted ? '🔇' : '🔊'}</span>
+      </button>
       {hearts.map(heart => <Heart key={heart.id} size={96} className="pointer-events-none absolute z-30 fill-rose-500 text-rose-500 drop-shadow-lg" style={{ left: `${heart.x}%`, top: `${heart.y}%`, animation: 'echatHeartPop 1s ease-out forwards' }} />)}
 
       {/* right action bar */}
@@ -113,7 +163,6 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
         {actionButton('Comments', <MessageCircle size={26} />, onComments, compact(reel.commentsCount))}
         {actionButton('Share', <Share2 size={26} />, onShare, 'Share')}
         {actionButton(saved ? 'Remove from Saved Reels' : 'Save to Saved Reels', <Bookmark size={26} className={saved ? 'fill-amber-400 text-amber-400' : ''} />, () => onSave(!saved), saved ? 'Saved' : 'Save', saved)}
-        {actionButton(muted ? 'Sound on' : 'Sound off', muted ? <VolumeX size={24} /> : <Volume2 size={24} />, onToggleMute)}
         {actionButton('More', <MoreHorizontal size={26} />, onMore)}
       </div>
 

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Film, Music2, Plus, RefreshCw, Sparkles, Volume2, VolumeX } from 'lucide-react';
 import { api } from '../services/api';
 import { auth } from '../services/firebase';
@@ -9,10 +10,12 @@ import { useSocket } from '../context/SocketContext';
 import { useAuth } from '../context/AuthContext';
 import { listenFollowingIds } from '../services/liveDiscovery';
 import { ReelView } from '../components/reels/ReelView';
+import type { MediaPlayerHandle } from '../components/reels/MediaPlayer';
+import { getReelsMuted, setReelsMuted } from '../services/reels/reelSound';
 import { CommentsSheet, MoreSheet, ShareSheet, SoundSheet, type Viewer } from '../components/reels/ReelSheets';
 import { CreateStudio, type StudioPreset } from '../components/reels/CreateStudio';
 import {
-  getReel, listenMyReelLikes, listenMyReelSaves, listenReels, listenSavedSounds, setReelLike, setReelSave,
+  getHiddenReels, getReel, listenMyReelLikes, listenMyReelSaves, listenReels, listenSavedSounds, setReelLike, setReelSave,
   type Reel, type SavedSound
 } from '../services/reels/reelsStore';
 
@@ -37,7 +40,9 @@ const trendScore = (reel: Reel) => reel.likesCount * 3 + reel.commentsCount * 4 
 
 export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
   const { user, updateUser } = useAuth();
-  const uid = auth.currentUser?.uid || '';
+  // Firebase sign-in can finish after the first render; keep uid in state so listeners + "is this mine" update.
+  const [uid, setUid] = useState(auth.currentUser?.uid || '');
+  useEffect(() => onAuthStateChanged(auth, current => setUid(current?.uid || '')), []);
   const viewer: Viewer | null = user && uid ? { uid, name: user.name, avatar: user.avatar || '', friends: Array.isArray(user.friends) ? user.friends : [] } : null;
 
   // ---- older Express reels (unchanged loading + paging) ----
@@ -67,7 +72,11 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
   const [tab, setTab] = useState<FeedTab>('foryou');
   const [successToast, setSuccessToast] = useState('');
   const [autoplay, setAutoplay] = useState(() => localStorage.getItem('reels_autoplay') !== 'false');
-  const [muted, setMuted] = useState(() => localStorage.getItem('reels_muted') !== 'false');
+  const [muted, setMuted] = useState(getReelsMuted);
+  /** Reels removed on this device right now (deleted / not interested) — hidden instantly, no refresh. */
+  const [removedIds, setRemovedIds] = useState<Set<string>>(getHiddenReels);
+  const activePlayer = useRef<MediaPlayerHandle | null>(null);
+  const setActivePlayer = useCallback((player: MediaPlayerHandle | null) => { activePlayer.current = player; }, []);
   const [activeIndex, setActiveIndex] = useState(0);
   const [studio, setStudio] = useState<StudioPreset | null>(null);
   const [sheet, setSheet] = useState<{ type: 'comments' | 'share' | 'sound' | 'more'; reelId: string } | null>(null);
@@ -175,7 +184,7 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
   useEffect(() => {
     const syncSettings = () => {
       setAutoplay(localStorage.getItem('reels_autoplay') !== 'false');
-      setMuted(localStorage.getItem('reels_muted') !== 'false');
+      setMuted(getReelsMuted());
     };
     window.addEventListener('echat:reels-settings', syncSettings);
     return () => window.removeEventListener('echat:reels-settings', syncSettings);
@@ -188,17 +197,24 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
     window.dispatchEvent(new Event('echat:reels-settings'));
     if (user) api.updateProfile(user.id, { reelsAutoplay: next }).then(updateUser).catch(() => {});
   };
-  const toggleMuted = () => {
-    const next = !muted;
+  /** Sets sound for ALL reels and remembers it. Applied to the playing video inside the tap (phones need that). */
+  const applyMuted = (next: boolean) => {
+    activePlayer.current?.setMutedNow(next);
+    document.querySelectorAll<HTMLVideoElement>('[data-echat-reel-video="true"]').forEach(video => { video.muted = next; });
     setMuted(next);
-    localStorage.setItem('reels_muted', String(next));
-    window.dispatchEvent(new Event('echat:reels-settings'));
+    setReelsMuted(next);
+  };
+  const toggleMuted = () => applyMuted(!muted);
+  const removeReel = (id: string) => {
+    setRemovedIds(current => new Set(current).add(id));
+    setSavedReels(current => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setDeepLinked(current => (current?.id === id ? null : current));
   };
 
   const items = useMemo<FeedItem[]>(() => {
     const circle = new Set([...followingIds, ...(Array.isArray(user?.friends) ? user.friends : [])]);
     const city = (user?.location || '').split(',')[0].trim().toLowerCase();
-    const fs = reels.map(reel => ({ kind: 'fs' as const, id: `fs_${reel.id}`, createdAt: reel.createdAt, reel }));
+    const fs = reels.filter(reel => !removedIds.has(reel.id)).map(reel => ({ kind: 'fs' as const, id: `fs_${reel.id}`, createdAt: reel.createdAt, reel }));
     const legacy = posts.map(post => ({ kind: 'legacy' as const, id: `legacy_${post.id}`, createdAt: post.createdAt, post }));
     let list: FeedItem[];
     if (tab === 'following') list = [...fs.filter(item => circle.has(item.reel.creatorId)), ...legacy.filter(item => circle.has(item.post.authorId))].sort((a, b) => b.createdAt - a.createdAt);
@@ -208,11 +224,14 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
     } else if (tab === 'nearby') list = city ? fs.filter(item => item.reel.location.toLowerCase().includes(city)) : [];
     else if (tab === 'saved') {
       const known = new Map([...reels, ...savedReels.values()].map(reel => [reel.id, reel]));
-      list = [...savedIds].map(id => known.get(id)).filter((reel): reel is Reel => Boolean(reel)).map(reel => ({ kind: 'fs' as const, id: `fs_${reel.id}`, createdAt: reel.createdAt, reel }));
+      list = [...savedIds].map(id => known.get(id)).filter((reel): reel is Reel => Boolean(reel) && !removedIds.has(reel!.id)).map(reel => ({ kind: 'fs' as const, id: `fs_${reel.id}`, createdAt: reel.createdAt, reel }));
     } else list = [...fs, ...legacy].sort((a, b) => b.createdAt - a.createdAt);
     if (deepLinked && tab === 'foryou') list = [{ kind: 'fs', id: `fs_${deepLinked.id}`, createdAt: deepLinked.createdAt, reel: reels.find(reel => reel.id === deepLinked.id) || deepLinked }, ...list.filter(item => item.id !== `fs_${deepLinked.id}`)];
     return list;
-  }, [reels, posts, tab, followingIds, user?.friends, user?.location, savedIds, savedReels, deepLinked]);
+  }, [reels, posts, tab, followingIds, user?.friends, user?.location, savedIds, savedReels, deepLinked, removedIds]);
+
+  // Keep the active index valid when a reel disappears (e.g. just deleted).
+  useEffect(() => { setActiveIndex(current => Math.min(current, Math.max(0, items.length - 1))); }, [items.length]);
 
   useEffect(() => { setActiveIndex(0); feedRef.current?.scrollTo({ top: 0 }); }, [tab]);
   useEffect(() => {
@@ -242,7 +261,7 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
       <div className="flex min-w-0 items-center gap-2.5"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#E7F0FD] text-[#1877F2]"><Film size={20} /></span><div className="min-w-0"><h1 className="font-extrabold text-slate-900">Reels</h1><p className="hidden truncate text-xs text-slate-500 sm:block">Short videos & photos from the EChat community</p></div></div>
       <div className="flex shrink-0 items-center gap-1.5">
         <button type="button" onClick={toggleAutoplay} aria-pressed={autoplay} title={`Autoplay ${autoplay ? 'on' : 'off'}`} className={`flex min-h-10 items-center gap-1.5 rounded-xl px-2.5 text-xs font-bold max-[400px]:px-2 ${autoplay ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}><span className={`h-2 w-2 rounded-full ${autoplay ? 'bg-emerald-500' : 'bg-slate-400'}`} /><span className="max-[400px]:hidden">Autoplay {autoplay ? 'On' : 'Off'}</span></button>
-        <button type="button" onClick={toggleMuted} aria-label={muted ? 'Unmute Reels' : 'Mute Reels'} title={muted ? 'Unmute Reels' : 'Mute Reels'} className="grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-700">{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+        <button type="button" onClick={toggleMuted} aria-pressed={!muted} aria-label={muted ? 'Sound off for all Reels — tap to turn on' : 'Sound on for all Reels — tap to mute'} title={muted ? 'Sound off (all Reels)' : 'Sound on (all Reels)'} className={`flex min-h-10 items-center gap-1 rounded-xl px-2.5 text-sm font-bold ${muted ? 'bg-slate-100 text-slate-700' : 'bg-[#E7F0FD] text-[#1877F2]'}`}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}<span aria-hidden="true">{muted ? '🔇' : '🔊'}</span></button>
         <button type="button" onClick={() => void load()} disabled={refreshing || loading} aria-label="Refresh Reels" title="Refresh Reels" className="grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-700 disabled:opacity-60"><RefreshCw size={17} className={refreshing ? 'animate-spin' : ''} /></button>
         <button type="button" onClick={() => openStudio()} className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[#1877F2] px-3 text-xs font-bold text-white hover:bg-[#166FE5]"><Plus size={15} /><span className="hidden sm:inline">Create Reel</span><span className="sm:hidden">Create</span></button>
       </div>
@@ -278,7 +297,8 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
                 viewer={viewer}
                 liked={likedIds.has(item.reel.id)}
                 saved={savedIds.has(item.reel.id)}
-                onToggleMute={toggleMuted}
+                onSetMuted={applyMuted}
+                onActivePlayer={setActivePlayer}
                 onLike={liked => { if (requireViewer()) void setReelLike(item.reel.id, uid, liked).catch(error => setSuccessToast(error instanceof Error ? error.message : 'Could not like.')); }}
                 onSave={saved => { if (requireViewer()) void setReelSave(item.reel.id, uid, saved).then(() => setSuccessToast(saved ? 'Saved to Saved Reels' : 'Removed from Saved Reels')).catch(error => setSuccessToast(error instanceof Error ? error.message : 'Could not save.')); }}
                 onComments={() => setSheet({ type: 'comments', reelId: item.reel.id })}
@@ -286,7 +306,12 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
                 onSound={() => setSheet({ type: 'sound', reelId: item.reel.id })}
                 onMore={() => setSheet({ type: 'more', reelId: item.reel.id })}
                 onViewProfile={onViewProfile}
-                onSoundBlocked={() => { if (!soundHintShown.current) { soundHintShown.current = true; setSuccessToast('Tap 🔊 to turn sound on'); } }}
+                onSoundBlocked={() => {
+                  // The browser refused sound on autoplay: show muted (truthfully) for this session.
+                  setMuted(true);
+                  setReelsMuted(true, false);
+                  if (!soundHintShown.current) { soundHintShown.current = true; setSuccessToast('Tap the video or 🔇 to turn sound on'); }
+                }}
               />
             ) : (
               <div className="relative h-full w-full">
@@ -304,7 +329,7 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
     {sheet && sheetReel && sheet.type === 'comments' && <CommentsSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} />}
     {sheet && sheetReel && sheet.type === 'share' && <ShareSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} onToast={setSuccessToast} />}
     {sheet && sheetReel && sheet.type === 'sound' && <SoundSheet reel={sheetReel} viewer={viewer} savedSounds={savedSounds} onClose={() => setSheet(null)} onUse={sound => openStudio({ sound })} onToast={setSuccessToast} />}
-    {sheet && sheetReel && sheet.type === 'more' && <MoreSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} onStudio={openStudio} onToast={setSuccessToast} onDeleted={() => setDeepLinked(current => current?.id === sheetReel.id ? null : current)} />}
+    {sheet && sheetReel && sheet.type === 'more' && <MoreSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} onStudio={openStudio} onToast={setSuccessToast} onDeleted={removeReel} onHidden={removeReel} saved={savedIds.has(sheetReel.id)} onSave={saved => { if (requireViewer()) void setReelSave(sheetReel.id, uid, saved).then(() => setSuccessToast(saved ? 'Saved to Saved Reels' : 'Removed from Saved Reels')).catch(error => setSuccessToast(error instanceof Error ? error.message : 'Could not save.')); }} />}
 
     {studio && <CreateStudio mode="reel" preset={studio} onClose={() => setStudio(null)} onCreated={message => { setStudio(null); setTab('foryou'); setActiveIndex(0); feedRef.current?.scrollTo({ top: 0 }); setSuccessToast(message); }} />}
   </div>;

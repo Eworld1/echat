@@ -1,4 +1,5 @@
 import { usePreferences } from '../context/PreferencesContext';
+import { getReelsMuted, setReelsMuted } from '../services/reels/reelSound';
 import { SharePostModal, postPermalink } from './SharePostModal';
 import { initialsAvatar } from '../utils/avatar';
 import React, { useEffect, useRef, useState } from 'react';
@@ -91,7 +92,9 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [showViewersModal, setShowViewersModal] = useState(false);
   const [postViewers, setPostViewers] = useState<{ id: string; name: string; avatar: string; viewedAt: number }[]>([]);
   const [loadingViewers, setLoadingViewers] = useState(false);
-  const [isReelMuted, setIsReelMuted] = useState(() => typeof window === 'undefined' || window.localStorage.getItem('reels_muted') !== 'false');
+  const [isReelMuted, setIsReelMuted] = useState(() => typeof window === 'undefined' || getReelsMuted());
+  const reelHoldTimer = useRef<number | null>(null);
+  const reelHeld = useRef(false);
   const [isReelPlaying, setIsReelPlaying] = useState(false);
   const [isReelBuffering, setIsReelBuffering] = useState(true);
   const [reelPlaybackError, setReelPlaybackError] = useState(false);
@@ -158,7 +161,14 @@ export const PostCard: React.FC<PostCardProps> = ({
       if ((reelsAutoplay && !blockedByDataSaver && !manualPauseRef.current) || (allowManual && manualPlayRef.current)) {
         pauseOtherReels();
         video.muted = isReelMuted;
-        void video.play().catch(() => {
+        void video.play().catch(async (error: unknown) => {
+          // Browser blocked sound on autoplay: keep playing muted and show 🔇 truthfully.
+          if ((error as DOMException)?.name === 'NotAllowedError' && !video.muted) {
+            video.muted = true;
+            setIsReelMuted(true);
+            setReelsMuted(true, false);
+            try { await video.play(); return; } catch { /* fall through to the play button */ }
+          }
           manualPauseRef.current = true;
           setIsReelBuffering(false);
         });
@@ -198,11 +208,39 @@ export const PostCard: React.FC<PostCardProps> = ({
     const onReelSettings = () => {
       setReelsAutoplay(window.localStorage.getItem('reels_autoplay') !== 'false');
       setWifiOnlyAutoplay(window.localStorage.getItem('reels_wifi_only') === 'true');
-      setIsReelMuted(window.localStorage.getItem('reels_muted') !== 'false');
+      setIsReelMuted(getReelsMuted());
     };
     window.addEventListener('echat:reels-settings', onReelSettings);
     return () => window.removeEventListener('echat:reels-settings', onReelSettings);
   }, []);
+
+  /** Reel sound for every reel; applied to this video inside the tap so phones allow it. */
+  const setReelSound = (muted: boolean) => {
+    setIsReelMuted(muted);
+    if (videoRef.current) videoRef.current.muted = muted;
+    setReelsMuted(muted);
+  };
+  // Reels: tap = sound on/off (or play if paused), press and hold = pause while held.
+  const onReelPressStart = () => {
+    reelHeld.current = false;
+    if (reelHoldTimer.current) window.clearTimeout(reelHoldTimer.current);
+    reelHoldTimer.current = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (video && !video.paused) { reelHeld.current = true; video.pause(); }
+    }, 280);
+  };
+  const onReelPressEnd = () => {
+    if (reelHoldTimer.current) window.clearTimeout(reelHoldTimer.current);
+    reelHoldTimer.current = null;
+    if (reelHeld.current) void videoRef.current?.play().catch(() => {});
+  };
+  const handleReelTap = () => {
+    if (reelHeld.current) { reelHeld.current = false; return; }
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) { toggleReelPlayback(); return; }
+    setReelSound(!isReelMuted);
+  };
 
   const toggleReelPlayback = () => {
     const video = videoRef.current;
@@ -601,7 +639,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       {postMediaUrls.length > 0 && (
         <div className={`relative mx-auto flex items-center justify-center overflow-hidden bg-slate-900 ${reelMode ? 'absolute inset-0 z-0 h-full w-full max-h-none max-w-none' : 'w-full'}`}>
           {post.mediaType === 'video' ? (
-            <video data-echat-reel-video={reelMode ? 'true' : undefined} ref={videoRef} src={assetUrl(postMediaUrls[0])} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls={!reelMode} playsInline loop={reelMode} preload={reelMode ? reelPreload : 'none'} muted={reelMode ? isReelMuted : false} onClick={reelMode ? toggleReelPlayback : undefined} onPlay={() => { setIsReelPlaying(true); setIsReelBuffering(false); }} onPause={() => setIsReelPlaying(false)} onLoadStart={() => { if (reelMode) { setIsReelBuffering(true); setReelPlaybackError(false); } }} onWaiting={() => reelMode && setIsReelBuffering(true)} onCanPlay={() => setIsReelBuffering(false)} onError={() => { if (reelMode) { setIsReelBuffering(false); setReelPlaybackError(true); } }} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
+            <video data-echat-reel-video={reelMode ? 'true' : undefined} ref={videoRef} src={assetUrl(postMediaUrls[0])} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls={!reelMode} playsInline loop={reelMode} preload={reelMode ? reelPreload : 'none'} muted={reelMode ? isReelMuted : false} onClick={reelMode ? handleReelTap : undefined} onPointerDown={reelMode ? onReelPressStart : undefined} onPointerUp={reelMode ? onReelPressEnd : undefined} onPointerCancel={reelMode ? onReelPressEnd : undefined} onContextMenu={reelMode ? event => event.preventDefault() : undefined} onPlay={() => { setIsReelPlaying(true); setIsReelBuffering(false); }} onPause={() => setIsReelPlaying(false)} onLoadStart={() => { if (reelMode) { setIsReelBuffering(true); setReelPlaybackError(false); } }} onWaiting={() => reelMode && setIsReelBuffering(true)} onCanPlay={() => setIsReelBuffering(false)} onError={() => { if (reelMode) { setIsReelBuffering(false); setReelPlaybackError(true); } }} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
           ) : (
             <>
               {!reelMode && (
@@ -624,7 +662,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           {reelMode && !isReelPlaying && (autoplayBlockedByDataSaver || !reelsAutoplay || manualPauseRef.current) && <button type="button" onClick={event => { event.stopPropagation(); toggleReelPlayback(); }} aria-label="Play Reel" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/25 text-white"><span className="grid h-14 w-14 place-items-center rounded-full bg-black/60"><Play size={24} fill="currentColor" /></span>{autoplayBlockedByDataSaver && <span className="rounded-full bg-black/60 px-3 py-1 text-xs">Tap to play — you’re on mobile data</span>}</button>}
           {reelMode && isReelBuffering && !isReelPlaying && !reelPlaybackError && ((reelsAutoplay && !autoplayBlockedByDataSaver) || manualPlayRef.current) && <div aria-label="Loading Reel" className="pointer-events-none absolute inset-0 grid place-items-center bg-black/10 text-white"><Loader2 size={32} className="animate-spin" /></div>}
           {reelMode && reelPlaybackError && <div className="absolute inset-0 grid place-items-center bg-black/60 p-4 text-center text-white"><div><p className="mb-2 text-sm font-semibold">This Reel couldn’t play.</p><button type="button" onClick={() => { setReelPlaybackError(false); setIsReelBuffering(true); videoRef.current?.load(); if (reelsAutoplay) videoRef.current?.play().catch(() => {}); }} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-900">Tap to retry</button></div></div>}
-          {reelMode && <button type="button" onClick={event => { event.stopPropagation(); const muted = !isReelMuted; setIsReelMuted(muted); if (videoRef.current) videoRef.current.muted = muted; window.localStorage.setItem('reels_muted', String(muted)); window.dispatchEvent(new Event('echat:reels-settings')); }} aria-label={isReelMuted ? 'Unmute Reel' : 'Mute Reel'} className="absolute bottom-3 right-3 rounded-full bg-black/70 p-2 text-white">{isReelMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>}
+          {reelMode && <button type="button" onClick={event => { event.stopPropagation(); setReelSound(!isReelMuted); }} aria-label={isReelMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isReelMuted} className="absolute right-3 top-20 z-30 flex min-h-10 items-center gap-1.5 rounded-full bg-black/60 px-3 text-sm font-bold text-white">{isReelMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}<span aria-hidden="true">{isReelMuted ? '🔇' : '🔊'}</span></button>}
         </div>
       )}
 

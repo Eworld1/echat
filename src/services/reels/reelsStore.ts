@@ -300,8 +300,32 @@ export async function getReel(id: string): Promise<Reel | null> {
   }
 }
 
+/** Owner only (enforced by firestore.rules). The listener drops it from every feed right away. */
 export async function deleteReel(id: string): Promise<void> {
   await deleteDoc(doc(db, 'reels', id));
+}
+
+/** Owner only: change the caption (hashtags are re-read from it). */
+export async function updateReelCaption(id: string, caption: string): Promise<void> {
+  const text = caption.trim().slice(0, 2200);
+  await updateDoc(doc(db, 'reels', id), { caption: text, hashtags: extractHashtags(text), editedAt: Date.now() });
+}
+
+export const REEL_REPORT_REASONS = ['Spam', 'Nudity or sexual content', 'Violence', 'Harassment or bullying', 'False information', 'Hate speech', 'Other'] as const;
+
+/** One report per user per reel (reelReports/{reelId}_{uid}); only admins can read them all. */
+export async function reportReel(reel: Pick<Reel, 'id' | 'creatorId'>, uid: string, reason: string): Promise<void> {
+  await setDoc(doc(db, 'reelReports', `${reel.id}_${uid}`), { reelId: reel.id, creatorId: reel.creatorId, reporterId: uid, reason, status: 'pending', createdAt: Date.now() });
+}
+
+// "Not interested": hidden on this device.
+const HIDDEN_KEY = 'echat_reels_hidden';
+export function getHiddenReels(): Set<string> {
+  try { return new Set(JSON.parse(window.localStorage.getItem(HIDDEN_KEY) || '[]') as string[]); } catch { return new Set(); }
+}
+export function hideReel(id: string): void {
+  const hidden = [...getHiddenReels(), id].slice(-500);
+  try { window.localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden)); } catch { /* storage blocked */ }
 }
 
 const viewedThisSession = new Set<string>();

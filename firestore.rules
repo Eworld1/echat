@@ -59,7 +59,7 @@ service cloud.firestore {
     // Preserve the existing access behavior for the app's other collections,
     // while excluding profile security fields and live streams from this broad rule.
     match /{document=**} {
-      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats';
+      allow read, write: if document[0] != 'users' && document[0] != 'liveStreams' && document[0] != 'liveRequests' && document[0] != 'followers' && document[0] != 'reports' && document[0] != 'blocks' && document[0] != 'liveTimeouts' && document[0] != 'echat_v2_market_listings' && document[0] != 'echat_v2_market_orders' && document[0] != 'echat_v2_market_reports' && document[0] != 'events' && document[0] != 'tickets' && document[0] != 'eventGoing' && document[0] != 'reels' && document[0] != 'stories' && document[0] != 'sounds' && document[0] != 'reelLikes' && document[0] != 'reelComments' && document[0] != 'reelCommentLikes' && document[0] != 'reelSaves' && document[0] != 'savedSounds' && document[0] != 'storyVotes' && document[0] != 'wallets' && document[0] != 'walletTransactions' && document[0] != 'gameRooms' && document[0] != 'gameStats' && document[0] != 'reelReports';
     }
 
     // ---------------- GAMES HUB ----------------
@@ -416,8 +416,29 @@ service cloud.firestore {
       allow update: if signedIn() && canSeeReel(resource.data) && (
         viewIncrement() ||
         counterChange('likesCount', /databases/$(database)/documents/reelLikes/$(reelId + '_' + request.auth.uid)) ||
-        commentAdded(reelId));
+        commentAdded(reelId) ||
+        // owner edits the caption only
+        (resource.data.creatorId == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['caption', 'hashtags', 'editedAt']) &&
+          request.resource.data.caption is string && request.resource.data.caption.size() <= 2200 &&
+          request.resource.data.hashtags is list && request.resource.data.hashtags.size() <= 20 &&
+          request.resource.data.editedAt is int));
       allow delete: if signedIn() && (resource.data.creatorId == request.auth.uid || isAdmin());
+    }
+
+    // Reel reports: one per user per reel; only admins read the full list.
+    match /reelReports/{reportId} {
+      allow create: if signedIn() &&
+        request.resource.data.keys().hasOnly(['reelId', 'creatorId', 'reporterId', 'reason', 'status', 'createdAt']) &&
+        request.resource.data.reporterId == request.auth.uid &&
+        reportId == request.resource.data.reelId + '_' + request.auth.uid &&
+        request.resource.data.creatorId != request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.reason is string && request.resource.data.reason.size() <= 60 &&
+        request.resource.data.createdAt is int;
+      allow get: if signedIn() && (resource == null || resource.data.reporterId == request.auth.uid || isAdmin());
+      allow list, update: if isAdmin();
+      allow delete: if false;
     }
 
     match /reelLikes/{likeId} {
