@@ -168,5 +168,5 @@ export async function deleteProfilePhotoPost(postId: string): Promise<void> {
 }
 
 export function profilePhotoPostLink(postId: string): string {
-  return `${window.location.origin}/home?post=${encodeURIComponent(postId)}`;
+  return `${window.location.origin}/post/${encodeURIComponent(postId)}`;
 }

@@ -31,7 +31,7 @@ import {
   Users,
   Rocket,
   Sparkles
-  , Film
+  , Film, Share2
 } from 'lucide-react';
 
 interface ProfileViewProps {
@@ -170,6 +170,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     loadProfile();
   };
 
+  // /u/<id> shows a rich preview (photo + name + bio) when pasted in WhatsApp, Facebook… (see api/preview.ts).
+  const [profileLinkCopied, setProfileLinkCopied] = useState(false);
+  const shareProfile = async () => {
+    const url = `${window.location.origin}/u/${encodeURIComponent(userId)}`;
+    const name = profileData?.user.name || 'this profile';
+    try {
+      if (navigator.share && window.matchMedia('(pointer: coarse)').matches) { await navigator.share({ title: `${name} on eChat`, url }); return; }
+      await navigator.clipboard.writeText(url);
+      setProfileLinkCopied(true);
+      window.setTimeout(() => setProfileLinkCopied(false), 2000);
+    } catch { /* share sheet closed */ }
+  };
+
   const handleUnfriend = async () => {
     if (!confirm('Unfriend this user?')) return;
     await api.unfriend(userId);
@@ -266,11 +279,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       <div className="bg-white rounded-b-3xl shadow-xs border-x border-b border-slate-200 overflow-hidden">
         {/* Cover Photo */}
         <div className="relative h-48 sm:h-72 bg-gradient-to-r from-blue-600 to-indigo-700">
-          <img
+          {user.coverPhoto && <img
+            key={user.coverPhoto}
             src={user.coverPhoto}
-            alt="cover"
+            alt=""
+            onError={event => { event.currentTarget.style.display = 'none'; }}
             className="w-full h-full object-cover"
-          />
+          />}
           {isOwnProfile && (
             <button
               onClick={() => setIsEditModalOpen(true)}
@@ -394,6 +409,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     )}
 
                     {!isOwnProfile && <LiveUserActions targetUserId={user.id} targetName={user.name} />}
+
+                    <button type="button" onClick={() => void shareProfile()} title="Share profile link"
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold rounded-xl flex items-center gap-1.5 transition">
+                      <Share2 size={16} />{profileLinkCopied ? 'Link copied' : 'Share'}
+                    </button>
 
                     {isOwnProfile ? (
                       <button
@@ -659,154 +679,108 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
       {selectedReel && <ReelsViewer posts={reels} initialPostId={selectedReel.id} onClose={() => setSelectedReel(null)} onPostUpdated={() => { void loadProfile(); }} onPostDeleted={() => { setSelectedReel(null); void loadProfile(); }} onViewProfile={onViewProfile} />}
 
-      {/* Edit Profile Modal */}
+      {/* Edit Profile (Facebook-style: pictures with Upload buttons, no image links shown) */}
       {isEditModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="text-lg font-bold text-slate-900">Edit Profile</h3>
-              <button onClick={() => setIsEditModalOpen(false)} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-full">
-                <X size={18} />
-              </button>
+        <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-[#000000]/60 sm:items-center sm:p-6" onClick={() => setIsEditModalOpen(false)} role="presentation">
+          <div role="dialog" aria-modal="true" aria-labelledby="edit-profile-title" onClick={event => event.stopPropagation()} style={{ colorScheme: 'light' }}
+            className="flex h-dvh w-full flex-col bg-[#ffffff] text-[#111111] sm:h-auto sm:max-h-[90vh] sm:max-w-[560px] sm:rounded-[26px] sm:border sm:border-[#e2c06e] sm:shadow-[0_0_0_1px_rgba(255,226,150,0.35),0_0_28px_6px_rgba(240,196,92,0.40),0_20px_60px_rgba(0,0,0,0.35)]">
+            <div className="flex items-center justify-between border-b border-[#eceef1] px-5 pb-3 pt-[calc(env(safe-area-inset-top)+14px)] sm:pt-4">
+              <h3 id="edit-profile-title" className="text-[20px] font-extrabold">Edit profile</h3>
+              <button type="button" onClick={() => setIsEditModalOpen(false)} aria-label="Close" className="grid h-10 w-10 place-items-center rounded-full text-[#4b5563] hover:bg-[#f1f2f4]"><X size={20} /></button>
             </div>
 
-            <form onSubmit={handleSaveProfile} className="space-y-4 mt-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Full Name</label>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={e => setEditName(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                  required
-                />
-              </div>
+            <form onSubmit={handleSaveProfile} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
+                {/* Profile picture */}
+                <section>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h4 className="text-[16px] font-extrabold">Profile picture</h4>
+                    <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#1f4d1f] hover:bg-[#f6efd9] ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
+                      Upload photo
+                      <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'avatar')} />
+                    </label>
+                  </div>
+                  <div className="flex justify-center">
+                    <label className={`group relative block h-40 w-40 cursor-pointer rounded-full ${uploading ? 'pointer-events-none' : ''}`} aria-label="Upload profile picture">
+                      <span className="absolute inset-0 grid place-items-center rounded-full bg-gradient-to-br from-[#f3dc9b] to-[#b68428] text-5xl font-extrabold text-[#1f3d1a]">{(editName || user.name || '?').trim().charAt(0).toUpperCase()}</span>
+                      {editAvatar && <img key={editAvatar} src={editAvatar} alt="Profile picture" onError={event => { event.currentTarget.style.display = 'none'; }} className="absolute inset-0 h-full w-full rounded-full object-cover" />}
+                      <span className="absolute inset-0 rounded-full ring-4 ring-[#ffffff] shadow-[0_0_0_2px_#e2c06e]" />
+                      {uploading === 'avatar'
+                        ? <span className="absolute inset-0 grid place-items-center rounded-full bg-[#000000]/45 text-[#ffffff]"><span className="h-9 w-9 animate-spin rounded-full border-4 border-[#ffffff]/40 border-t-[#ffffff]" /></span>
+                        : <span className="absolute bottom-1 right-1 grid h-10 w-10 place-items-center rounded-full border-2 border-[#ffffff] bg-[#eef0f2] text-[#111111] shadow transition group-hover:bg-[#e2e5e9]"><Camera size={19} /></span>}
+                      <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'avatar')} />
+                    </label>
+                  </div>
+                </section>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Profile Picture</label>
-                <div className="flex items-center gap-3">
-                  <img src={editAvatar} alt="Profile preview" className="w-16 h-16 rounded-full object-cover border border-slate-200 bg-slate-100" />
-                  <label className="cursor-pointer px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition">
-                    {uploading === 'avatar' ? 'Uploading...' : 'Upload photo'}
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif"
-                      className="hidden"
-                      disabled={uploading !== null}
-                      onChange={e => handleImageUpload(e, 'avatar')}
-                    />
+                {/* Cover photo */}
+                <section>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h4 className="text-[16px] font-extrabold">Cover photo</h4>
+                    <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#1f4d1f] hover:bg-[#f6efd9] ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
+                      Upload cover
+                      <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'cover')} />
+                    </label>
+                  </div>
+                  <label className={`group relative block aspect-[16/6] w-full cursor-pointer overflow-hidden rounded-2xl border border-[#e5e7eb] ${uploading ? 'pointer-events-none' : ''}`} aria-label="Upload cover photo">
+                    <span className="absolute inset-0 bg-gradient-to-br from-[#f6e7bd] via-[#e9d29a] to-[#cfa24a]" />
+                    {editCover && <img key={editCover} src={editCover} alt="Cover photo" onError={event => { event.currentTarget.style.display = 'none'; }} className="absolute inset-0 h-full w-full object-cover" />}
+                    {uploading === 'cover'
+                      ? <span className="absolute inset-0 grid place-items-center bg-[#000000]/40"><span className="h-9 w-9 animate-spin rounded-full border-4 border-[#ffffff]/40 border-t-[#ffffff]" /></span>
+                      : <span className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-lg bg-[#ffffff]/95 px-3 py-1.5 text-[13px] font-bold text-[#111111] shadow transition group-hover:bg-[#ffffff]"><Camera size={16} />Change cover</span>}
+                    <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'cover')} />
                   </label>
-                </div>
-                <input
-                  type="text"
-                  value={editAvatar}
-                  onChange={e => setEditAvatar(e.target.value)}
-                  placeholder="...or paste an image URL"
-                  className="w-full mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                />
+                  {uploadError && <p role="alert" className="mt-2 text-[13px] font-semibold text-[#b91c1c]">{uploadError}</p>}
+                </section>
+
+                {/* Name + bio */}
+                <section className="space-y-3">
+                  <label className="block">
+                    <span className="mb-1.5 block text-[14px] font-bold">Full name</span>
+                    <input type="text" value={editName} onChange={e => setEditName(e.target.value)} required maxLength={80} style={{ colorScheme: 'light' }}
+                      className="h-12 w-full rounded-xl border border-[#d4d7db] bg-[#f1f2f4] px-4 text-[15px] text-[#111827] outline-none focus:border-[#c9a24a] focus:bg-[#ffffff] focus:ring-4 focus:ring-[#e9c86a]/30" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-[14px] font-bold">Bio</span>
+                    <textarea value={editBio} onChange={e => setEditBio(e.target.value)} rows={3} maxLength={300} placeholder="Describe who you are" style={{ colorScheme: 'light' }}
+                      className="w-full resize-none rounded-xl border border-[#d4d7db] bg-[#f1f2f4] px-4 py-3 text-[15px] text-[#111827] outline-none placeholder:text-[#7b818a]! focus:border-[#c9a24a] focus:bg-[#ffffff] focus:ring-4 focus:ring-[#e9c86a]/30" />
+                    <span className="mt-1 block text-right text-[12px] text-[#9ca3af]">{editBio.length}/300</span>
+                  </label>
+                </section>
+
+                {/* Other details, folded away so the form stays simple */}
+                <details className="group rounded-2xl border border-[#eceef1] px-4 py-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between text-[15px] font-bold">More about you <span className="text-[13px] font-semibold text-[#6b7280] group-open:hidden">Location, work, birthday</span></summary>
+                  <div className="mt-3 space-y-3 text-[14px]">
+                    {([['Location', editLocation, setEditLocation], ['Workplace', editWork, setEditWork], ['Education', editEducation, setEditEducation]] as const).map(([label, value, setValue]) => (
+                      <label key={label} className="block">
+                        <span className="mb-1 block font-semibold text-[#374151]">{label}</span>
+                        <input type="text" value={value} onChange={e => setValue(e.target.value)} style={{ colorScheme: 'light' }} className="h-11 w-full rounded-xl border border-[#d4d7db] bg-[#f1f2f4] px-3.5 text-[#111827] outline-none focus:border-[#c9a24a] focus:bg-[#ffffff]" />
+                      </label>
+                    ))}
+                    <label className="block">
+                      <span className="mb-1 block font-semibold text-[#374151]">Date of birth</span>
+                      <input type="date" value={editDob} max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0]} onChange={e => setEditDob(e.target.value)} style={{ colorScheme: 'light' }} className="h-11 w-full rounded-xl border border-[#d4d7db] bg-[#f1f2f4] px-3.5 text-[#111827] outline-none focus:border-[#c9a24a] focus:bg-[#ffffff]" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block font-semibold text-[#374151]">Birthday visibility</span>
+                      <select value={editDobVisibility || 'public'} onChange={event => setEditDobVisibility(event.target.value as User['dobVisibility'])} style={{ colorScheme: 'light' }} className="h-11 w-full rounded-xl border border-[#d4d7db] bg-[#f1f2f4] px-3 text-[#111827] outline-none focus:border-[#c9a24a]">
+                        <option value="public">Public — show full date</option>
+                        <option value="friends">Friends only — show full date</option>
+                        <option value="only_me">Only me</option>
+                        <option value="month_day_only">Show month and day only</option>
+                      </select>
+                      {editDobVisibility === 'only_me' && <span className="mt-1 block text-[12px] font-medium text-[#b45309]">Your friends will not be notified about your birthday.</span>}
+                    </label>
+                  </div>
+                </details>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Cover Photo</label>
-                <img src={editCover} alt="Cover preview" className="w-full h-24 rounded-xl object-cover border border-slate-200 bg-slate-100 mb-2" />
-                <label className="inline-block cursor-pointer px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition">
-                  {uploading === 'cover' ? 'Uploading...' : 'Upload cover'}
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    className="hidden"
-                    disabled={uploading !== null}
-                    onChange={e => handleImageUpload(e, 'cover')}
-                  />
-                </label>
-                <input
-                  type="text"
-                  value={editCover}
-                  onChange={e => setEditCover(e.target.value)}
-                  placeholder="...or paste an image URL"
-                  className="w-full mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                />
-                {uploadError && <p className="mt-2 text-red-600 font-semibold">{uploadError}</p>}
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Bio</label>
-                <textarea
-                  value={editBio}
-                  onChange={e => setEditBio(e.target.value)}
-                  rows={3}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Location</label>
-                  <input
-                    type="text"
-                    value={editLocation}
-                    onChange={e => setEditLocation(e.target.value)}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Workplace</label>
-                  <input
-                    type="text"
-                    value={editWork}
-                    onChange={e => setEditWork(e.target.value)}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Education</label>
-                <input
-                  type="text"
-                  value={editEducation}
-                  onChange={e => setEditEducation(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Date of Birth</label>
-                <input
-                  type="date"
-                  value={editDob}
-                  max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0]}
-                  onChange={e => setEditDob(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Birthday visibility</label>
-                <select value={editDobVisibility || 'public'} onChange={event => setEditDobVisibility(event.target.value as User['dobVisibility'])} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
-                  <option value="public">Public — show full date</option>
-                  <option value="friends">Friends only — show full date</option>
-                  <option value="only_me">Only me</option>
-                  <option value="month_day_only">Show month and day only</option>
-                </select>
-                <p className="mt-1 text-[11px] text-slate-500">Your full birth date is hidden from people who are not allowed to see it.</p>
-                {editDobVisibility === 'only_me' && <p className="mt-1 text-[11px] font-medium text-amber-700">Your friends will not be notified about your birthday.</p>}
-              </div>
-
-              <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsEditModalOpen(false)}
-                  className="px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100 rounded-full"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingProfile || Boolean(uploading)}
-                  className="px-6 py-2 font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-xs"
-                >
-                  {isSavingProfile ? 'Saving…' : 'Save Changes'}
+              <div className="flex gap-2 border-t border-[#eceef1] px-5 pb-[calc(env(safe-area-inset-bottom)+14px)] pt-3">
+                <button type="button" onClick={() => setIsEditModalOpen(false)} className="h-12 flex-1 rounded-xl border border-[#d4d7db] bg-[#ffffff] text-[15px] font-bold text-[#374151] hover:bg-[#f1f2f4] sm:flex-none sm:px-6">Cancel</button>
+                <button type="submit" disabled={isSavingProfile || Boolean(uploading)}
+                  className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-xl border border-[#b8862b] bg-gradient-to-b from-[#f3dc9b] via-[#d9b25a] to-[#b68428] text-[16px] font-extrabold text-[#1f3d1a] shadow-[0_6px_16px_rgba(166,120,30,0.30),inset_0_1px_0_rgba(255,255,255,0.6)] hover:brightness-105 disabled:cursor-wait disabled:opacity-70 sm:ml-auto sm:flex-none sm:px-8">
+                  {uploading ? 'Uploading…' : isSavingProfile ? 'Saving…' : 'Save'}
                 </button>
               </div>
             </form>

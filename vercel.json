@@ -7,7 +7,40 @@
     }
   },
   "rewrites": [
-    { "source": "/((?!api/|uploads/|assets/|.*\\..*).*)", "destination": "/index.html" }
+    {
+      "source": "/post/:id",
+      "destination": "/api/preview?kind=post&id=:id"
+    },
+    {
+      "source": "/u/:id",
+      "destination": "/api/preview?kind=user&id=:id"
+    },
+    {
+      "source": "/profile",
+      "has": [
+        {
+          "type": "query",
+          "key": "user",
+          "value": "(?<uid>.+)"
+        }
+      ],
+      "destination": "/api/preview?kind=user&id=:uid"
+    },
+    {
+      "source": "/home",
+      "has": [
+        {
+          "type": "query",
+          "key": "post",
+          "value": "(?<pid>.+)"
+        }
+      ],
+      "destination": "/api/preview?kind=post&id=:pid"
+    },
+    {
+      "source": "/((?!api/|uploads/|assets/|.*\\..*).*)",
+      "destination": "/index.html"
+    }
   ],
   "buildCommand": "npm run build",
   "outputDirectory": "dist",

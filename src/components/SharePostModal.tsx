@@ -13,7 +13,8 @@ interface SharePostModalProps {
 }
 
 export function postPermalink(postId: string): string {
-  return `${window.location.origin}/?post=${encodeURIComponent(postId)}`;
+  // /post/<id> shows a rich preview (image + title) when pasted in WhatsApp, Facebook… (see api/preview.ts).
+  return `${window.location.origin}/post/${encodeURIComponent(postId)}`;
 }
 
 const Badge: React.FC<{ color: string; children: React.ReactNode }> = ({ color, children }) => (

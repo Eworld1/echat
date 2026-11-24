@@ -1078,6 +1078,53 @@ app.get('/api/search', (req: Request, res: Response) => {
   }
 });
 
+// ----------------- LINK PREVIEWS (WhatsApp / Facebook / X crawlers) -----------------
+// Public, read-only summaries used by the Vercel /post/:id and /u/:id preview pages.
+// Only public posts are described; nothing private (email, phone, friends-only text) is returned.
+function previewAbsolute(req: Request, url: string): string {
+  if (!url) return '';
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith('/')) return `${req.protocol === 'http' && req.get('x-forwarded-proto') !== 'https' ? 'http' : 'https'}://${req.get('host')}${url}`;
+  return '';
+}
+function previewText(text: string, max: number): string {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
+}
+app.get('/api/preview/post/:id', (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  const id = String(req.params.id || '');
+  // "[Name] updated their profile picture" posts live in Firestore: pp_<uid>_<hash>.
+  const photoPost = id.match(/^pp_([^_]+)_/);
+  if (photoPost) {
+    const owner = db.getUserById(photoPost[1]);
+    if (!owner) return res.status(404).json({ error: 'Post not found' });
+    return res.json({ kind: 'post', title: `${owner.name} updated their profile picture`, description: `See ${owner.name}'s new profile picture on eChat.`, image: previewAbsolute(req, owner.avatar), author: owner.name });
+  }
+  const post = db.getPostById(id);
+  if (!post || post.privacy !== 'public') return res.status(404).json({ error: 'Post not found' });
+  const author = db.getUserById(post.authorId);
+  const page = post.pageId ? db.getPageById(post.pageId) : null;
+  const name = page?.name || author?.name || 'eChat user';
+  const images = [post.mediaType === 'video' ? post.thumbnailUrl : post.mediaUrl, ...(Array.isArray(post.mediaUrls) ? post.mediaUrls : []), post.thumbnailUrl]
+    .filter((url): url is string => typeof url === 'string' && Boolean(url) && !/\.(mp4|mov|webm|m4v)(\?|$)/i.test(url));
+  const firstLine = previewText(String(post.content || '').split('\n').find(line => line.trim()) || '', 200);
+  res.json({
+    kind: 'post',
+    title: firstLine ? `${name} on eChat: "${previewText(firstLine, 70)}"` : `${name} shared a ${post.mediaType === 'video' ? 'video' : post.mediaType === 'image' ? 'photo' : 'post'} on eChat`,
+    description: firstLine || `See ${name}'s post on eChat.`,
+    image: previewAbsolute(req, images[0] || author?.avatar || ''),
+    author: name,
+    video: post.mediaType === 'video'
+  });
+});
+app.get('/api/preview/user/:id', (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  const user = db.getUserById(String(req.params.id || ''));
+  if (!user || (user as { isBlocked?: boolean }).isBlocked) return res.status(404).json({ error: 'User not found' });
+  res.json({ kind: 'user', title: `${user.name} | eChat`, description: previewText(user.bio || '', 200) || `${user.name} is on eChat. Chat, stream and connect.`, image: previewAbsolute(req, user.avatar), author: user.name });
+});
+
 app.get('/api/posts', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   const pageSize = 10;

@@ -79,6 +79,12 @@ export function MainApp() {
   currentViewRef.current = currentView;
   useEffect(() => {
     const syncRoute = () => {
+      // Shared links: /post/<id> → the post in the feed; /u/<id> → that person's profile.
+      const shared = window.location.pathname.match(/^\/(post|u)\/([^/]+)\/?$/);
+      if (shared) {
+        const id = encodeURIComponent(decodeURIComponent(shared[2]));
+        window.history.replaceState({ echatApp: true, tab: shared[1] === 'u' ? 'profile' : 'feed' }, '', shared[1] === 'u' ? `/profile?user=${id}` : `/home?post=${id}`);
+      }
       const path = window.location.pathname;
       if ((path.startsWith('/v2/') || path === '/v2') && !ECHAT_V2_ENABLED) {
         // TEMP DISABLED FOR V2 ROLLBACK: restore V2 paths here when ECHAT_V2_ENABLED is turned back on.
@@ -103,7 +109,7 @@ export function MainApp() {
           return;
         }
         setCurrentView(route);
-        if (route === 'profile') setProfileUserId(user?.id || null);
+        if (route === 'profile') setProfileUserId(new URLSearchParams(window.location.search).get('user') || user?.id || null);
         if (path.startsWith('/live/')) {
           const streamId = decodeURIComponent(path.slice('/live/'.length));
           void api.getCurrentLive().then(result => {
@@ -184,7 +190,12 @@ export function MainApp() {
     const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',messages:'/messages',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',jobs:'/jobs',events:'/events',wallet:'/wallet',games:'/games',adminWallet:'/admin/wallet',myTickets:'/my-tickets',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search'};
     const routePath=view==='marketplace' ? (targetRoute?.startsWith('/marketplace/') ? targetRoute : '/marketplace') : routeByView[view];
     if(view==='marketplace')setMarketRoute(routePath);
-    window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${window.location.search}`);
+    // Profiles get a shareable address (/profile?user=<id>); other pages drop it.
+    const search = new URLSearchParams(window.location.search);
+    search.delete('user');
+    if (view === 'profile' && targetProfileId) search.set('user', targetProfileId);
+    const query = search.toString();
+    window.history.pushState({ echatApp: true, tab: view, profileId: targetProfileId || null }, '', `${routePath}${query ? `?${query}` : ''}`);
     // Lets pages with sub-routes (Events: /events/:id …) follow sidebar/menu navigation.
     window.dispatchEvent(new Event('echat:pathchange'));
     setActiveChatPartner(null);
