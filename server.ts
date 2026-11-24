@@ -10,6 +10,7 @@ import { db, hashPassword } from './server/db.js';
 import { SocketManager } from './server/socket.js';
 import { firebaseProjectId, firestore, getFirebaseAdminAuth } from './server/firebase-admin.js';
 import { verifyFirebaseIdToken } from './server/firebase-token.js';
+import { RESPONSE_TIMING, VerificationError, completeReset, completeSignup, completeVerify, normalizeEmail, sendResetCode, sendSignupCode, sendVerifyCode, verificationStatus } from './server/verification.js';
 import { resolveLiveCreatedAt } from './serverless/live-age.js';
 import { describeLiveKitError, getOrCreateLiveStreamIngress, resetLiveStreamIngress } from './serverless/live-stream-key.js';
 
@@ -710,41 +711,59 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
+// ----------------- VERIFICATION CODES (sign-up, verify email, forgot password) -----------------
+// 6-digit codes emailed by server/verification.ts. The old "reset token" endpoints are gone:
+// codes are never returned to the browser.
+const verifyRoute = (handler: (req: Request) => Promise<Record<string, unknown> | void>) => async (req: Request, res: Response) => {
   try {
-    const { email } = req.body;
-    if (!email || typeof email !== 'string') return res.status(400).json({ error: 'Email is required' });
-
-    const genericMessage = 'If an account exists for that email, a reset code has been generated.';
-    const user = db.getUserByEmail(email);
-    if (!user) return res.json({ success: true, message: genericMessage });
-
-    const token = db.createPasswordResetToken(email);
-    // Without an email provider the code must not be handed to the requester: that would let
-    // anyone reset anyone's password. It is shown only in dev, or if explicitly enabled.
-    const exposeToken = !isProd || process.env.ALLOW_RESET_TOKEN_IN_RESPONSE === 'true';
-    res.json({ success: true, message: genericMessage, ...(exposeToken ? { token } : {}) });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    res.json({ success: true, ...RESPONSE_TIMING, ...(await handler(req) || {}) });
+  } catch (error) {
+    if (error instanceof VerificationError) {
+      if (error.retryAfter) res.setHeader('Retry-After', String(error.retryAfter));
+      return res.status(error.status).json({ error: error.message, code: error.code, ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}) });
+    }
+    console.error('[verification] failed:', error instanceof Error ? error.message : error);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
+};
+
+async function verifiedTokenUid(req: Request): Promise<string> {
+  const token = String(req.body?.idToken || req.get('x-firebase-id-token') || '');
+  if (!token) throw new VerificationError('Please sign in again.', 401, 'signed-out');
+  try { return (await verifyFirebaseIdToken(token, firebaseProjectId)).uid; }
+  catch { throw new VerificationError('Your sign-in expired. Please sign in again.', 401, 'signed-out'); }
+}
+
+app.use('/api/verify', authRateLimit);
+app.get('/api/verify/status', (_req: Request, res: Response) => {
+  const status = verificationStatus();
+  res.json({ ready: status.ready, email: status.email, firebaseAdmin: status.firebaseAdmin });
 });
-
-app.post('/api/auth/reset-password', (req: Request, res: Response) => {
-  try {
-    const { token, newPassword } = req.body;
-    if (!token || !newPassword) {
-      return res.status(400).json({ error: 'Reset token and new password are required' });
-    }
-
-    const success = db.verifyAndResetPassword(token, newPassword);
-    if (!success) {
-      return res.status(400).json({ error: 'Invalid or expired reset token' });
-    }
-
-    res.json({ success: true, message: 'Password has been successfully reset. Please log in.' });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
+app.post('/api/verify/signup/send', verifyRoute(async req => { await sendSignupCode(req.body?.email); }));
+app.post('/api/verify/signup/confirm', verifyRoute(async req => {
+  const email = normalizeEmail(req.body?.email);
+  // An old account that only exists on this server keeps its id (and so its posts and friends)
+  // when it verifies, if the password matches.
+  const legacy = db.getUserByEmail(email);
+  const legacyUid = legacy && typeof req.body?.password === 'string' && legacy.passwordHash === hashPassword(req.body.password) ? legacy.id : undefined;
+  const { uid } = await completeSignup(email, req.body?.code, req.body?.password, req.body?.name, legacyUid);
+  return { uid };
+}));
+app.post('/api/verify/email/send', verifyRoute(async req => { await sendVerifyCode(await verifiedTokenUid(req)); }));
+app.post('/api/verify/email/confirm', verifyRoute(async req => { await completeVerify(await verifiedTokenUid(req), req.body?.code); }));
+app.post('/api/verify/reset/send', verifyRoute(async req => {
+  await sendResetCode(req.body?.email, email => Boolean(db.getUserByEmail(email)));
+  return { message: 'If this account exists, we sent a code.' };
+}));
+app.post('/api/verify/reset/confirm', verifyRoute(async req => {
+  const { email } = await completeReset(req.body?.email, req.body?.code, req.body?.newPassword);
+  const legacy = db.getUserByEmail(email);
+  if (legacy) db.updateUser(legacy.id, { passwordHash: hashPassword(String(req.body.newPassword)) });
+  return { message: 'Your password has been changed. Log in with your new password.' };
+}));
+// Old token endpoints: removed for security.
+app.post(['/api/auth/forgot-password', '/api/auth/reset-password'], (_req: Request, res: Response) => {
+  res.status(410).json({ error: 'Please update eChat and use "Forgot password?" again.' });
 });
 
 app.get('/api/auth/me', (req: Request, res: Response) => {

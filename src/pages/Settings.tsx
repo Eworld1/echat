@@ -386,7 +386,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                   Two-Factor Authentication (2FA)
                 </h4>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Protect your account by requiring an extra verification token when logging in.
+                  Protect your account by requiring an extra verification code when logging in.
                 </p>
               </div>
               <button

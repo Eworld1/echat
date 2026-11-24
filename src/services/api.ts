@@ -110,6 +110,8 @@ async function readResponse<T>(res: Response, fallbackMessage = 'Request failed'
     if (payload && typeof payload === 'object') {
       const serverCode = (payload as { code?: unknown }).code;
       if (typeof serverCode === 'string') error.code = serverCode;
+      const retryAfter = (payload as { retryAfter?: unknown }).retryAfter;
+      if (typeof retryAfter === 'number') (error as Error & { retryAfter?: number }).retryAfter = retryAfter;
     }
     error.status = res.status;
     throw error;
@@ -321,22 +323,15 @@ export const api = {
     return readResponse<{ user: User; token: string; liveAuthToken?: string }>(res, 'Login failed');
   },
 
-  async forgotPassword(email: string): Promise<{ success: boolean; message: string; token?: string }> {
-    const res = await fetch(apiUrl('/api/auth/forgot-password'), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ email })
-    });
-    return readResponse<{ success: boolean; message: string; token: string }>(res, 'Failed to request reset token');
+  /** Verification codes (see server/verification.ts). Codes are only ever emailed, never returned. */
+  async verificationStatus(): Promise<{ ready: boolean; email: boolean; firebaseAdmin: boolean }> {
+    const res = await fetch(apiUrl('/api/verify/status'), { signal: AbortSignal.timeout(8000) });
+    return readResponse(res, 'Could not reach the eChat server');
   },
 
-  async resetPassword(token: string, newPassword: string): Promise<{ success: boolean; message: string }> {
-    const res = await fetch(apiUrl('/api/auth/reset-password'), {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ token, newPassword })
-    });
-    return readResponse<{ success: boolean; message: string }>(res, 'Password reset failed');
+  async verifyRequest<T = { success: boolean; expiresInSeconds: number; resendAfterSeconds: number; message?: string }>(path: string, body: Record<string, unknown>): Promise<T> {
+    const res = await fetch(apiUrl(`/api/verify/${path}`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return readResponse<T>(res, 'Something went wrong. Please try again.');
   },
 
   async getMe(): Promise<User | null> {

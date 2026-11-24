@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Calendar, Camera, Eye, EyeOff, Loader2, Lock, Mail, User as UserIcon, X } from 'lucide-react';
+import { AlertCircle, Calendar, Camera, Eye, EyeOff, Loader2, Lock, Mail, Smartphone, User as UserIcon, X } from 'lucide-react';
 import { useAuth, type SocialProvider } from '../context/AuthContext';
 import { initialsAvatar } from '../utils/avatar';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { TermsModal } from './TermsModal';
+import { AUTH_GREEN, AUTH_LIGHT, VerifyCodeStep, authGoldButton, authIconClass, authInputClass } from './VerifyCode';
 
 /**
  * EChat sign-in: blurred office photo behind a centred white card with a thin gold border and warm gold glow.
@@ -20,7 +21,7 @@ interface AuthModalProps {
   initialMode?: 'login' | 'register';
 }
 
-type Mode = 'login' | 'register';
+type Mode = 'login' | 'register' | 'phone';
 
 const adultCutoff = () => new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0];
 const ageFrom = (dob: string) => {
@@ -32,11 +33,12 @@ const ageFrom = (dob: string) => {
   return beforeBirthday ? age - 1 : age;
 };
 
-const GREEN = 'text-[#1f4d1f]';
-const LIGHT_INPUT = { colorScheme: 'light' } as const;
-const inputClass = 'peer h-12 w-full rounded-xl border border-[#d4d7db] bg-[#f1f2f4] pl-11 pr-4 text-[15px] text-[#111827] shadow-[inset_0_1px_2px_rgba(0,0,0,0.04)] outline-none transition placeholder:text-[#7b818a]! focus:border-[#c9a24a] focus:bg-[#ffffff] focus:ring-4 focus:ring-[#e9c86a]/30';
-const iconClass = 'pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#6b7280] transition peer-focus:text-[#a87b22]';
-const goldButton = 'relative flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#b8862b] bg-gradient-to-b from-[#f3dc9b] via-[#d9b25a] to-[#b68428] text-[17px] font-extrabold text-[#1f3d1a] shadow-[0_6px_16px_rgba(166,120,30,0.35),inset_0_1px_0_rgba(255,255,255,0.6)] transition hover:brightness-105 active:translate-y-px focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#e9c86a]/50 disabled:cursor-wait disabled:opacity-75';
+const GREEN = AUTH_GREEN;
+const LIGHT_INPUT = AUTH_LIGHT;
+const inputClass = authInputClass;
+const iconClass = authIconClass;
+const goldButton = authGoldButton;
+const RECAPTCHA_ID = 'echat-recaptcha';
 
 const GoogleIcon = () => (
   <svg viewBox="0 0 48 48" className="h-5 w-5" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" /><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" /><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" /><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" /></svg>
@@ -62,7 +64,9 @@ export const EChatWordmark: React.FC<{ className?: string }> = ({ className = ''
 );
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMode = 'login' }) => {
-  const { login, register, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup } = useAuth();
+  const { login, startEmailSignup, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup, pendingVerification, confirmVerificationCode, resendVerificationCode, cancelVerification, startPhoneSignIn, logout } = useAuth();
+  const [phone, setPhone] = useState('+232 ');
+  const [phoneFrom, setPhoneFrom] = useState<'login' | 'register'>('login');
   const [mode, setMode] = useState<Mode>(initialMode);
 
   const [email, setEmail] = useState('');
@@ -80,6 +84,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
   const [error, setError] = useState('');
   const [errorKey, setErrorKey] = useState(0);
   const [busy, setBusy] = useState<'' | 'email' | SocialProvider>('');
+  const [resetDone, setResetDone] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
   const [termsOpen, setTermsOpen] = useState(false);
 
@@ -97,7 +102,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     event.preventDefault();
     if (busy) return;
     setBusy('email'); setError('');
-    try { await login(email, password, remember); onClose?.(); } catch (err) { fail(err instanceof Error ? err.message : 'Login failed. Please check your details.'); } finally { setBusy(''); }
+    try { await login(email, password, remember); setResetDone(false); } catch (err) { fail(err instanceof Error ? err.message : 'Login failed. Please check your details.'); } finally { setBusy(''); }
   };
 
   const checkAdult = () => {
@@ -114,10 +119,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     if (problem) { fail(problem); return; }
     setBusy('email'); setError('');
     try {
-      await register({ name: name.trim(), email, password, dob, avatarFile: avatarFile ?? undefined, bio: 'Excited to be on Echat! 👋', location: 'Global', termsAccepted: true });
-      onClose?.();
+      // Step 1 only: a 6-digit code is emailed; the account is created after the code is confirmed.
+      await startEmailSignup({ name: name.trim(), email, password, dob, avatarFile: avatarFile ?? undefined, remember });
     } catch (err) { fail(err instanceof Error ? err.message : 'Could not create your account.'); } finally { setBusy(''); }
   };
+
+  const handlePhone = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy('phone'); setError('');
+    try { await startPhoneSignIn(phone, RECAPTCHA_ID, remember); }
+    catch (err) { fail(err instanceof Error ? err.message : 'Could not send the SMS code.'); }
+    finally { setBusy(''); }
+  };
+
+  const openPhone = (from: 'login' | 'register', number?: string) => { setPhoneFrom(from); if (number) setPhone(number); switchMode('phone'); };
 
   const handleSocial = async (provider: SocialProvider) => {
     if (busy) return;
@@ -198,14 +214,60 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
 
   /* ---------- card content ---------- */
 
+  const phoneButton = (label: string, from: 'login' | 'register') => (
+    <button type="button" onClick={() => openPhone(from)} disabled={Boolean(busy)}
+      className="flex h-12 w-full items-center justify-center gap-2.5 rounded-xl border border-[#b9bdc3] bg-[#ffffff] text-[16px] font-bold text-[#111111] shadow-[0_2px_4px_rgba(0,0,0,0.06)] transition hover:bg-[#f6f7f8] active:translate-y-px disabled:opacity-60">
+      <Smartphone size={19} className="text-[#a87b22]" />{label}
+    </button>
+  );
+
   let content: React.ReactNode;
-  if (pendingSocialSignup) {
+  if (pendingVerification && !pendingSocialSignup) {
+    const pending = pendingVerification;
+    const isPhone = pending.kind === 'phone';
+    content = (
+      <VerifyCodeStep
+        key={`${pending.kind}-${isPhone ? pending.phoneNumber : pending.email}`}
+        title={isPhone ? 'Verify your phone' : 'Verify your email'}
+        target={isPhone ? pending.phoneNumber : pending.email}
+        channel={isPhone ? 'sms' : 'email'}
+        initialCooldown={pending.kind === 'existing' ? 0 : 60}
+        sendOnOpen={pending.kind === 'existing'}
+        submitLabel={pending.kind === 'signup' ? 'Verify & Create Account' : 'Verify'}
+        note={pending.kind === 'existing' || pending.kind === 'legacy'
+          ? <>Please verify your email to continue. This is a one-time step to keep eChat free of fake accounts.</>
+          : undefined}
+        onVerify={confirmVerificationCode}
+        onResend={resendVerificationCode}
+        onBack={() => { if (pending.kind === 'existing') void logout().then(cancelVerification); else void cancelVerification(); }}
+        backLabel={pending.kind === 'existing' ? 'Log out' : pending.kind === 'signup' ? 'Change email' : isPhone ? 'Change number' : 'Back'}
+      />
+    );
+  } else if (mode === 'phone' && !pendingSocialSignup) {
+    content = (
+      <form key="phone" onSubmit={handlePhone} className="space-y-4" noValidate>
+        <div className="pb-1 text-center">
+          <h1 className="text-[30px] font-extrabold leading-tight tracking-tight text-[#111111]">{phoneFrom === 'register' ? 'Sign up with phone' : 'Log in with phone'}</h1>
+          <p className="mt-1 text-[14px] text-[#4b5563]">We'll text you a 6-digit code to verify your number</p>
+        </div>
+        <div className="relative">
+          <input type="tel" inputMode="tel" value={phone} onChange={event => setPhone(event.target.value)} placeholder="+232 76 123456" autoComplete="tel" required className={inputClass} style={LIGHT_INPUT} />
+          <Smartphone size={18} strokeWidth={1.8} className={iconClass} />
+          <span className="mt-1 block px-1 text-left text-[11px] text-[#6b7280]">Include your country code, e.g. +232 for Sierra Leone</span>
+        </div>
+        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'phone' ? spinner('Sending code…') : 'Send Verification Code'}</button>
+        <div className="pt-1">{divider('or')}</div>
+        {googleButton}
+        <button type="button" onClick={() => switchMode(phoneFrom)} className={`w-full text-center text-[14px] font-bold ${GREEN} hover:underline`}>{phoneFrom === 'register' ? 'Sign up with email instead' : 'Log in with email instead'}</button>
+      </form>
+    );
+  } else if (pendingSocialSignup) {
     content = (
       <form key="social" onSubmit={handleCompleteSocial} className="space-y-3.5">
         <div className="flex flex-col items-center gap-2">
           <img src={pendingSocialSignup.photoURL || initialsAvatar(name || '?')} alt="" className="h-16 w-16 rounded-full object-cover ring-2 ring-[#e3c272]" />
           <h1 className="text-[30px] font-extrabold leading-tight tracking-tight text-[#111111]">Almost there</h1>
-          <p className="max-w-full truncate text-[14px] text-[#4b5563]">{pendingSocialSignup.email || 'Finish creating your EChat account'}</p>
+          <p className="max-w-full truncate text-[14px] text-[#4b5563]">{pendingSocialSignup.email || (pendingSocialSignup.provider === 'phone' ? 'Phone verified ✓ Finish creating your account' : 'Finish creating your EChat account')}</p>
         </div>
         {nameField('Your name')}
         {dobField}
@@ -221,6 +283,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
           <h1 className="text-[34px] font-extrabold leading-tight tracking-tight text-[#111111]">Welcome back</h1>
           <p className="mt-1 text-[14px] text-[#4b5563]">Sign in to continue to your conversations</p>
         </div>
+        {resetDone && <p role="status" className="rounded-xl bg-[#ecfdf3] px-3 py-2 text-center text-[13px] font-semibold text-[#15803d]">Password changed. Log in with your new password.</p>}
         {emailField}
         {passwordField('current-password', 'Password')}
         <div className="flex items-center justify-between gap-2 pt-0.5">
@@ -233,6 +296,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
         <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'email' ? spinner('Signing in…') : 'Continue'}</button>
         <div className="pt-2">{divider('or continue with')}</div>
         {googleButton}
+        {phoneButton('Continue with phone', 'login')}
         <div className="pt-3 text-center">
           <p className="text-[12px] text-[#4b5563]">Don't have an account?</p>
           <button type="button" onClick={() => switchMode('register')} className={`mt-0.5 text-[15px] font-extrabold ${GREEN} hover:underline`}>Sign up</button>
@@ -258,8 +322,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
         {passwordField('new-password', 'Create a password (6+ characters)')}
         {dobField}
         {termsCheckbox}
-        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'email' ? spinner('Creating account…') : 'Continue'}</button>
-        <div className="pt-1">{divider('or continue with')}</div>
+        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'email' ? spinner('Sending code…') : 'Continue'}</button>
+        <p className="text-center text-[12px] text-[#6b7280]">We'll email you a 6-digit code to verify it's really you.</p>
+        <div className="pt-1">{divider('or sign up with')}</div>
+        {phoneButton('Sign up with phone number', 'register')}
         {googleButton}
         <div className="pt-2 text-center">
           <p className="text-[12px] text-[#4b5563]">Already have an account?</p>
@@ -293,7 +359,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
         </div>
       )}
 
-      <ForgotPasswordModal isOpen={forgotOpen} onClose={() => setForgotOpen(false)} onSuccess={() => { setForgotOpen(false); switchMode('login'); }} />
+      <ForgotPasswordModal isOpen={forgotOpen} onClose={() => setForgotOpen(false)} onSuccess={() => { setForgotOpen(false); setPassword(''); setResetDone(true); switchMode('login'); }} onUsePhone={number => openPhone('login', number)} />
+      {/* Invisible reCAPTCHA used by Firebase phone sign-in. */}
+      <div id={RECAPTCHA_ID} />
       <TermsModal isOpen={termsOpen} onClose={() => setTermsOpen(false)} onAccept={() => setAgreeTerms(true)} showAcceptButton />
     </div>
   );
