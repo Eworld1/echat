@@ -4,7 +4,7 @@ import { useAuth, type SocialProvider } from '../context/AuthContext';
 import { initialsAvatar } from '../utils/avatar';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { TermsModal } from './TermsModal';
-import { AUTH_GREEN, AUTH_LIGHT, VerifyCodeStep, authGoldButton, authIconClass, authInputClass } from './VerifyCode';
+import { AUTH_GREEN, AUTH_LIGHT, CheckEmailStep, VerifyCodeStep, authGoldButton, authIconClass, authInputClass } from './VerifyCode';
 
 /**
  * EChat sign-in: blurred office photo behind a centred white card with a thin gold border and warm gold glow.
@@ -64,7 +64,7 @@ export const EChatWordmark: React.FC<{ className?: string }> = ({ className = ''
 );
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMode = 'login' }) => {
-  const { login, startEmailSignup, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup, pendingVerification, confirmVerificationCode, resendVerificationCode, cancelVerification, startPhoneSignIn, logout } = useAuth();
+  const { login, startEmailSignup, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup, pendingVerification, confirmVerificationCode, checkEmailVerified, resendVerificationEmail, resendVerificationCode, cancelVerification, startPhoneSignIn } = useAuth();
   const [phone, setPhone] = useState('+232 ');
   const [phoneFrom, setPhoneFrom] = useState<'login' | 'register'>('login');
   const [mode, setMode] = useState<Mode>(initialMode);
@@ -119,7 +119,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     if (problem) { fail(problem); return; }
     setBusy('email'); setError('');
     try {
-      // Step 1 only: a 6-digit code is emailed; the account is created after the code is confirmed.
+      // Creates the Firebase account and emails a verification link; the app stays locked until it is clicked.
       await startEmailSignup({ name: name.trim(), email, password, dob, avatarFile: avatarFile ?? undefined, remember });
     } catch (err) { fail(err instanceof Error ? err.message : 'Could not create your account.'); } finally { setBusy(''); }
   };
@@ -224,23 +224,30 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
   let content: React.ReactNode;
   if (pendingVerification && !pendingSocialSignup) {
     const pending = pendingVerification;
-    const isPhone = pending.kind === 'phone';
-    content = (
+    content = pending.kind === 'email' ? (
+      <CheckEmailStep
+        key={`email-${pending.email}`}
+        email={pending.email}
+        title={pending.justSignedUp ? 'Check your email' : 'Please verify your email first'}
+        message={pending.justSignedUp ? 'We sent you a verification link. Click it to verify your account:' : 'Your email isn\'t verified yet. Click the link we emailed to:'}
+        initialCooldown={pending.justSignedUp ? 60 : 0}
+        onCheck={checkEmailVerified}
+        onResend={resendVerificationEmail}
+        onBack={() => { void cancelVerification(); setPassword(''); switchMode('login'); }}
+        backLabel={pending.justSignedUp ? 'Back to Log In' : 'Log out'}
+      />
+    ) : (
       <VerifyCodeStep
-        key={`${pending.kind}-${isPhone ? pending.phoneNumber : pending.email}`}
-        title={isPhone ? 'Verify your phone' : 'Verify your email'}
-        target={isPhone ? pending.phoneNumber : pending.email}
-        channel={isPhone ? 'sms' : 'email'}
-        initialCooldown={pending.kind === 'existing' ? 0 : 60}
-        sendOnOpen={pending.kind === 'existing'}
-        submitLabel={pending.kind === 'signup' ? 'Verify & Create Account' : 'Verify'}
-        note={pending.kind === 'existing' || pending.kind === 'legacy'
-          ? <>Please verify your email to continue. This is a one-time step to keep eChat free of fake accounts.</>
-          : undefined}
+        key={`phone-${pending.phoneNumber}`}
+        title="Verify your phone"
+        target={pending.phoneNumber}
+        channel="sms"
+        initialCooldown={60}
+        submitLabel="Verify"
         onVerify={confirmVerificationCode}
         onResend={resendVerificationCode}
-        onBack={() => { if (pending.kind === 'existing') void logout().then(cancelVerification); else void cancelVerification(); }}
-        backLabel={pending.kind === 'existing' ? 'Log out' : pending.kind === 'signup' ? 'Change email' : isPhone ? 'Change number' : 'Back'}
+        onBack={() => void cancelVerification()}
+        backLabel="Change number"
       />
     );
   } else if (mode === 'phone' && !pendingSocialSignup) {
@@ -322,8 +329,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
         {passwordField('new-password', 'Create a password (6+ characters)')}
         {dobField}
         {termsCheckbox}
-        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'email' ? spinner('Sending code…') : 'Continue'}</button>
-        <p className="text-center text-[12px] text-[#6b7280]">We'll email you a 6-digit code to verify it's really you.</p>
+        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'email' ? spinner('Creating account…') : 'Continue'}</button>
+        <p className="text-center text-[12px] text-[#6b7280]">We'll email you a verification link to confirm it's really you.</p>
         <div className="pt-1">{divider('or sign up with')}</div>
         {phoneButton('Sign up with phone number', 'register')}
         {googleButton}

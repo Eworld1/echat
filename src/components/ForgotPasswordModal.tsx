@@ -1,119 +1,117 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, Smartphone, X } from 'lucide-react';
-import { api } from '../services/api';
-import { AUTH_GREEN, AUTH_LIGHT, VerifyCodeStep, authGoldButton, authIconClass, authInputClass } from './VerifyCode';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { ArrowLeft, KeyRound, Loader2, Mail, MailCheck, Smartphone, X } from 'lucide-react';
+import { auth } from '../services/firebase';
+import { AUTH_GREEN, AUTH_LIGHT, authGoldButton, authIconClass, authInputClass, useCountdown } from './VerifyCode';
 
 interface ForgotPasswordModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  /** Kept for callers (the reset itself happens on Firebase's page from the email link). */
+  onSuccess?: () => void;
   /** Phone accounts have no password: send them to "Continue with phone" with the number filled in. */
   onUsePhone?: (phoneNumber: string) => void;
 }
 
-type Step = 'request' | 'code' | 'phone' | 'done';
+type Step = 'request' | 'sent' | 'phone';
 const looksLikePhone = (value: string) => /^\+?[\d\s()-]{7,}$/.test(value.trim()) && !value.includes('@');
+const GENERIC_SENT = 'If this account exists, we sent a password reset link to your email. Check Inbox + Spam.';
 
 /**
- * Forgot password: email → 6-digit code (emailed by the server) + new password.
- * The answer is the same whether or not the email is registered.
+ * Forgot password with Firebase Auth: sendPasswordResetEmail for ANY email, always the same answer
+ * (never reveals whether an account exists). The new password is set on Firebase's page from the link.
  */
-export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({ isOpen, onClose, onSuccess, onUsePhone }) => {
+export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({ isOpen, onClose, onUsePhone }) => {
   const [step, setStep] = useState<Step>('request');
   const [identifier, setIdentifier] = useState('');
   const [email, setEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
-  const [cooldown, setCooldown] = useState(60);
+  const [left, restart] = useCountdown(0);
 
   if (!isOpen) return null;
 
-  const close = () => {
-    setStep('request'); setError(''); setNewPassword(''); setConfirmPassword('');
-    onClose();
+  const close = () => { setStep('request'); setError(''); setInfo(''); onClose(); };
+
+  /** Sends the Firebase reset email. Unknown emails are treated exactly like known ones. */
+  const sendLink = async (target: string): Promise<boolean> => {
+    try {
+      await sendPasswordResetEmail(auth, target, { url: `${window.location.origin}/home`, handleCodeInApp: false });
+    } catch (err) {
+      const code = String((err as { code?: string })?.code || '');
+      if (code === 'auth/user-not-found' || code === 'auth/missing-email') return true; // same answer as success
+      if (code === 'auth/invalid-email') { setError('That email address doesn\'t look right.'); return false; }
+      if (code === 'auth/too-many-requests') { setError('Too many requests. Please wait a few minutes and try again.'); return false; }
+      if (code === 'auth/network-request-failed') { setError('No internet connection. Check your network and try again.'); return false; }
+      if (code === 'auth/unauthorized-continue-uri' || code === 'auth/invalid-continue-uri') {
+        // Domain not yet allowed in Firebase: still send the email, just without the "Continue" button.
+        try { await sendPasswordResetEmail(auth, target); return true; } catch { /* fall through */ }
+      }
+      setError('Could not send the email right now. Please try again.');
+      return false;
+    }
+    return true;
   };
 
-  const requestCode = async (event: React.FormEvent) => {
+  const request = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy) return;
     const value = identifier.trim();
     if (looksLikePhone(value)) { setError(''); setStep('phone'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)) { setError('Enter your registered email address.'); return; }
-    setBusy(true); setError('');
-    try {
-      const res = await api.verifyRequest('reset/send', { email: value.toLowerCase() });
-      setCooldown(res.resendAfterSeconds || 60);
-      setEmail(value.toLowerCase());
-      setStep('code');
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code === 'resend-too-soon') { setEmail(value.toLowerCase()); setCooldown((err as { retryAfter?: number }).retryAfter || 60); setStep('code'); }
-      else setError(err instanceof Error ? err.message : 'Could not send a code. Please try again.');
-    } finally { setBusy(false); }
+    setBusy(true); setError(''); setInfo('');
+    const sent = await sendLink(value.toLowerCase());
+    setBusy(false);
+    if (sent) { setEmail(value.toLowerCase()); restart(60); setStep('sent'); }
   };
 
-  const verifyAndReset = async (code: string) => {
-    if (newPassword.length < 6) throw new Error('Your new password must be at least 6 characters.');
-    if (newPassword !== confirmPassword) throw new Error('The two passwords don\'t match.');
-    await api.verifyRequest('reset/confirm', { email, code, newPassword });
-    setStep('done');
+  const resend = async () => {
+    setBusy(true); setError(''); setInfo('');
+    if (await sendLink(email)) { restart(60); setInfo('We sent the link again.'); }
+    setBusy(false);
   };
-
-  const passwordInput = (value: string, setValue: (value: string) => void, placeholder: string, id: string) => (
-    <div className="relative">
-      <input id={id} type={showPassword ? 'text' : 'password'} value={value} onChange={event => setValue(event.target.value)} placeholder={placeholder} autoComplete="new-password" minLength={6} required className={`${authInputClass} pr-12`} style={AUTH_LIGHT} />
-      <Lock size={18} strokeWidth={1.8} className={authIconClass} />
-      <button type="button" onClick={() => setShowPassword(shown => !shown)} aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-1.5 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-lg text-[#374151] hover:bg-[#e5e7eb]">
-        {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
-      </button>
-    </div>
-  );
 
   let content: React.ReactNode;
   if (step === 'request') {
     content = (
-      <form onSubmit={requestCode} className="space-y-4" noValidate>
+      <form onSubmit={request} className="space-y-4" noValidate>
         <div className="flex flex-col items-center gap-2 text-center">
           <span className="grid h-14 w-14 place-items-center rounded-full bg-[#fdf6e3] text-[#a87b22] ring-2 ring-[#e9cf8a]"><KeyRound size={26} /></span>
           <h1 className="text-[28px] font-extrabold leading-tight tracking-tight text-[#111111]">Reset Password</h1>
-          <p className="text-[14px] leading-snug text-[#4b5563]">Enter your registered email and we'll send you a verification code</p>
+          <p className="text-[14px] leading-snug text-[#4b5563]">Enter your registered email and we'll send you a password reset link</p>
         </div>
         <div className="relative">
           <input type="text" inputMode="email" value={identifier} onChange={event => { setIdentifier(event.target.value); setError(''); }} placeholder="Email or phone number" autoComplete="username" autoCapitalize="off" spellCheck={false} required className={authInputClass} style={AUTH_LIGHT} />
           {looksLikePhone(identifier) ? <Smartphone size={18} strokeWidth={1.8} className={authIconClass} /> : <Mail size={19} strokeWidth={1.8} className={authIconClass} />}
         </div>
         {error && <p role="alert" className="text-center text-[13px] font-semibold text-[#dc2626]">{error}</p>}
-        <button type="submit" disabled={busy} className={authGoldButton}>{busy ? <><Loader2 size={19} className="animate-spin" />Sending…</> : 'Send Verification Code'}</button>
-        <p className="text-center text-[12px] leading-snug text-[#6b7280]">If this account exists, we'll send a 6-digit code. It expires in 10 minutes.</p>
+        <button type="submit" disabled={busy} className={authGoldButton}>{busy ? <><Loader2 size={19} className="animate-spin" />Sending…</> : 'Send Reset Link'}</button>
       </form>
     );
-  } else if (step === 'code') {
+  } else if (step === 'sent') {
     content = (
-      <VerifyCodeStep
-        title="Reset Password"
-        target={email}
-        channel="email"
-        initialCooldown={cooldown}
-        submitLabel="Reset Password"
-        autoSubmit={false}
-        note="If this account exists, we sent a code. It expires in 10 minutes. Check your spam folder too."
-        onVerify={verifyAndReset}
-        onResend={async () => (await api.verifyRequest('reset/send', { email })).resendAfterSeconds}
-        onBack={() => setStep('request')}
-        backLabel="Use a different email"
-      >
-        <div className="space-y-3 pt-1">
-          <p className="text-left text-[13px] font-bold text-[#374151]">Enter New Password</p>
-          {passwordInput(newPassword, setNewPassword, 'New password (6+ characters)', 'reset-new')}
-          {passwordInput(confirmPassword, setConfirmPassword, 'Confirm New Password', 'reset-confirm')}
-          {confirmPassword && newPassword !== confirmPassword && <p className="text-left text-[12px] font-semibold text-[#dc2626]">Passwords don't match yet.</p>}
+      <div className="space-y-4 text-center">
+        <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#fdf6e3] text-[#a87b22] ring-2 ring-[#e9cf8a]"><MailCheck size={26} /></span>
+        <h1 className="text-[26px] font-extrabold leading-tight text-[#111111]">Check your email</h1>
+        <p className="text-[14px] leading-snug text-[#4b5563]">{GENERIC_SENT}<br /><b className="break-all text-[#111827]">{email}</b></p>
+        <ol className="space-y-1.5 rounded-2xl bg-[#fdf6e3] p-3 text-left text-[13px] leading-snug text-[#4b5563]">
+          <li><b className="text-[#8a6d1f]">1.</b> Open the email from eChat (check <b>Inbox</b> and <b>Spam</b>).</li>
+          <li><b className="text-[#8a6d1f]">2.</b> Click the link and choose a new password.</li>
+          <li><b className="text-[#8a6d1f]">3.</b> Come back and log in with your new password.</li>
+        </ol>
+        {error && <p role="alert" className="text-[13px] font-semibold text-[#dc2626]">{error}</p>}
+        {info && !error && <p role="status" className="text-[13px] font-semibold text-[#15803d]">{info}</p>}
+        <button type="button" onClick={close} className={authGoldButton}>Back to Log In</button>
+        <div className="text-[13px] text-[#4b5563]">
+          {left > 0
+            ? <span>Resend link in <b className="tabular-nums text-[#111827]">00:{String(left).padStart(2, '0')}</b></span>
+            : <button type="button" onClick={() => void resend()} disabled={busy} className={`font-bold ${AUTH_GREEN} hover:underline disabled:opacity-60`}>{busy ? 'Sending…' : 'Resend link'}</button>}
         </div>
-      </VerifyCodeStep>
+        <button type="button" onClick={() => { setStep('request'); setError(''); setInfo(''); }} className="mx-auto flex items-center gap-1 text-[13px] font-semibold text-[#6b7280] hover:text-[#1f4d1f]"><ArrowLeft size={15} />Use a different email</button>
+      </div>
     );
-  } else if (step === 'phone') {
+  } else {
     content = (
       <div className="space-y-4 text-center">
         <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#fdf6e3] text-[#a87b22] ring-2 ring-[#e9cf8a]"><Smartphone size={26} /></span>
@@ -121,15 +119,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({ isOpen
         <p className="text-[14px] leading-snug text-[#4b5563]">Accounts made with a phone number don't use a password. Log in with a 6-digit SMS code instead.</p>
         {onUsePhone && <button type="button" onClick={() => { onUsePhone(identifier.trim()); close(); }} className={authGoldButton}>Send SMS Code</button>}
         <button type="button" onClick={() => setStep('request')} className={`text-[13px] font-semibold ${AUTH_GREEN} hover:underline`}>Use my email instead</button>
-      </div>
-    );
-  } else {
-    content = (
-      <div className="space-y-4 text-center">
-        <CheckCircle2 size={56} className="mx-auto text-[#15803d]" />
-        <h1 className="text-[26px] font-extrabold leading-tight text-[#111111]">Password changed</h1>
-        <p className="text-[14px] leading-snug text-[#4b5563]">You can now log in with your new password. For your safety, other devices were signed out.</p>
-        <button type="button" onClick={() => { close(); onSuccess(); }} className={authGoldButton}>Back to Log In</button>
       </div>
     );
   }

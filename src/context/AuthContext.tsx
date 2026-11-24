@@ -2,7 +2,9 @@ import { compressImage } from '../utils/image';
 import { onProfilePictureChanged } from '../services/profilePhotoPosts';
 import { gradientCover, initialsAvatar } from '../utils/avatar';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { 
+import {
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
   signInWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged,
@@ -60,8 +62,12 @@ interface AuthContextType {
   pendingVerification: PendingVerification | null;
   /** Email sign-up step 1: send the code. No account exists until the code is confirmed. */
   startEmailSignup: (data: EmailSignupData) => Promise<void>;
-  /** Check the code for the pending email sign-up / older account / phone sign-in. */
+  /** Phone sign-in: check the 6-digit SMS code. */
   confirmVerificationCode: (code: string) => Promise<void>;
+  /** Email: reload the Firebase user; true (and signed in) once the verification link was clicked. */
+  checkEmailVerified: () => Promise<boolean>;
+  /** Email: send the Firebase verification link again; resolves with seconds until the next resend. */
+  resendVerificationEmail: () => Promise<number>;
   /** Send a new code; resolves with seconds until the next resend is allowed. */
   resendVerificationCode: () => Promise<number>;
   cancelVerification: () => Promise<void>;
@@ -85,28 +91,29 @@ export type SocialProvider = 'google' | 'phone';
 
 export interface EmailSignupData { name: string; email: string; password: string; dob: string; avatarFile?: File; remember?: boolean }
 export type PendingVerification =
-  | { kind: 'signup'; email: string; data: EmailSignupData }
-  /** Signed in to Firebase, but the email was never verified (older accounts). */
-  | { kind: 'existing'; email: string }
-  /** Old account that only exists on the eChat server: verifies once, then moves to Firebase. */
-  | { kind: 'legacy'; email: string; data: EmailSignupData }
+  /** Email/password account waiting for the Firebase verification link (new sign-up, or a login before verifying). */
+  | { kind: 'email'; email: string; justSignedUp: boolean }
   | { kind: 'phone'; phoneNumber: string };
+
+/** Where the Firebase email links send people back to (must be an authorized domain in Firebase). */
+const emailActionSettings = () => ({ url: `${window.location.origin}/home`, handleCodeInApp: false });
+
+/** Firebase verification email. If this site isn't an authorized domain yet, send it without the "Continue" link. */
+async function sendVerificationLink(firebaseUser: FirebaseUser): Promise<void> {
+  try {
+    await sendEmailVerification(firebaseUser, emailActionSettings());
+  } catch (error) {
+    const code = String((error as { code?: string })?.code || '');
+    if (code === 'auth/unauthorized-continue-uri' || code === 'auth/invalid-continue-uri' || code === 'auth/missing-continue-uri') await sendEmailVerification(firebaseUser);
+    else throw error;
+  }
+}
 
 /** Email/password accounts must verify their email; Google and phone sign-ins are already verified. */
 export function needsEmailVerification(firebaseUser: FirebaseUser | null): boolean {
   if (!firebaseUser || firebaseUser.emailVerified || firebaseUser.phoneNumber) return false;
   const providers = firebaseUser.providerData.map(item => item.providerId);
   return providers.includes('password') && !providers.includes('google.com');
-}
-
-/**
- * Safety valve: if the server says email codes aren't set up yet, older accounts aren't locked out.
- * An unreachable (sleeping) server counts as "set up", so verification is still enforced.
- */
-let verificationReadyCache: Promise<boolean> | null = null;
-function verificationIsReady(): Promise<boolean> {
-  verificationReadyCache ||= api.verificationStatus().then(status => status.ready !== false).catch(() => true);
-  return verificationReadyCache;
 }
 
 /** Plain-language errors for verification calls. */
@@ -116,7 +123,8 @@ function verificationError(error: unknown): Error {
   if (code === 'auth/invalid-verification-code') return new Error('That code isn\'t right. Check the SMS and try again.');
   if (code === 'auth/code-expired') return new Error('This code has expired. Tap "Resend code" to get a new one.');
   if (code === 'auth/invalid-phone-number') return new Error('Enter your phone number with the country code, e.g. +232 76 123456.');
-  if (code === 'auth/too-many-requests') return new Error('Too many attempts. Please wait a while and try again.');
+  if (code === 'auth/too-many-requests') return new Error('Too many emails or attempts. Please wait a few minutes and try again.');
+  if (code === 'auth/network-request-failed') return new Error('No internet connection. Check your network and try again.');
   if (code === 'auth/billing-not-enabled' || code === 'auth/quota-exceeded') return new Error('Phone sign-up isn\'t available right now. Please use your email or Google.');
   if (code === 'auth/operation-not-allowed') return new Error('Phone sign-in isn\'t switched on yet. Please use your email or Google.');
   if (code === 'auth/captcha-check-failed') return new Error('Security check failed. Reload the page and try again.');
@@ -215,12 +223,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [pendingVerification, setPendingVerification] = useState<PendingVerification | null>(null);
   const phoneConfirmation = useRef<{ result: ConfirmationResult; containerId: string; verifier: RecaptchaVerifier; remember: boolean } | null>(null);
 
-  /** Signed in but email not verified: keep them out of the app and show the verify screen. */
+  /** Signed in but email not verified: keep them out of the app and show "Check your email". */
   const holdForVerification = async (firebaseUser: FirebaseUser): Promise<boolean> => {
-    if (!needsEmailVerification(firebaseUser) || !(await verificationIsReady())) return false;
+    if (!needsEmailVerification(firebaseUser)) return false;
+    // They may have just clicked the link (in this or another tab): refresh once before deciding.
+    await firebaseUser.reload().catch(() => {});
+    if (auth.currentUser?.emailVerified) { await auth.currentUser.getIdToken(true).catch(() => ''); return false; }
     ['echat_user_id', 'echat_token', 'echat_live_auth'].forEach(key => localStorage.removeItem(key));
     setUser(null);
-    setPendingVerification(current => current?.kind === 'signup' || current?.kind === 'legacy' ? current : { kind: 'existing', email: firebaseUser.email || '' });
+    const email = (firebaseUser.email || '').toLowerCase();
+    setPendingVerification(current => current?.kind === 'email' && current.email === email ? current : { kind: 'email', email, justSignedUp: false });
     return true;
   };
 
@@ -344,6 +356,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             localStorage.removeItem('echat_live_auth');
             setUser(null);
           } else if (userDoc) {
+            if (firebaseUser.emailVerified && userDoc.emailVerified !== true && firebaseUser.providerData.some(item => item.providerId === 'password')) {
+              updateDoc(doc(db, 'users', userDoc.id), { emailVerified: true, emailVerifiedAt: Date.now() }).catch(() => {});
+            }
             localStorage.setItem('echat_user_id', userDoc.id);
             localStorage.setItem('echat_token', userDoc.id);
             setUser(await withServerSocial(userDoc));
@@ -456,11 +471,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let legacy: Awaited<ReturnType<typeof api.login>> | null = null;
         try { legacy = await api.login({ email: cleanEmail, password }); } catch { legacy = null; }
         if (legacy) {
-          const data: EmailSignupData = { name: legacy.user.name, email: cleanEmail, password, dob: legacy.user.dob || '2000-01-01', remember };
-          await api.verifyRequest('signup/send', { email: cleanEmail }).catch(error => {
-            if ((error as { code?: string }).code !== 'resend-too-soon') throw verificationError(error);
-          });
-          setPendingVerification({ kind: 'legacy', email: cleanEmail, data });
+          // Move the old account to Firebase, then it must verify its email like everyone else.
+          await startEmailSignup({ name: legacy.user.name, email: cleanEmail, password, dob: legacy.user.dob || '2000-01-01', remember });
           return;
         }
       }
@@ -566,58 +578,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await signOut(auth).catch(() => {});
   };
 
-  /** Creates the eChat profile for a Firebase account whose email was just verified with a code. */
-  const createVerifiedEmailProfile = async (firebaseUser: FirebaseUser, data: EmailSignupData) => {
+  /**
+   * New email account: create the eChat profile right away (marked emailVerified: false) so nothing is
+   * lost if the link is opened on another phone. The app stays locked until the link is clicked.
+   */
+  const createEmailProfile = async (firebaseUser: FirebaseUser, data: EmailSignupData) => {
     const uid = firebaseUser.uid;
     const cleanEmail = data.email.toLowerCase().trim();
-    let profile = await getUserById(uid);
-    if (profile) {
-      await setDoc(doc(db, 'users', uid), { emailVerified: true, isOnline: true, lastSeen: Date.now() }, { merge: true }).catch(() => {});
-      profile = { ...profile, emailVerified: true };
-    } else {
-      profile = {
-        id: uid,
-        name: data.name.trim().slice(0, 80) || cleanEmail.split('@')[0],
-        email: cleanEmail,
-        dob: data.dob,
-        passwordHash: '', // Firebase Auth owns the password; never store a hash in Firestore
-        // No stock photos: a generated initials avatar until the person uploads their own picture.
-        avatar: initialsAvatar(data.name),
-        coverPhoto: gradientCover(data.name),
-        bio: 'Excited to be on Echat! 👋',
-        location: 'Global',
-        work: '',
-        education: '',
-        role: 'user',
-        isVerified: false,
-        isOfficialDeveloper: false,
-        emailVerified: true,
-        phoneVerified: false,
-        boostsCount: 0,
-        boostedBy: [],
-        isBlocked: false,
-        isOnline: true,
-        lastSeen: Date.now(),
-        createdAt: Date.now(),
-        friends: [],
-        friendRequestsSent: [],
-        friendRequestsReceived: []
-      };
-      await setDoc(doc(db, 'users', uid), { ...profile, termsAccepted: true, signInProvider: 'password' });
-    }
+    if (await getUserById(uid).catch(() => null)) return;
+    const profile: User = {
+      id: uid,
+      name: data.name.trim().slice(0, 80) || cleanEmail.split('@')[0],
+      email: cleanEmail,
+      dob: data.dob,
+      passwordHash: '', // Firebase Auth owns the password; never store a hash in Firestore
+      // No stock photos: a generated initials avatar until the person uploads their own picture.
+      avatar: initialsAvatar(data.name),
+      coverPhoto: gradientCover(data.name),
+      bio: 'Excited to be on Echat! 👋',
+      location: 'Global',
+      work: '',
+      education: '',
+      role: 'user',
+      isVerified: false,
+      isOfficialDeveloper: false,
+      emailVerified: false,
+      phoneVerified: false,
+      boostsCount: 0,
+      boostedBy: [],
+      isBlocked: false,
+      isOnline: false,
+      lastSeen: Date.now(),
+      createdAt: Date.now(),
+      friends: [],
+      friendRequestsSent: [],
+      friendRequestsReceived: []
+    };
+    await setDoc(doc(db, 'users', uid), { ...profile, termsAccepted: true, signInProvider: 'password' });
 
-    localStorage.setItem('echat_user_id', uid);
-    localStorage.setItem('echat_token', uid);
-    setUser(profile);
-
-    // Also create / update the Express copy so friends, calls and live work.
-    try {
-      const backendAuth = await api.register({ name: profile.name, email: cleanEmail, password: data.password, dob: profile.dob || data.dob, id: uid, termsAccepted: true });
-      if (backendAuth.liveAuthToken) localStorage.setItem('echat_live_auth', backendAuth.liveAuthToken);
-    } catch {
-      try { const res = await api.login({ email: cleanEmail, password: data.password }); if (res.liveAuthToken) localStorage.setItem('echat_live_auth', res.liveAuthToken); } catch { /* server copy may already exist */ }
-    }
-    setUser(await withServerSocial(profile));
+    // Also create the Express copy so friends, calls and live work after verification.
+    api.register({ name: profile.name, email: cleanEmail, password: data.password, dob: profile.dob || data.dob, id: uid, termsAccepted: true }).catch(() => {});
 
     // Profile picture chosen from the device gallery: shrink, upload, then save it on the profile.
     if (data.avatarFile) {
@@ -625,7 +625,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const file = await compressImage(data.avatarFile, 640);
         const url = await api.uploadFile(file);
         await updateDoc(doc(db, 'users', uid), { avatar: url });
-        setUser(prev => (prev ? { ...prev, avatar: url } : prev));
         await api.updateProfile(uid, { avatar: url }).catch(() => {});
       } catch (uploadErr) {
         console.warn('Profile photo upload failed; keeping the generated avatar:', uploadErr);
@@ -633,41 +632,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  /** Email sign-up: create the Firebase account, email the verification link, then wait on "Check your email". */
   const startEmailSignup = async (data: EmailSignupData) => {
     const cleanEmail = data.email.toLowerCase().trim();
+    await applyRememberMe(data.remember !== false);
+    let firebaseUser: FirebaseUser;
     try {
-      await api.verifyRequest('signup/send', { email: cleanEmail });
+      firebaseUser = (await createUserWithEmailAndPassword(auth, cleanEmail, data.password)).user;
     } catch (error) {
-      // A code sent less than a minute ago is still valid: just show the code screen.
-      if ((error as { code?: string }).code !== 'resend-too-soon') throw verificationError(error);
+      throw new Error(friendlyAuthError(error));
     }
-    setPendingVerification({ kind: 'signup', email: cleanEmail, data: { ...data, email: cleanEmail } });
+    setPendingVerification({ kind: 'email', email: cleanEmail, justSignedUp: true });
+    ['echat_user_id', 'echat_token', 'echat_live_auth'].forEach(key => localStorage.removeItem(key));
+    setUser(null);
+    try {
+      await sendVerificationLink(firebaseUser);
+    } catch (error) {
+      console.warn('Could not send the verification email yet:', (error as { code?: string })?.code || error);
+    }
+    await createEmailProfile(firebaseUser, { ...data, email: cleanEmail }).catch(error => console.warn('Could not create the profile yet:', error));
   };
 
+  const checkEmailVerified = async (): Promise<boolean> => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) throw new Error('Your sign-in expired. Please log in again.');
+    try { await firebaseUser.reload(); } catch (error) { throw verificationError(error); }
+    const current = auth.currentUser;
+    if (!current?.emailVerified) return false;
+    await current.getIdToken(true); // the new token carries email_verified = true for Firestore rules
+    await updateDoc(doc(db, 'users', current.uid), { emailVerified: true, emailVerifiedAt: Date.now() }).catch(() => {});
+    setPendingVerification(null);
+    await refreshUser();
+    return true;
+  };
+
+  const resendVerificationEmail = async (): Promise<number> => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) throw new Error('Your sign-in expired. Please log in again.');
+    try { await sendVerificationLink(firebaseUser); }
+    catch (error) { throw verificationError(error); }
+    return 60;
+  };
+
+  /** Phone sign-in: check the SMS code. */
   const confirmVerificationCode = async (code: string) => {
-    const pending = pendingVerification;
-    if (!pending) throw new Error('Nothing to verify. Please start again.');
     try {
-      if (pending.kind === 'signup' || pending.kind === 'legacy') {
-        const { data } = pending;
-        await api.verifyRequest('signup/confirm', { email: data.email, code, password: data.password, name: data.name });
-        await applyRememberMe(data.remember !== false);
-        const cred = await signInWithEmailAndPassword(auth, data.email, data.password);
-        await cred.user.getIdToken(true);
-        await createVerifiedEmailProfile(cred.user, data);
-        setPendingVerification(null);
-        return;
-      }
-      if (pending.kind === 'existing') {
-        const firebaseUser = auth.currentUser;
-        if (!firebaseUser) throw new Error('Your sign-in expired. Please log in again.');
-        await api.verifyRequest('email/confirm', { idToken: await firebaseUser.getIdToken(), code });
-        await firebaseUser.reload();
-        await firebaseUser.getIdToken(true); // new token carries email_verified = true for Firestore rules
-        setPendingVerification(null);
-        await refreshUser();
-        return;
-      }
       const confirmation = phoneConfirmation.current;
       if (!confirmation) throw new Error('This code has expired. Tap "Resend code" to get a new one.');
       const credential = await confirmation.result.confirm(code);
@@ -691,24 +700,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  /** Phone: send a new SMS code. */
   const resendVerificationCode = async (): Promise<number> => {
     const pending = pendingVerification;
-    if (!pending) return 0;
+    if (pending?.kind !== 'phone') return resendVerificationEmail();
     try {
-      if (pending.kind === 'signup' || pending.kind === 'legacy') return (await api.verifyRequest('signup/send', { email: pending.email })).resendAfterSeconds;
-      if (pending.kind === 'existing') {
-        const firebaseUser = auth.currentUser;
-        if (!firebaseUser) throw new Error('Your sign-in expired. Please log in again.');
-        return (await api.verifyRequest('email/send', { idToken: await firebaseUser.getIdToken() })).resendAfterSeconds;
-      }
       const previous = phoneConfirmation.current;
       await sendSms(pending.phoneNumber, previous?.containerId || 'echat-recaptcha', previous?.remember ?? true);
       return 60;
     } catch (error) {
-      const err = verificationError(error) as Error & { retryAfter?: number; code?: string };
-      const original = error as { retryAfter?: number; code?: string };
-      if (original.retryAfter) { err.retryAfter = original.retryAfter; err.code = original.code; }
-      throw err;
+      throw verificationError(error);
     }
   };
 
@@ -729,10 +730,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setPendingVerification(null);
     phoneConfirmation.current?.verifier.clear();
     phoneConfirmation.current = null;
-    if (pending?.kind === 'existing') await signOut(auth).catch(() => {});
+    if (pending?.kind === 'email') await signOut(auth).catch(() => {});
   };
 
-  /** Kept for callers: email sign-up now always goes through a 6-digit code first. */
+  /** Kept for callers: email sign-up = Firebase account + verification link. */
   const register = async (data: {
     name: string;
     email: string;
@@ -844,6 +845,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       pendingVerification,
       startEmailSignup,
       confirmVerificationCode,
+      checkEmailVerified,
+      resendVerificationEmail,
       resendVerificationCode,
       cancelVerification,
       startPhoneSignIn,

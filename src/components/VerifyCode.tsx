@@ -165,3 +165,80 @@ export const VerifyCodeStep: React.FC<{
     </form>
   );
 };
+
+/**
+ * "Check your email" step for Firebase verification links. Checks automatically every few seconds
+ * (and when the tab comes back into focus), so clicking the link in Gmail is enough.
+ */
+export const CheckEmailStep: React.FC<{
+  email: string;
+  title: string;
+  message: React.ReactNode;
+  onCheck: () => Promise<boolean>;
+  onResend: () => Promise<number>;
+  onBack: () => void;
+  backLabel: string;
+  /** Seconds before "Resend Verification Email" is allowed (60 right after a fresh send). */
+  initialCooldown?: number;
+}> = ({ email, title, message, onCheck, onResend, onBack, backLabel, initialCooldown = 60 }) => {
+  const [left, restart] = useCountdown(initialCooldown);
+  const [checking, setChecking] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+  const busy = useRef(false);
+
+  const check = async (manual: boolean) => {
+    if (busy.current) return;
+    busy.current = true;
+    if (manual) { setChecking(true); setError(''); setInfo(''); }
+    try {
+      const verified = await onCheck();
+      if (!verified && manual) setError('Not verified yet. Open the email from eChat and click the link, then try again.');
+    } catch (err) {
+      if (manual) setError(err instanceof Error ? err.message : 'Could not check right now.');
+    } finally {
+      busy.current = false;
+      if (manual) setChecking(false);
+    }
+  };
+
+  useEffect(() => {
+    const timer = window.setInterval(() => { if (!document.hidden) void check(false); }, 5000);
+    const onFocus = () => void check(false);
+    window.addEventListener('focus', onFocus);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', onFocus); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const resend = async () => {
+    setResending(true); setError(''); setInfo('');
+    try { restart(await onResend()); setInfo(`New verification link sent to ${maskTarget(email)}.`); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Could not send the email.'); }
+    finally { setResending(false); }
+  };
+
+  return (
+    <div className="space-y-4 text-center">
+      <div className="flex flex-col items-center gap-2">
+        <span className="grid h-14 w-14 place-items-center rounded-full bg-[#fdf6e3] text-[#a87b22] ring-2 ring-[#e9cf8a]"><MailCheck size={26} /></span>
+        <h1 className="text-[28px] font-extrabold leading-tight tracking-tight text-[#111111]">{title}</h1>
+        <p className="text-[14px] leading-snug text-[#4b5563]">{message}<br /><b className="break-all text-[#111827]">{email}</b></p>
+      </div>
+      <ol className="space-y-1.5 rounded-2xl bg-[#fdf6e3] p-3 text-left text-[13px] leading-snug text-[#4b5563]">
+        <li><b className="text-[#8a6d1f]">1.</b> Open the email from eChat (check <b>Inbox</b> and <b>Spam</b>).</li>
+        <li><b className="text-[#8a6d1f]">2.</b> Click the verification link.</li>
+        <li><b className="text-[#8a6d1f]">3.</b> Come back here. eChat opens by itself.</li>
+      </ol>
+      {error && <p role="alert" className="text-[13px] font-semibold text-[#dc2626]">{error}</p>}
+      {info && !error && <p role="status" className="text-[13px] font-semibold text-[#15803d]">{info}</p>}
+      <button type="button" onClick={() => void check(true)} disabled={checking} className={authGoldButton}>{checking ? <><Loader2 size={19} className="animate-spin" />Checking…</> : 'I\'ve verified my email'}</button>
+      <div className="text-[13px] text-[#4b5563]">
+        {left > 0
+          ? <span>Resend Verification Email in <b className="tabular-nums text-[#111827]">{mmss(left)}</b></span>
+          : <button type="button" onClick={() => void resend()} disabled={resending} className={`font-bold ${AUTH_GREEN} hover:underline disabled:opacity-60`}>{resending ? 'Sending…' : 'Resend Verification Email'}</button>}
+      </div>
+      <button type="button" onClick={onBack} className="mx-auto flex items-center gap-1 text-[13px] font-semibold text-[#6b7280] hover:text-[#1f4d1f]"><ArrowLeft size={15} />{backLabel}</button>
+    </div>
+  );
+};
