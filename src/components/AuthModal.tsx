@@ -1,19 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowRight, Calendar, Camera, Compass, Eye, EyeOff, Heart, Loader2, Lock, Mail, MessageCircle, Moon, Radio, ShoppingBag, Sun, User as UserIcon, Video, X } from 'lucide-react';
+import { AlertCircle, Calendar, Camera, Eye, EyeOff, Loader2, Lock, Mail, User as UserIcon, X } from 'lucide-react';
 import { useAuth, type SocialProvider } from '../context/AuthContext';
-import { usePreferences } from '../context/PreferencesContext';
 import { initialsAvatar } from '../utils/avatar';
-import { BrandFooter } from './BrandFooter';
-import { GlowLogo } from './BrandLogo';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { TermsModal } from './TermsModal';
+
+/**
+ * EChat sign-in: blurred office photo behind a centred white card with a thin gold border and warm gold glow.
+ * The same card holds "Sign up" and the one-time Google sign-up step. Colours are exact hex values so the
+ * app's dark theme never repaints this screen.
+ */
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose?: () => void;
-  /** "Continue as Guest to explore" (read-only preview of EChat). */
+  /** Kept for callers; the guest preview is no longer offered on this screen. */
   onContinueAsGuest?: () => void;
-  /** Open straight on "Create Account" (e.g. from the guest preview). */
+  /** Open straight on "Sign up" (e.g. from the guest preview). */
   initialMode?: 'login' | 'register';
 }
 
@@ -29,93 +32,43 @@ const ageFrom = (dob: string) => {
   return beforeBirthday ? age - 1 : age;
 };
 
-const inputClass = 'peer h-[52px] w-full rounded-2xl border border-violet-200/70 bg-white/80 pl-11 pr-4 text-[15px] text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-500/15 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-violet-400 dark:focus:bg-white/10';
-const iconClass = 'pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 transition peer-focus:text-violet-500';
-const primaryButton = 'ec-gradient relative flex min-h-[52px] w-full items-center justify-center gap-2 overflow-hidden rounded-2xl px-5 text-base font-bold text-white shadow-lg shadow-violet-600/30 transition hover:brightness-110 hover:shadow-violet-600/40 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-400/40 active:scale-[0.99] disabled:cursor-wait disabled:opacity-70';
+const GREEN = 'text-[#1f4d1f]';
+const LIGHT_INPUT = { colorScheme: 'light' } as const;
+const inputClass = 'peer h-12 w-full rounded-xl border border-[#d4d7db] bg-[#f1f2f4] pl-11 pr-4 text-[15px] text-[#111827] shadow-[inset_0_1px_2px_rgba(0,0,0,0.04)] outline-none transition placeholder:text-[#7b818a]! focus:border-[#c9a24a] focus:bg-[#ffffff] focus:ring-4 focus:ring-[#e9c86a]/30';
+const iconClass = 'pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#6b7280] transition peer-focus:text-[#a87b22]';
+const goldButton = 'relative flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#b8862b] bg-gradient-to-b from-[#f3dc9b] via-[#d9b25a] to-[#b68428] text-[17px] font-extrabold text-[#1f3d1a] shadow-[0_6px_16px_rgba(166,120,30,0.35),inset_0_1px_0_rgba(255,255,255,0.6)] transition hover:brightness-105 active:translate-y-px focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#e9c86a]/50 disabled:cursor-wait disabled:opacity-75';
 
 const GoogleIcon = () => (
   <svg viewBox="0 0 48 48" className="h-5 w-5" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" /><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" /><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" /><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" /></svg>
 );
 
-/** Left panel: animated brand gradient + a little "live stream" preview. */
-const BrandPanel: React.FC = () => {
-  const [viewers, setViewers] = useState(1284);
-  useEffect(() => {
-    const timer = window.setInterval(() => setViewers(count => count + Math.floor(Math.random() * 9) - 2), 1600);
-    return () => window.clearInterval(timer);
-  }, []);
-  const comments = [
-    { name: 'Aminata', text: 'Greetings from Freetown 🇸🇱', color: 'from-pink-400 to-rose-500' },
-    { name: 'Mohamed', text: 'This stream is fire 🔥🔥', color: 'from-sky-400 to-blue-600' },
-  ];
-  return (
-    <section aria-label="EChat" className="ec-gradient-animated relative hidden min-h-dvh overflow-hidden text-white lg:flex lg:flex-col lg:justify-between lg:p-12 xl:p-16">
-      {/* glowing orbs */}
-      <span aria-hidden="true" className="ec-float-slow absolute -left-24 top-10 h-80 w-80 rounded-full bg-fuchsia-500/40 blur-3xl" />
-      <span aria-hidden="true" className="ec-float absolute -right-16 top-1/3 h-72 w-72 rounded-full bg-cyan-400/30 blur-3xl" />
-      <span aria-hidden="true" className="ec-float-delay absolute bottom-0 left-1/3 h-96 w-96 rounded-full bg-indigo-500/40 blur-3xl" />
-      <span aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:22px_22px] [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+/** "eChat": gold "e" inside a small chat bubble + bold black "Chat". */
+export const EChatWordmark: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <span className={`inline-flex items-end gap-0.5 ${className}`} aria-label="eChat" role="img">
+    <svg viewBox="0 0 44 44" className="h-11 w-11" aria-hidden="true">
+      <defs>
+        <linearGradient id="echat-gold" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#f6e2a4" />
+          <stop offset="0.45" stopColor="#d6aa4c" />
+          <stop offset="1" stopColor="#a7741f" />
+        </linearGradient>
+      </defs>
+      {/* bubble with a tail at the bottom-left */}
+      <path d="M10 4h24a8 8 0 0 1 8 8v14a8 8 0 0 1-8 8H18l-8 7v-7.4A8 8 0 0 1 2 26V12a8 8 0 0 1 8-8z" fill="none" stroke="url(#echat-gold)" strokeWidth="2.6" strokeLinejoin="round" />
+      <text x="22" y="29" textAnchor="middle" fontFamily="Inter, ui-sans-serif, system-ui, sans-serif" fontSize="27" fontWeight="800" fill="url(#echat-gold)">e</text>
+    </svg>
+    <span className="pb-[3px] text-[38px] font-extrabold leading-none tracking-tight text-[#111111]">Chat</span>
+  </span>
+);
 
-      <div className="relative flex items-center gap-4">
-        <GlowLogo size={64} />
-        <div>
-          <p className="text-3xl font-black tracking-tight">EChat</p>
-          <p className="text-sm font-semibold text-white/75">Sierra Leone's social home</p>
-        </div>
-      </div>
-
-      <div className="relative">
-        <h1 className="max-w-xl text-5xl font-black leading-[1.05] tracking-tight xl:text-6xl">
-          Chat. Stream.<br /><span className="bg-gradient-to-r from-pink-200 via-white to-cyan-200 bg-clip-text text-transparent">Connect.</span>
-        </h1>
-        <p className="mt-4 max-w-md text-lg text-white/80">Messages, HD calls, live streams, Reels and a marketplace - all in one place.</p>
-
-        {/* Live preview */}
-        <div className="ec-float mt-10 w-full max-w-[420px] overflow-hidden rounded-[28px] border border-white/20 bg-black/30 shadow-2xl shadow-black/40 backdrop-blur-xl">
-          <div className="relative aspect-[16/10] overflow-hidden bg-gradient-to-br from-violet-900 via-indigo-900 to-fuchsia-900">
-            <span aria-hidden="true" className="absolute left-1/2 top-[30%] h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-pink-500 to-violet-600 opacity-60 blur-2xl" />
-            <div className="absolute left-1/2 top-[30%] grid h-20 w-20 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-gradient-to-br from-pink-400 via-fuchsia-500 to-indigo-500 text-4xl font-black shadow-xl ring-4 ring-white/20">K</div>
-            <div className="absolute left-3 top-3 flex items-center gap-2">
-              <span className="ec-pulse-ring flex items-center gap-1 rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-black tracking-wider">● LIVE</span>
-              <span className="rounded-md bg-black/45 px-2 py-0.5 text-[11px] font-bold">👁 {viewers.toLocaleString()}</span>
-            </div>
-            <div className="absolute bottom-3 left-3 right-14 space-y-1.5">
-              {comments.map((comment, index) => (
-                <div key={comment.name} className="ec-fade-up flex items-center gap-2 rounded-full bg-black/40 py-1 pl-1 pr-3 text-[12px] backdrop-blur" style={{ animationDelay: `${index * 0.6 + 0.3}s` }}>
-                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full bg-gradient-to-br ${comment.color} text-[10px] font-black`}>{comment.name[0]}</span>
-                  <b className="font-bold">{comment.name}</b><span className="truncate text-white/85">{comment.text}</span>
-                </div>
-              ))}
-            </div>
-            <div aria-hidden="true" className="absolute bottom-3 right-3 flex flex-col items-center gap-1 text-lg">
-              <span className="ec-float-delay">💜</span><span className="ec-float">❤️</span><span className="ec-float-slow">🔥</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 px-4 py-3">
-            <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-sm font-black">K</span>
-            <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">Kadiatu is live</p><p className="truncate text-xs text-white/65">Friday night music session 🎶</p></div>
-            <Heart size={18} className="text-pink-300" fill="currentColor" />
-          </div>
-        </div>
-      </div>
-
-      <div className="relative flex flex-wrap gap-2 text-sm font-semibold">
-        {[{ icon: <MessageCircle size={15} />, label: 'Private chats' }, { icon: <Video size={15} />, label: 'HD video calls' }, { icon: <Radio size={15} />, label: 'Go live' }, { icon: <ShoppingBag size={15} />, label: 'Marketplace' }].map(item => (
-          <span key={item.label} className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 backdrop-blur">{item.icon}{item.label}</span>
-        ))}
-      </div>
-    </section>
-  );
-};
-
-export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onContinueAsGuest, initialMode = 'login' }) => {
+export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMode = 'login' }) => {
   const { login, register, loginWithProvider, pendingSocialSignup, completeSocialSignup, cancelSocialSignup } = useAuth();
-  const { resolvedTheme, setTheme } = usePreferences();
   const [mode, setMode] = useState<Mode>(initialMode);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  // "Remember me": unchecked = signed out when the browser closes (see applyRememberMe in AuthContext).
   const [remember, setRemember] = useState(() => { try { return localStorage.getItem('echat_session_only') !== '1'; } catch { return true; } });
   const [name, setName] = useState('');
   const [dob, setDob] = useState('');
@@ -188,163 +141,155 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onContinu
     setAvatarPreview(URL.createObjectURL(file));
   };
 
-  const termsCheckbox = (
-    <label className="flex cursor-pointer select-none items-start gap-3 rounded-2xl border border-violet-200/60 bg-violet-50/60 p-3 text-[13px] leading-snug text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
-      <input type="checkbox" checked={agreeTerms} onChange={event => setAgreeTerms(event.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-violet-600" />
-      <span>I'm 18 or older and agree to the <button type="button" onClick={() => setTermsOpen(true)} className="font-bold text-violet-700 hover:underline dark:text-violet-300">EChat Terms & Conditions</button> and Community Guidelines.</span>
-    </label>
+  /* ---------- shared pieces ---------- */
+
+  const emailField = (
+    <div className="relative">
+      <input id={`echat-${mode}-email`} type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Email address" autoComplete="email" required className={inputClass} style={LIGHT_INPUT} />
+      <Mail size={19} strokeWidth={1.8} className={iconClass} />
+    </div>
   );
 
   const passwordField = (autoComplete: string, placeholder: string) => (
     <div className="relative">
-      <input id={`echat-${autoComplete}`} type={showPassword ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} required minLength={autoComplete === 'new-password' ? 6 : undefined} className={`${inputClass} pr-12`} />
-      <Lock size={18} className={iconClass} />
-      <button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} className="absolute right-1.5 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-slate-400 transition hover:bg-violet-50 hover:text-violet-600 dark:hover:bg-white/10">
-        {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+      <input id={`echat-${autoComplete}`} type={showPassword ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} required minLength={autoComplete === 'new-password' ? 6 : undefined} className={`${inputClass} pr-12`} style={LIGHT_INPUT} />
+      <Lock size={18} strokeWidth={1.8} className={iconClass} />
+      <button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} className="absolute right-1.5 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-lg text-[#374151] transition hover:bg-[#e5e7eb]">
+        {showPassword ? <EyeOff size={20} strokeWidth={1.8} /> : <Eye size={20} strokeWidth={1.8} />}
       </button>
+    </div>
+  );
+
+  const nameField = (placeholder: string) => (
+    <div className="relative min-w-0 flex-1">
+      <input value={name} onChange={event => setName(event.target.value)} placeholder={placeholder} autoComplete="name" required maxLength={80} className={inputClass} style={LIGHT_INPUT} />
+      <UserIcon size={18} strokeWidth={1.8} className={iconClass} />
     </div>
   );
 
   const dobField = (
     <div className="relative">
-      <input type="date" value={dob} max={adultCutoff()} onChange={event => setDob(event.target.value)} required aria-label="Date of birth" className={inputClass} />
-      <Calendar size={18} className={iconClass} />
-      <span className="mt-1 block px-1 text-[11px] text-slate-500 dark:text-slate-400">Date of birth · you must be 18+</span>
+      <input type="date" value={dob} max={adultCutoff()} onChange={event => setDob(event.target.value)} required aria-label="Date of birth" className={inputClass} style={LIGHT_INPUT} />
+      <Calendar size={18} strokeWidth={1.8} className={iconClass} />
+      <span className="mt-1 block px-1 text-left text-[11px] text-[#6b7280]">Date of birth · you must be 18+</span>
     </div>
   );
 
-  const socialButtons = (
+  const termsCheckbox = (
+    <label className="flex cursor-pointer select-none items-start gap-2.5 text-left text-[13px] leading-snug text-[#374151]">
+      <input type="checkbox" checked={agreeTerms} onChange={event => setAgreeTerms(event.target.checked)} style={LIGHT_INPUT} className="mt-0.5 h-4 w-4 shrink-0 accent-[#b68428]" />
+      <span>I'm 18 or older and agree to the <button type="button" onClick={() => setTermsOpen(true)} className={`font-bold ${GREEN} hover:underline`}>EChat Terms &amp; Conditions</button>.</span>
+    </label>
+  );
+
+  const divider = (label: string) => (
+    <div className="flex items-center gap-3 text-[13px] text-[#4b5563]"><span className="h-px flex-1 bg-[#d9dbe0]" />{label}<span className="h-px flex-1 bg-[#d9dbe0]" /></div>
+  );
+
+  const googleButton = (
     <button type="button" onClick={() => void handleSocial('google')} disabled={Boolean(busy)}
-      className="flex min-h-[50px] w-full items-center justify-center gap-2.5 rounded-2xl border border-slate-200 bg-white/90 text-[15px] font-bold text-slate-800 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md disabled:opacity-60 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:border-violet-400/50">
-      {busy === 'google' ? <Loader2 size={18} className="animate-spin" /> : <GoogleIcon />}
+      className="flex h-12 w-full items-center justify-center gap-2.5 rounded-xl border border-[#b9bdc3] bg-[#eef0f2] text-[17px] font-bold text-[#111111] shadow-[0_2px_4px_rgba(0,0,0,0.08)] transition hover:bg-[#e6e8eb] active:translate-y-px disabled:opacity-60">
+      {busy === 'google' ? <Loader2 size={20} className="animate-spin" /> : <GoogleIcon />}
       Continue with Google
     </button>
   );
 
-  const divider = (label: string) => (
-    <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wider text-slate-400"><span className="h-px flex-1 bg-slate-200 dark:bg-white/10" />{label}<span className="h-px flex-1 bg-slate-200 dark:bg-white/10" /></div>
-  );
+  const spinner = (label: string) => <><Loader2 size={19} className="animate-spin" />{label}</>;
 
-  let card: React.ReactNode;
+  /* ---------- card content ---------- */
+
+  let content: React.ReactNode;
   if (pendingSocialSignup) {
-    card = (
-      <form key="social" onSubmit={handleCompleteSocial} className="ec-slide-in-right space-y-4">
-        <div className="flex items-center gap-3">
-          <img src={pendingSocialSignup.photoURL || initialsAvatar(name || '?')} alt="" className="h-14 w-14 rounded-full object-cover ring-4 ring-violet-200 dark:ring-violet-500/30" />
-          <div className="min-w-0"><h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">Almost there!</h2><p className="truncate text-sm text-slate-500 dark:text-slate-400">{pendingSocialSignup.email || 'Finish creating your EChat account'}</p></div>
+    content = (
+      <form key="social" onSubmit={handleCompleteSocial} className="space-y-3.5">
+        <div className="flex flex-col items-center gap-2">
+          <img src={pendingSocialSignup.photoURL || initialsAvatar(name || '?')} alt="" className="h-16 w-16 rounded-full object-cover ring-2 ring-[#e3c272]" />
+          <h1 className="text-[30px] font-extrabold leading-tight tracking-tight text-[#111111]">Almost there</h1>
+          <p className="max-w-full truncate text-[14px] text-[#4b5563]">{pendingSocialSignup.email || 'Finish creating your EChat account'}</p>
         </div>
-        <div className="relative"><input value={name} onChange={event => setName(event.target.value)} placeholder="Your name" autoComplete="name" required maxLength={80} className={inputClass} /><UserIcon size={18} className={iconClass} /></div>
+        {nameField('Your name')}
         {dobField}
         {termsCheckbox}
-        <button type="submit" disabled={Boolean(busy)} className={primaryButton}>{busy ? <><Loader2 size={19} className="animate-spin" />Creating your account…</> : <>Finish & enter EChat<ArrowRight size={18} /></>}</button>
-        <button type="button" onClick={() => void cancelSocialSignup()} className="w-full text-center text-sm font-semibold text-slate-500 hover:text-violet-600 dark:text-slate-400">Cancel and use another account</button>
+        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy ? spinner('Creating your account…') : 'Continue'}</button>
+        <button type="button" onClick={() => void cancelSocialSignup()} className="w-full text-center text-[13px] font-semibold text-[#6b7280] hover:text-[#1f4d1f]">Cancel and use another account</button>
       </form>
     );
   } else if (mode === 'login') {
-    card = (
-      <form key="login" onSubmit={handleLogin} className="ec-fade-up space-y-4" noValidate={false}>
-        <div className="mb-1">
-          <h2 className="text-[28px] font-black tracking-tight text-slate-900 dark:text-white">Welcome back 👋</h2>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Log in to keep chatting, streaming and connecting.</p>
+    content = (
+      <form key="login" onSubmit={handleLogin} className="space-y-4">
+        <div className="pb-1 text-center">
+          <h1 className="text-[34px] font-extrabold leading-tight tracking-tight text-[#111111]">Welcome back</h1>
+          <p className="mt-1 text-[14px] text-[#4b5563]">Sign in to continue to your conversations</p>
         </div>
-        <div className="relative"><input id="echat-login-email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Email address" autoComplete="email" required className={inputClass} /><Mail size={18} className={iconClass} /></div>
+        {emailField}
         {passwordField('current-password', 'Password')}
-        <div className="flex items-center justify-between gap-2 text-sm">
-          <label className="flex cursor-pointer select-none items-center gap-2 font-medium text-slate-600 dark:text-slate-300">
-            <input type="checkbox" checked={remember} onChange={event => setRemember(event.target.checked)} className="h-4 w-4 accent-violet-600" />Remember me
+        <div className="flex items-center justify-between gap-2 pt-0.5">
+          <label className="flex cursor-pointer select-none items-center gap-2 text-[13px] font-medium text-[#111827]">
+            <input type="checkbox" checked={remember} onChange={event => setRemember(event.target.checked)} style={LIGHT_INPUT} className="h-4 w-4 rounded-sm accent-[#1f4d1f]" />
+            Remember me
           </label>
-          <button type="button" onClick={() => setForgotOpen(true)} className="font-bold text-violet-700 hover:underline dark:text-violet-300">Forgot Password?</button>
+          <button type="button" onClick={() => setForgotOpen(true)} className={`text-[13px] font-semibold ${GREEN} hover:underline`}>Forgot password?</button>
         </div>
-        <button type="submit" disabled={Boolean(busy)} className={primaryButton}>
-          {busy === 'email' ? <><Loader2 size={19} className="animate-spin" />Logging in…</> : <>Log in with Email<ArrowRight size={18} /></>}
-        </button>
-        {divider('or continue with')}
-        {socialButtons}
-        <p className="pt-1 text-center text-sm text-slate-600 dark:text-slate-400">New to EChat? <button type="button" onClick={() => switchMode('register')} className="font-extrabold text-violet-700 hover:underline dark:text-violet-300">Create Account</button></p>
+        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'email' ? spinner('Signing in…') : 'Continue'}</button>
+        <div className="pt-2">{divider('or continue with')}</div>
+        {googleButton}
+        <div className="pt-3 text-center">
+          <p className="text-[12px] text-[#4b5563]">Don't have an account?</p>
+          <button type="button" onClick={() => switchMode('register')} className={`mt-0.5 text-[15px] font-extrabold ${GREEN} hover:underline`}>Sign up</button>
+        </div>
       </form>
     );
   } else {
-    card = (
-      <form key="register" onSubmit={handleRegister} className="ec-slide-in-right space-y-3.5">
-        <div className="mb-1">
-          <h2 className="text-[28px] font-black tracking-tight text-slate-900 dark:text-white">Create your account ✨</h2>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">It's free and takes less than a minute.</p>
+    content = (
+      <form key="register" onSubmit={handleRegister} className="space-y-3.5">
+        <div className="pb-1 text-center">
+          <h1 className="text-[34px] font-extrabold leading-tight tracking-tight text-[#111111]">Create account</h1>
+          <p className="mt-1 text-[14px] text-[#4b5563]">Join EChat to start your conversations</p>
         </div>
         <div className="flex items-center gap-3">
-          <button type="button" onClick={() => avatarInputRef.current?.click()} className="group relative h-16 w-16 shrink-0 rounded-full" aria-label="Choose a profile picture">
-            <img src={avatarPreview || initialsAvatar(name || '?')} alt="" className="h-16 w-16 rounded-full object-cover ring-4 ring-violet-100 dark:ring-violet-500/25" />
-            <span className="ec-gradient absolute -bottom-0.5 -right-0.5 grid h-7 w-7 place-items-center rounded-full text-white ring-2 ring-white dark:ring-[#140f2b]"><Camera size={14} /></span>
+          <button type="button" onClick={() => avatarInputRef.current?.click()} className="relative h-12 w-12 shrink-0 rounded-full" aria-label="Choose a profile picture">
+            <img src={avatarPreview || initialsAvatar(name || '?')} alt="" className="h-12 w-12 rounded-full object-cover ring-2 ring-[#e3c272]" />
+            <span className="absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full bg-gradient-to-b from-[#f3dc9b] to-[#b68428] text-[#1f3d1a] ring-2 ring-[#ffffff]"><Camera size={12} /></span>
           </button>
-          <div className="relative min-w-0 flex-1"><input value={name} onChange={event => setName(event.target.value)} placeholder="Full name" autoComplete="name" required maxLength={80} className={inputClass} /><UserIcon size={18} className={iconClass} /></div>
+          {nameField('Full name')}
           <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={event => { pickAvatar(event.target.files?.[0]); event.target.value = ''; }} />
         </div>
-        <div className="relative"><input type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Email address" autoComplete="email" required className={inputClass} /><Mail size={18} className={iconClass} /></div>
+        {emailField}
         {passwordField('new-password', 'Create a password (6+ characters)')}
         {dobField}
         {termsCheckbox}
-        <button type="submit" disabled={Boolean(busy)} className={primaryButton}>
-          {busy === 'email' ? <><Loader2 size={19} className="animate-spin" />Creating account…</> : <>Create Account<ArrowRight size={18} /></>}
-        </button>
-        {divider('or sign up with')}
-        {socialButtons}
-        <p className="text-center text-sm text-slate-600 dark:text-slate-400">Already on EChat? <button type="button" onClick={() => switchMode('login')} className="font-extrabold text-violet-700 hover:underline dark:text-violet-300">Log in</button></p>
+        <button type="submit" disabled={Boolean(busy)} className={goldButton}>{busy === 'email' ? spinner('Creating account…') : 'Continue'}</button>
+        <div className="pt-1">{divider('or continue with')}</div>
+        {googleButton}
+        <div className="pt-2 text-center">
+          <p className="text-[12px] text-[#4b5563]">Already have an account?</p>
+          <button type="button" onClick={() => switchMode('login')} className={`mt-0.5 text-[15px] font-extrabold ${GREEN} hover:underline`}>Sign in</button>
+        </div>
       </form>
     );
   }
 
-  const dark = resolvedTheme === 'dark';
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#f7f5ff] dark:bg-[#0b0820]">
-      <div className="grid min-h-dvh lg:grid-cols-[1.08fr_1fr]">
-        <BrandPanel />
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b0d0c]" style={{ colorScheme: 'light' }}>
+      {/* blurred, darkened office photo */}
+      <div aria-hidden="true" className="fixed inset-0 scale-105 bg-cover bg-center blur-[2px] brightness-[1.35]" style={{ backgroundImage: "url('/images/login-bg.jpg')" }} />
+      <div aria-hidden="true" className="fixed inset-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.10)_0%,rgba(0,0,0,0.30)_70%,rgba(0,0,0,0.45)_100%)]" />
 
-        <main className="relative flex min-h-dvh flex-col overflow-hidden">
-          {/* soft colour wash behind the card */}
-          <span aria-hidden="true" className="ec-float-slow pointer-events-none absolute -right-20 -top-24 h-80 w-80 rounded-full bg-violet-400/25 blur-3xl dark:bg-violet-600/25" />
-          <span aria-hidden="true" className="ec-float pointer-events-none absolute -bottom-24 -left-16 h-80 w-80 rounded-full bg-pink-400/20 blur-3xl dark:bg-fuchsia-600/20" />
-          <span aria-hidden="true" className="pointer-events-none absolute left-1/3 top-1/2 h-64 w-64 rounded-full bg-sky-400/15 blur-3xl" />
-
-          <div className="relative flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+14px)] sm:px-8">
-            <div className="flex items-center gap-2.5 lg:invisible">
-              <GlowLogo size={40} />
-              <span className="ec-gradient-text text-2xl font-black tracking-tight">EChat</span>
-            </div>
-            <button type="button" onClick={() => setTheme(dark ? 'light' : 'dark')} aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} title={dark ? 'Light mode' : 'Dark mode'}
-              className="ec-glass grid h-11 w-11 place-items-center rounded-full text-slate-700 shadow-sm transition hover:scale-105 dark:text-amber-200">
-              {dark ? <Sun size={19} /> : <Moon size={19} />}
-            </button>
-          </div>
-
-          <div className="relative flex flex-1 flex-col items-center justify-center px-4 py-6 sm:px-8">
-            {/* Phone: brand hero above the form */}
-            <div className="mb-6 text-center lg:hidden">
-              <p className="text-[34px] font-black leading-tight tracking-tight text-slate-900 dark:text-white">Chat. Stream. <span className="ec-gradient-text">Connect.</span></p>
-              <div className="mt-3 flex flex-wrap justify-center gap-1.5 text-xs font-semibold text-violet-800 dark:text-violet-200">
-                {['💬 Chats', '📹 Calls', '🔴 Live', '🛍️ Marketplace'].map(chip => <span key={chip} className="rounded-full bg-violet-100/80 px-2.5 py-1 dark:bg-white/10">{chip}</span>)}
-              </div>
-            </div>
-
-            <div key={errorKey} className={`ec-glass w-full max-w-[440px] rounded-[28px] p-6 shadow-2xl shadow-violet-900/10 sm:p-8 ${error ? 'ec-shake' : ''}`}>
-              {card}
-            </div>
-
-            {onContinueAsGuest && !pendingSocialSignup && (
-              <button type="button" onClick={onContinueAsGuest} className="group mt-5 flex min-h-11 items-center gap-2 rounded-full px-5 text-sm font-bold text-slate-600 transition hover:bg-white/70 hover:text-violet-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white">
-                <Compass size={17} className="transition group-hover:rotate-45" />Continue as Guest to explore
-              </button>
-            )}
-          </div>
-
-          <BrandFooter className="relative pb-[calc(20px+env(safe-area-inset-bottom))]" />
-        </main>
-      </div>
+      <main className="relative flex min-h-dvh items-center justify-center px-4 py-[calc(env(safe-area-inset-top)+24px)] sm:py-10">
+        <div key={errorKey}
+          className={`w-full max-w-[400px] rounded-[26px] border border-[#e2c06e] bg-[#ffffff] px-6 pb-5 pt-7 shadow-[0_0_0_1px_rgba(255,226,150,0.35),0_0_28px_6px_rgba(240,196,92,0.55),0_0_70px_14px_rgba(214,160,60,0.30)] sm:px-8 ${error ? 'ec-shake' : ''}`}>
+          <div className="mb-4 flex justify-center"><EChatWordmark /></div>
+          {content}
+          <p className="mt-5 text-center text-[11px] text-[#9ca3af]">From Eworld (LEK GOD)</p>
+        </div>
+      </main>
 
       {/* Error toast */}
       {error && (
-        <div role="alert" aria-live="assertive" className="ec-fade-up fixed left-1/2 top-[calc(env(safe-area-inset-top)+16px)] z-[70] flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-2xl bg-gradient-to-r from-rose-600 to-red-500 px-4 py-3 text-sm font-semibold text-white shadow-2xl shadow-rose-600/40">
+        <div role="alert" aria-live="assertive" className="ec-fade-up fixed left-1/2 top-[calc(env(safe-area-inset-top)+16px)] z-[70] flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-2xl bg-[#dc2626] px-4 py-3 text-sm font-semibold text-[#ffffff] shadow-2xl">
           <AlertCircle size={20} className="mt-0.5 shrink-0" />
           <span className="flex-1 leading-snug">{error}</span>
-          <button type="button" onClick={() => setError('')} aria-label="Dismiss" className="-mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-full hover:bg-white/20"><X size={16} /></button>
+          <button type="button" onClick={() => setError('')} aria-label="Dismiss" className="-mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-full hover:bg-[#ffffff]/20"><X size={16} /></button>
         </div>
       )}
 
