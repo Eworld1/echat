@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { Film, Music2, Plus, RefreshCw, Sparkles, Volume2, VolumeX } from 'lucide-react';
+import { ArrowLeft, Camera, Music2, RefreshCw, Sparkles, Volume2, VolumeX } from 'lucide-react';
 import { api } from '../services/api';
 import { auth } from '../services/firebase';
 import type { Post } from '../types';
 import { PostCard } from '../components/PostCard';
-import { StoriesBar } from '../components/StoriesBar';
 import { useSocket } from '../context/SocketContext';
 import { useAuth } from '../context/AuthContext';
 import { listenFollowingIds } from '../services/liveDiscovery';
@@ -21,6 +20,8 @@ import {
 
 interface ReelsProps {
   onViewProfile: (userId: string) => void;
+  /** Top-left back button (defaults to the browser back). */
+  onBack?: () => void;
 }
 
 type FeedTab = 'foryou' | 'following' | 'trending' | 'nearby' | 'saved';
@@ -38,7 +39,7 @@ type FeedItem = { kind: 'fs'; id: string; createdAt: number; reel: Reel } | { ki
 const isLegacyReel = (post: Post) => (post.type === 'reel' || post.isReel === true) && post.mediaType === 'video' && Boolean(post.mediaUrl) && post.privacy === 'public';
 const trendScore = (reel: Reel) => reel.likesCount * 3 + reel.commentsCount * 4 + reel.views;
 
-export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
+export const Reels: React.FC<ReelsProps> = ({ onViewProfile, onBack }) => {
   const { user, updateUser } = useAuth();
   // Firebase sign-in can finish after the first render; keep uid in state so listeners + "is this mine" update.
   const [uid, setUid] = useState(auth.currentUser?.uid || '');
@@ -255,28 +256,34 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
   };
   const isLoading = (loading && !hasLoaded.current) || !reelsReady;
 
-  return <div className="mx-auto flex min-h-0 w-full max-w-[620px] flex-col gap-3">
+  const goBack = () => { if (onBack) onBack(); else window.history.back(); };
+
+  // Phones: a full-height black Reels screen between the top of the screen and the bottom navigation
+  // (it never goes under the bottom nav). Desktop: the same layout in a centred phone-shaped column.
+  return <div className="fixed inset-x-0 top-0 bottom-[calc(60px+env(safe-area-inset-bottom))] z-[45] flex flex-col bg-black text-white min-[769px]:relative min-[769px]:inset-auto min-[769px]:bottom-auto min-[769px]:z-auto min-[769px]:mx-auto min-[769px]:h-[calc(100dvh-140px)] min-[769px]:min-h-[520px] min-[769px]:w-full min-[769px]:max-w-[460px] min-[769px]:overflow-hidden min-[769px]:rounded-2xl min-[769px]:shadow-xl min-[1025px]:h-[calc(100dvh-100px)]">
     {successToast && <div role="status" aria-live="polite" className="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-[95] -translate-x-1/2 rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-xl">{successToast}</div>}
-    <header className="flex min-h-14 items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-xs sm:px-4">
-      <div className="flex min-w-0 items-center gap-2.5"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#E7F0FD] text-[#1877F2]"><Film size={20} /></span><div className="min-w-0"><h1 className="font-extrabold text-slate-900">Reels</h1><p className="hidden truncate text-xs text-slate-500 sm:block">Short videos & photos from the EChat community</p></div></div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        <button type="button" onClick={toggleAutoplay} aria-pressed={autoplay} title={`Autoplay ${autoplay ? 'on' : 'off'}`} className={`flex min-h-10 items-center gap-1.5 rounded-xl px-2.5 text-xs font-bold max-[400px]:px-2 ${autoplay ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}><span className={`h-2 w-2 rounded-full ${autoplay ? 'bg-emerald-500' : 'bg-slate-400'}`} /><span className="max-[400px]:hidden">Autoplay {autoplay ? 'On' : 'Off'}</span></button>
-        <button type="button" onClick={toggleMuted} aria-pressed={!muted} aria-label={muted ? 'Sound off for all Reels — tap to turn on' : 'Sound on for all Reels — tap to mute'} title={muted ? 'Sound off (all Reels)' : 'Sound on (all Reels)'} className={`flex min-h-10 items-center gap-1 rounded-xl px-2.5 text-sm font-bold ${muted ? 'bg-slate-100 text-slate-700' : 'bg-[#E7F0FD] text-[#1877F2]'}`}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}<span aria-hidden="true">{muted ? '🔇' : '🔊'}</span></button>
-        <button type="button" onClick={() => void load()} disabled={refreshing || loading} aria-label="Refresh Reels" title="Refresh Reels" className="grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-700 disabled:opacity-60"><RefreshCw size={17} className={refreshing ? 'animate-spin' : ''} /></button>
-        <button type="button" onClick={() => openStudio()} className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[#1877F2] px-3 text-xs font-bold text-white hover:bg-[#166FE5]"><Plus size={15} /><span className="hidden sm:inline">Create Reel</span><span className="sm:hidden">Create</span></button>
-      </div>
+
+    {/* Top bar: back, title, sound, camera */}
+    <header className="flex shrink-0 items-center gap-1 px-1.5 pb-1 pt-[max(0.25rem,env(safe-area-inset-top))]">
+      <button type="button" onClick={goBack} aria-label="Back" className="grid h-11 w-11 place-items-center rounded-full hover:bg-white/10"><ArrowLeft size={22} /></button>
+      <h1 className="flex-1 text-lg font-extrabold tracking-tight">Reels</h1>
+      <button type="button" onClick={() => void load()} disabled={refreshing || loading} aria-label="Refresh Reels" title="Refresh Reels" className="grid h-11 w-11 place-items-center rounded-full hover:bg-white/10 disabled:opacity-50"><RefreshCw size={19} className={refreshing ? 'animate-spin' : ''} /></button>
+      <button type="button" onClick={toggleMuted} aria-pressed={!muted} aria-label={muted ? 'Sound is off — tap to turn on' : 'Sound is on — tap to mute'} title={muted ? 'Sound off' : 'Sound on'}
+        className={`flex h-11 items-center gap-1 rounded-full px-3 text-sm font-bold ${muted ? 'bg-white/15' : 'bg-[#1877F2]'}`}>
+        {muted ? <VolumeX size={19} /> : <Volume2 size={19} />}<span aria-hidden="true">{muted ? '🔇' : '🔊'}</span>
+      </button>
+      <button type="button" onClick={() => openStudio()} aria-label="Create a reel" title="Create a reel" className="grid h-11 w-11 place-items-center rounded-full hover:bg-white/10"><Camera size={22} /></button>
     </header>
 
-    <div className="rounded-2xl border border-slate-200 bg-white px-2 pt-3 shadow-xs"><StoriesBar /></div>
-
-    <div className="-mx-1 flex gap-2 overflow-x-auto px-1" role="tablist" aria-label="Reels feeds">
-      {TABS.map(item => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)} className={`min-h-10 shrink-0 rounded-full px-4 text-sm font-bold ${tab === item.id ? 'bg-[#1877F2] text-white' : 'bg-white text-slate-700 shadow-xs ring-1 ring-slate-200'}`}>{item.label}</button>)}
+    <div className="flex shrink-0 gap-1.5 overflow-x-auto px-2 pb-2 [scrollbar-width:none]" role="tablist" aria-label="Reels feeds">
+      {TABS.map(item => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)} className={`min-h-9 shrink-0 rounded-full px-3.5 text-sm font-bold ${tab === item.id ? 'bg-white text-slate-900' : 'bg-white/12 text-white/85 hover:bg-white/20'}`}>{item.label}</button>)}
+      <button type="button" onClick={toggleAutoplay} aria-pressed={autoplay} title={`Autoplay ${autoplay ? 'on' : 'off'}`} className={`ml-auto flex min-h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-bold ${autoplay ? 'bg-emerald-500/20 text-emerald-300' : 'bg-white/12 text-white/70'}`}><span className={`h-2 w-2 rounded-full ${autoplay ? 'bg-emerald-400' : 'bg-white/50'}`} />Auto</button>
     </div>
 
-    {loadError && items.length === 0 && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"><span>{loadError}</span><button type="button" onClick={() => void load()} className="min-h-10 rounded-lg bg-rose-700 px-3 font-bold text-white">Retry</button></div>}
+    {loadError && items.length === 0 && <div role="alert" className="mx-2 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-rose-500/15 px-3 py-2 text-sm text-rose-100"><span>{loadError}</span><button type="button" onClick={() => void load()} className="min-h-10 rounded-lg bg-rose-600 px-3 font-bold text-white">Retry</button></div>}
 
-    {isLoading ? <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading Reels…</div>
-      : items.length === 0 ? <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><Sparkles size={30} className="mx-auto mb-2 text-[#1877F2]" /><p className="font-bold text-slate-800">{emptyMessage[tab]}</p>{tab !== 'saved' && <button onClick={() => openStudio()} className="mt-4 rounded-xl bg-[#1877F2] px-4 py-2 text-sm font-bold text-white">Create a Reel</button>}</div>
+    {isLoading ? <div className="grid flex-1 place-items-center text-sm text-white/70"><span className="flex flex-col items-center gap-3"><span className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />Loading Reels…</span></div>
+      : items.length === 0 ? <div className="grid flex-1 place-items-center p-8 text-center"><div><Sparkles size={34} className="mx-auto mb-2 text-[#4B9BFF]" /><p className="font-bold text-white">{emptyMessage[tab]}</p>{tab !== 'saved' && <button onClick={() => openStudio()} className="mt-4 rounded-xl bg-[#1877F2] px-4 py-2.5 text-sm font-bold text-white">Create a Reel</button>}</div></div>
       : <div ref={feedRef} tabIndex={0} aria-label="Reels feed" onScroll={event => { const feed = event.currentTarget; if (tab === 'foryou' && feed.scrollHeight - feed.scrollTop - feed.clientHeight < 500) void loadMore(); }} onKeyDown={event => {
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
         event.preventDefault();
@@ -284,7 +291,7 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
         const feed = feedRef.current;
         const target = feed?.querySelectorAll<HTMLElement>('[data-reel-slide]')[nextIndex];
         if (feed && target) feed.scrollTo({ top: feed.scrollTop + target.getBoundingClientRect().top - feed.getBoundingClientRect().top, behavior: 'smooth' });
-      }} className="box-border h-[calc(100dvh-140px)] min-h-0 snap-y snap-mandatory overflow-y-scroll overscroll-contain [scrollbar-width:none] [-webkit-overflow-scrolling:touch] touch-pan-y pb-[calc(60px+env(safe-area-inset-bottom))] min-[769px]:h-[calc(100dvh-140px)] min-[769px]:min-h-[420px] min-[769px]:pb-2">
+      }} className="min-h-0 flex-1 snap-y snap-mandatory overflow-y-scroll overscroll-contain [scrollbar-width:none] [-webkit-overflow-scrolling:touch] touch-pan-y">
         {items.map((item, index) => (
           <Slide key={item.id} index={index} activeIndex={activeIndex} onActive={setActiveIndex} root={feedRef} thumbnail={item.kind === 'fs' ? item.reel.coverUrl : item.post.thumbnailUrl}>
             {near => item.kind === 'fs' ? (
@@ -316,12 +323,12 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
             ) : (
               <div className="relative h-full w-full">
                 {near && <PostCard post={item.post} onPostUpdated={handleLegacyUpdated} onPostDeleted={handleLegacyDeleted} onViewProfile={onViewProfile} reelMode detailMode reelActive={index === activeIndex} reelPreload={Math.abs(index - activeIndex) <= 1 ? 'auto' : 'metadata'} />}
-                <span className="pointer-events-none absolute left-3 top-3 z-30 flex max-w-[70%] items-center gap-1 truncate rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-semibold text-white"><Music2 size={12} />Original Audio - {item.post.author?.name || 'EChat user'}</span>
+                <span className="pointer-events-none absolute left-3 top-[68px] z-30 flex max-w-[70%] items-center gap-1 truncate rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-semibold text-white"><Music2 size={12} />Original Audio - {item.post.author?.name || 'EChat user'}</span>
               </div>
             )}
           </Slide>
         ))}
-        <div aria-live="polite" className="flex min-h-12 items-center justify-center py-3 text-sm text-slate-500">
+        <div aria-live="polite" className="flex min-h-12 items-center justify-center py-3 text-sm text-white/60">
           {loadingMore ? <span className="inline-flex items-center gap-2"><RefreshCw size={16} className="animate-spin" />Loading more reels...</span> : tab === 'foryou' && !hasMore ? 'No more reels' : null}
         </div>
       </div>}
@@ -329,7 +336,7 @@ export const Reels: React.FC<ReelsProps> = ({ onViewProfile }) => {
     {sheet && sheetReel && sheet.type === 'comments' && <CommentsSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} />}
     {sheet && sheetReel && sheet.type === 'share' && <ShareSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} onToast={setSuccessToast} />}
     {sheet && sheetReel && sheet.type === 'sound' && <SoundSheet reel={sheetReel} viewer={viewer} savedSounds={savedSounds} onClose={() => setSheet(null)} onUse={sound => openStudio({ sound })} onToast={setSuccessToast} />}
-    {sheet && sheetReel && sheet.type === 'more' && <MoreSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} onStudio={openStudio} onToast={setSuccessToast} onDeleted={removeReel} onHidden={removeReel} saved={savedIds.has(sheetReel.id)} onSave={saved => { if (requireViewer()) void setReelSave(sheetReel.id, uid, saved).then(() => setSuccessToast(saved ? 'Saved to Saved Reels' : 'Removed from Saved Reels')).catch(error => setSuccessToast(error instanceof Error ? error.message : 'Could not save.')); }} />}
+    {sheet && sheetReel && sheet.type === 'more' && <MoreSheet reel={sheetReel} viewer={viewer} onClose={() => setSheet(null)} onStudio={openStudio} onToast={setSuccessToast} onDeleted={removeReel} onHidden={removeReel} onShare={() => setSheet({ type: 'share', reelId: sheetReel.id })} saved={savedIds.has(sheetReel.id)} onSave={saved => { if (requireViewer()) void setReelSave(sheetReel.id, uid, saved).then(() => setSuccessToast(saved ? 'Saved to Saved Reels' : 'Removed from Saved Reels')).catch(error => setSuccessToast(error instanceof Error ? error.message : 'Could not save.')); }} />}
 
     {studio && <CreateStudio mode="reel" preset={studio} onClose={() => setStudio(null)} onCreated={message => { setStudio(null); setTab('foryou'); setActiveIndex(0); feedRef.current?.scrollTo({ top: 0 }); setSuccessToast(message); }} />}
   </div>;

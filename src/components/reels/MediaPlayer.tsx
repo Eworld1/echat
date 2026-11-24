@@ -221,7 +221,7 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
         onPlaying={() => setBuffering(false)}
         onCanPlay={() => setBuffering(false)}
         onError={() => setBuffering(false)}
-        className="h-full w-full object-contain"
+        className="h-full w-full object-cover object-center"
         style={{ filter }}
       />
     : <img

@@ -183,7 +183,9 @@ export const MoreSheet: React.FC<{
   onDeleted: (reelId: string) => void;
   /** "Not interested": hide from this feed. */
   onHidden: (reelId: string) => void;
-}> = ({ reel, viewer, saved, onSave, onClose, onStudio, onToast, onDeleted, onHidden }) => {
+  /** Opens the share options. */
+  onShare: () => void;
+}> = ({ reel, viewer, saved, onSave, onClose, onStudio, onToast, onDeleted, onHidden, onShare }) => {
   const sound = reelSound(reel);
   const isOwner = Boolean(viewer && viewer.uid === reel.creatorId);
   const [view, setView] = useState<MoreView>('menu');
@@ -262,7 +264,8 @@ export const MoreSheet: React.FC<{
 
   if (view === 'editCaption') {
     return (
-      <Sheet title="Edit caption" onClose={onClose}>
+      <Sheet title="Edit reel" onClose={onClose}>
+        <p className="px-4 pt-3 text-xs font-bold uppercase tracking-wider text-slate-500">Caption</p>
         <div className="space-y-3 p-4">
           <textarea value={caption} onChange={event => setCaption(event.target.value)} maxLength={2200} rows={5} autoFocus placeholder="Write a caption… #hashtags"
             className="w-full resize-none rounded-xl border border-slate-300 p-3 text-sm outline-none focus:border-[#1877F2]" />
@@ -295,9 +298,11 @@ export const MoreSheet: React.FC<{
       <div className="space-y-1 p-3">
         {isOwner ? (
           <>
-            {option(<Pencil size={18} />, 'Edit Caption', () => setView('editCaption'))}
+            {option(<Pencil size={18} />, 'Edit Reel', () => setView('editCaption'))}
             {option(<Trash2 size={18} />, 'Delete Reel', () => setView('confirmDelete'), true)}
             <div className="my-1 border-t border-slate-100" />
+            {option(saved ? <BookmarkCheck size={18} /> : <Bookmark size={18} />, saved ? 'Remove from Saved' : 'Save', () => { onSave(!saved); onClose(); })}
+            {option(<Share2 size={18} />, 'Share', onShare)}
             {option(<Link2 size={18} />, 'Copy Link', copyLink)}
             {option(<SquarePlus size={18} />, 'Add to Story', addToStory)}
           </>
@@ -306,6 +311,7 @@ export const MoreSheet: React.FC<{
             {option(saved ? <BookmarkCheck size={18} /> : <Bookmark size={18} />, saved ? 'Remove from Saved' : 'Save', () => { onSave(!saved); onClose(); })}
             {option(<Flag size={18} />, 'Report', () => { if (!viewer) { onToast('Sign in to report.'); return; } setView('report'); }, true)}
             {option(<EyeOff size={18} />, 'Not Interested', () => { hideReel(reel.id); onHidden(reel.id); onToast("Got it — you'll see fewer reels like this"); onClose(); })}
+            {option(<Share2 size={18} />, 'Share', onShare)}
             {option(<Link2 size={18} />, 'Copy Link', copyLink)}
             <div className="my-1 border-t border-slate-100" />
             {option(<Users size={18} />, 'Duet (side-by-side)', () => { if (!viewer) { onToast('Sign in to duet.'); return; } onStudio({ duetOf: { reelId: reel.id, mediaUrl: reel.mediaUrl, mediaType: reel.mediaType, creatorName: reel.creatorName, trimStart: reel.trimStart, trimEnd: reel.trimEnd }, sound: null }); })}

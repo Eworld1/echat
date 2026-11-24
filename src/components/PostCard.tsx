@@ -30,9 +30,7 @@ import {
   Globe,
   Users,
   Send,
-  Download,
-  Volume2,
-  VolumeX
+  Download
   , Play
   , Loader2
 } from 'lucide-react';
@@ -689,7 +687,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           {reelMode && !isReelPlaying && (autoplayBlockedByDataSaver || !reelsAutoplay || manualPauseRef.current) && <button type="button" onClick={event => { event.stopPropagation(); toggleReelPlayback(); }} aria-label="Play Reel" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/25 text-white"><span className="grid h-14 w-14 place-items-center rounded-full bg-black/60"><Play size={24} fill="currentColor" /></span>{autoplayBlockedByDataSaver && <span className="rounded-full bg-black/60 px-3 py-1 text-xs">Tap to play — you’re on mobile data</span>}</button>}
           {reelMode && isReelBuffering && !isReelPlaying && !reelPlaybackError && ((reelsAutoplay && !autoplayBlockedByDataSaver) || manualPlayRef.current) && <div aria-label="Loading Reel" className="pointer-events-none absolute inset-0 grid place-items-center bg-black/10 text-white"><Loader2 size={32} className="animate-spin" /></div>}
           {reelMode && reelPlaybackError && <div className="absolute inset-0 grid place-items-center bg-black/60 p-4 text-center text-white"><div><p className="mb-2 text-sm font-semibold">This Reel couldn’t play.</p><button type="button" onClick={() => { setReelPlaybackError(false); setIsReelBuffering(true); videoRef.current?.load(); if (reelsAutoplay) videoRef.current?.play().catch(() => {}); }} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-900">Tap to retry</button></div></div>}
-          {reelMode && <button type="button" onClick={event => { event.stopPropagation(); setReelSound(!isReelMuted); }} aria-label={isReelMuted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!isReelMuted} className="absolute right-3 top-20 z-30 flex min-h-10 items-center gap-1.5 rounded-full bg-black/60 px-3 text-sm font-bold text-white">{isReelMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}<span aria-hidden="true">{isReelMuted ? '🔇' : '🔊'}</span></button>}
+          {/* Reels sound: the 🔊/🔇 button in the Reels top bar (and tapping the video) controls every reel. */}
         </div>
       )}
 

@@ -349,7 +349,7 @@ export function MainApp() {
 
           {currentView === 'live' && <LiveDiscoveryFeed onBack={() => handleNavigate('feed')} onOpenGoLive={() => setIsGoLiveOpen(true)} onWatchLive={stream => setActiveViewerStream(stream)} legacyStream={currentLiveStream} />}
 
-          {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} />}
+          {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} onBack={() => handleNavigate('feed')} />}
 
           {currentView === 'friends' && (
             <FriendsView

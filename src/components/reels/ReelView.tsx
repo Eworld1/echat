@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { UserAvatar } from '../UserAvatar';
 import { Bookmark, Eye, Heart, MessageCircle, MoreHorizontal, Music2, Pause, Play, Share2, Volume2, VolumeX } from 'lucide-react';
 import { followCreator, listenFollowingState, unfollowCreator } from '../../services/liveDiscovery';
 import { MediaPlayer, type MediaPlayerHandle } from './MediaPlayer';
@@ -121,9 +122,9 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
 
   const captionParts = reel.caption.split(/(#[\p{L}\p{N}_]+)/u);
   const actionButton = (label: string, icon: React.ReactNode, onClick: () => void, count?: number | string, pressed?: boolean) => (
-    <button type="button" onClick={onClick} aria-label={label} aria-pressed={pressed} className="flex flex-col items-center gap-0.5 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,.8)]">
-      <span className="grid h-11 w-11 place-items-center rounded-full bg-black/25 backdrop-blur-sm">{icon}</span>
-      {count !== undefined && <span className="text-xs font-bold">{count}</span>}
+    <button type="button" onClick={onClick} aria-label={label} aria-pressed={pressed} className="flex min-w-12 flex-col items-center gap-1 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,.8)] active:scale-95">
+      <span className="grid h-12 w-12 place-items-center rounded-full bg-black/35 ring-1 ring-white/15 backdrop-blur-sm transition hover:bg-black/50">{icon}</span>
+      {count !== undefined && <span className="text-xs font-bold leading-none">{count}</span>}
     </button>
   );
 
@@ -150,15 +151,10 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
       {held && active && <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white"><Pause size={28} /></div>}
       {flash && <div key={flash.id} className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-20 w-20 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white" style={{ animation: 'echatSoundFlash .7s ease-out forwards' }} role="status" aria-label={flash.muted ? 'Sound off' : 'Sound on'}>{flash.muted ? <VolumeX size={36} /> : <Volume2 size={36} />}</div>}
 
-      {/* sound button on the video (top right) */}
-      <button type="button" onClick={toggleSound} aria-label={muted ? 'Turn sound on' : 'Turn sound off'} aria-pressed={!muted}
-        className="absolute right-3 top-3 z-30 flex min-h-10 items-center gap-1.5 rounded-full bg-black/55 px-3 text-sm font-bold text-white backdrop-blur-sm">
-        {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}<span aria-hidden="true">{muted ? '🔇' : '🔊'}</span>
-      </button>
       {hearts.map(heart => <Heart key={heart.id} size={96} className="pointer-events-none absolute z-30 fill-rose-500 text-rose-500 drop-shadow-lg" style={{ left: `${heart.x}%`, top: `${heart.y}%`, animation: 'echatHeartPop 1s ease-out forwards' }} />)}
 
       {/* right action bar */}
-      <div className="absolute bottom-24 right-2 z-20 flex flex-col items-center gap-4 sm:bottom-28">
+      <div className="absolute bottom-4 right-2 z-30 flex flex-col items-center gap-3.5">
         {actionButton(liked ? 'Unlike' : 'Like', <Heart size={26} className={liked ? 'fill-rose-500 text-rose-500' : ''} />, () => onLike(!liked), compact(reel.likesCount), liked)}
         {actionButton('Comments', <MessageCircle size={26} />, onComments, compact(reel.commentsCount))}
         {actionButton('Share', <Share2 size={26} />, onShare, 'Share')}
@@ -167,10 +163,10 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
       </div>
 
       {/* bottom info */}
-      <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/75 via-black/30 to-transparent px-3 pb-4 pr-16 pt-16 text-white">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/35 to-transparent px-3 pb-4 pr-[76px] pt-24 text-white [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_p]:pointer-events-auto">
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => onViewProfile?.(reel.creatorId)} className="flex min-w-0 items-center gap-2">
-            <img src={reel.creatorAvatar || '/logo-mark-blue.svg'} alt="" className="h-9 w-9 shrink-0 rounded-full border border-white object-cover" />
+            <UserAvatar src={reel.creatorAvatar} name={reel.creatorName || 'EChat user'} size={36} className="ring-2 ring-white" />
             <span className="truncate text-sm font-extrabold">{reel.creatorName}</span>
           </button>
           {viewer && !isOwn && <button type="button" disabled={followBusy} onClick={() => void toggleFollow()} className={`min-h-8 shrink-0 rounded-lg px-3 text-xs font-bold ${following ? 'border border-white/70 text-white' : 'bg-[#1877F2] text-white'}`}>{following ? 'Following' : 'Follow'}</button>}
