@@ -10,6 +10,7 @@ import { addLiveComment, blockLiveUser, deleteLiveComment, listenLiveComments, t
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { LiveUserActions } from './LiveUserActions';
+import { isLowDataMode } from '../services/lowData';
 import { Ban, MoreVertical, Trash2 } from 'lucide-react';
 // @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
 import { Room, RoomEvent, Track } from 'livekit-client';
@@ -57,6 +58,8 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   const commentsEndRef = useRef<HTMLDivElement | null>(null);
   const [liveEnded, setLiveEnded] = useState(false);
   const [connectError, setConnectError] = useState('');
+  // Low Data Mode: don't start the live video until the viewer taps "Tap to Join Live".
+  const [videoJoined, setVideoJoined] = useState(() => !isLowDataMode());
   const pendingReactionsRef = useRef<{ emoji: string; count: number } | null>(null);
   const reactionTimerRef = useRef<number | null>(null);
   const lastReactionCountRef = useRef<number | null>(null);
@@ -117,7 +120,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   };
 
   useEffect(() => {
-    if (!currentStream) return;
+    if (!currentStream || !videoJoined) return;
     let cancelled = false;
     let liveKitRoom: Room | null = null;
     const liveKitAudio: HTMLAudioElement[] = [];
@@ -212,7 +215,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       queuedCandidatesRef.current = [];
       setRemoteVideo(null);
     };
-  }, [currentStream?.id, currentStream?.hostId, onLiveSignal, socket, liveEnded]);
+  }, [currentStream?.id, currentStream?.hostId, onLiveSignal, socket, liveEnded, videoJoined]);
 
   // Socket listeners for real-time live events
   useEffect(() => {
@@ -391,8 +394,9 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
                 <VerifiedBadge size={16} />
               </h3>
               <p className="text-xs text-rose-400 font-bold uppercase tracking-wider mt-1">
-                {connectError ? 'Could not load the live video' : 'Connecting to live video…'}
+                {connectError ? 'Could not load the live video' : videoJoined ? 'Connecting to live video…' : 'Low Data Mode is ON'}
               </p>
+              {!videoJoined && <button type="button" onClick={() => setVideoJoined(true)} className="mt-4 inline-flex min-h-12 items-center gap-2 rounded-full bg-gradient-to-r from-rose-600 to-pink-600 px-6 text-sm font-extrabold text-white shadow-lg shadow-rose-600/30 hover:brightness-110"><Radio size={18} />Tap to Join Live</button>}
               {connectError && <p role="alert" className="mt-2 max-w-sm text-xs text-rose-200">{connectError}</p>}
               <p className="text-xs text-slate-400 mt-2 max-w-sm">
                 "{liveData.title}"

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiUrl } from '../services/apiBase';
+import { isLowDataMode } from '../services/lowData';
 
 /** Shows a visible warning when the Echat backend can't be reached. */
 export function ConnectionBanner() {
@@ -17,7 +18,13 @@ export function ConnectionBanner() {
       }
     };
     check();
-    const id = setInterval(check, 30000);
+    // Low Data Mode: no background checks while the app is hidden, and only every 2 minutes.
+    let lastCheck = Date.now();
+    const id = setInterval(() => {
+      if (isLowDataMode() && (document.visibilityState === 'hidden' || Date.now() - lastCheck < 120000)) return;
+      lastCheck = Date.now();
+      void check();
+    }, 30000);
     return () => {
       cancelled = true;
       clearInterval(id);

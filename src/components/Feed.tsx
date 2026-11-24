@@ -11,6 +11,8 @@ import { ProfilePhotoPostCard } from './ProfilePhotoPostCard';
 import { listenProfilePhotoPosts, type ProfilePhotoPost } from '../services/profilePhotoPosts';
 import { CreatePostModal } from './CreatePostModal';
 import { DashboardHeader } from './DashboardHeader';
+import { LowDataFeedBar } from './LowData';
+import { useLowDataMode } from '../services/lowData';
 import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown } from 'lucide-react';
 
 interface FeedProps {
@@ -43,6 +45,8 @@ export const Feed: React.FC<FeedProps> = ({
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+  // Low Data Mode: 10 posts at a time and only when "Load More" is tapped (no automatic preloading).
+  const [lowData] = useLowDataMode();
 
   const isFeedPost = (post: Post) => post.type === 'post' && post.isReel !== true && post.videoType !== 'reel';
 
@@ -112,11 +116,11 @@ export const Feed: React.FC<FeedProps> = ({
   // Infinite scroll: load the next page when the bottom marker comes near the screen.
   useEffect(() => {
     const marker = loadMoreRef.current;
-    if (!marker || !nextCursor || typeof IntersectionObserver === 'undefined') return;
+    if (lowData || !marker || !nextCursor || typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void loadMore(); }, { rootMargin: '800px 0px' });
     observer.observe(marker);
     return () => observer.disconnect();
-  }, [nextCursor, posts.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nextCursor, posts.length, lowData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pull to refresh (at the top of the page, drag down).
   const PULL_TRIGGER = 80;
@@ -146,6 +150,9 @@ export const Feed: React.FC<FeedProps> = ({
           {isRefreshing && <span className="sr-only">Refreshing feed</span>}
         </div>
       )}
+
+      {/* Low Data: ON/OFF quick toggle (+ green "Saving Data" badge when ON) */}
+      <LowDataFeedBar />
 
       {/* Welcome, today's date, Go Live and my stats */}
       <DashboardHeader onGoLive={onOpenGoLive} onOpen={target => (target === 'profile' && user ? onViewProfile(user.id) : onOpenSection?.(target))} />
@@ -232,7 +239,7 @@ export const Feed: React.FC<FeedProps> = ({
         ))}
         <div ref={loadMoreRef} aria-live="polite">
           {loadingMore && <PostSkeleton withImage={false} />}
-          {nextCursor && !loadingMore && <button type="button" onClick={() => void loadMore()} className="w-full rounded-xl border border-slate-200 bg-white py-3 text-sm font-semibold text-slate-700">Load more posts</button>}
+          {nextCursor && !loadingMore && <button type="button" onClick={() => void loadMore()} className={`w-full rounded-xl border py-3 text-sm font-semibold ${lowData ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/10 dark:text-emerald-200' : 'border-slate-200 bg-white text-slate-700'}`}>{lowData ? 'Load More (10 posts)' : 'Load more posts'}</button>}
           {!nextCursor && posts.length > 3 && <p className="py-4 text-center text-xs font-semibold text-slate-400">You're all caught up ✨</p>}
         </div>
         </>

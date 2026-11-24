@@ -7,6 +7,10 @@
  *   NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET   (or VITE_CLOUDINARY_UPLOAD_PRESET)  — must be an *Unsigned* preset
  */
 
+import { countUploadSaving, isLowDataMode } from './lowData';
+import { compressImage } from '../utils/image';
+import { browserCompressedVideos, compressVideoInBrowser } from '../utils/video';
+
 const env = import.meta.env as Record<string, string | undefined>;
 // Cloud name + unsigned preset are public identifiers (they ship in the browser bundle either way).
 export const CLOUDINARY_CLOUD_NAME = (env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || env.VITE_CLOUDINARY_CLOUD_NAME || 'gcsxnba1').trim();
@@ -65,11 +69,52 @@ function explainCloudinaryError(status: number, message: string): string {
   return `Upload failed: ${message || `HTTP ${status}`}`;
 }
 
+type UploadBlob = Blob & { name?: string };
+
+/** Low Data Mode: photos → max 800px, 70% JPEG; videos → 480p. Small PNGs (stickers), GIFs and SVGs are left alone. */
+function needsLowDataShrink(file: UploadBlob): boolean {
+  const type = file.type || '';
+  if (isVideoFile(file)) return !browserCompressedVideos.has(file);
+  if (!type.startsWith('image/') || type === 'image/gif' || type === 'image/svg+xml') return false;
+  return !(type === 'image/png' && file.size < 500 * 1024);
+}
+
+async function shrinkForLowData(file: UploadBlob, onProgress?: (percent: number) => void): Promise<UploadBlob> {
+  const named = file instanceof File ? file : new File([file], file.name || (isVideoFile(file) ? 'video.mp4' : 'photo.jpg'), { type: file.type });
+  try {
+    const smaller = isVideoFile(file)
+      ? await compressVideoInBrowser(named, percent => onProgress?.(Math.round(percent / 2)), { lowData: true })
+      : await compressImage(named, 800, 0.7);
+    if (smaller.size >= file.size) return file;
+    countUploadSaving(file.size, smaller.size);
+    return smaller;
+  } catch (error) {
+    console.warn('[EChat upload] Low Data compression skipped, sending the original:', error);
+    return file;
+  }
+}
+
 /**
  * Uploads one file to Cloudinary with real progress (0 → 100). Resolves with the https URL.
  * Uses the /auto/upload endpoint so images, videos and other files all work.
+ * In Low Data Mode the file is shrunk first (see needsLowDataShrink).
  */
-export function uploadToCloudinary(file: Blob & { name?: string }, options: UploadOptions = {}): CloudinaryUpload {
+export function uploadToCloudinary(file: UploadBlob, options: UploadOptions = {}): CloudinaryUpload {
+  if (!isLowDataMode() || !needsLowDataShrink(file)) return startCloudinaryUpload(file, options);
+  let inner: CloudinaryUpload | null = null;
+  let cancelled = false;
+  const video = isVideoFile(file);
+  const promise = shrinkForLowData(file, options.onProgress).then(smaller => {
+    if (cancelled || options.signal?.aborted) throw new UploadCancelledError();
+    inner = startCloudinaryUpload(smaller, video && smaller !== file
+      ? { ...options, onProgress: percent => options.onProgress?.(50 + Math.round(percent / 2)) }
+      : options);
+    return inner.promise;
+  });
+  return { promise, cancel: () => { cancelled = true; inner?.cancel(); } };
+}
+
+function startCloudinaryUpload(file: UploadBlob, options: UploadOptions = {}): CloudinaryUpload {
   const sizeError = uploadSizeError(file);
   if (sizeError) return { promise: Promise.reject(new Error(sizeError)), cancel: () => {} };
   if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_UPLOAD_PRESET) {

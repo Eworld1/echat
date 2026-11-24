@@ -16,6 +16,8 @@ import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
 import { PhotoViewer } from './PhotoViewer';
 import { PostPhotoGrid } from './PostPhotoGrid';
+import { LowDataVideoCover } from './LowData';
+import { isUnlocked, lightVideoUrl, useLowDataMode } from '../services/lowData';
 import { getPostImageUrls } from '../utils/postImages';
 import { saveImageToDevice } from '../utils/saveImage';
 import {
@@ -125,6 +127,15 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [wifiOnlyAutoplay, setWifiOnlyAutoplay] = useState(() => { if (typeof window === 'undefined') return false; const saved = window.localStorage.getItem('reels_wifi_only'); return saved !== null ? saved === 'true' : Boolean(user?.reelsWifiOnly); });
   const manualPauseRef = useRef(false);
   const manualPlayRef = useRef(false);
+  // Low Data Mode: no autoplay; videos show a cover (thumbnail + Play + size) and play a 480p copy when tapped.
+  const [lowData] = useLowDataMode();
+  const firstMediaUrl = assetUrl(getPostImageUrls(post)[0] || '');
+  const [videoUnlocked, setVideoUnlocked] = useState(() => isUnlocked(firstMediaUrl));
+  const [playRequested, setPlayRequested] = useState(false);
+  const [lightVideoFailed, setLightVideoFailed] = useState(false);
+  const videoGated = lowData && post.mediaType === 'video' && !videoUnlocked;
+  const lightVideo = lowData && !lightVideoFailed ? lightVideoUrl(firstMediaUrl) : firstMediaUrl;
+  const unlockVideo = () => { manualPauseRef.current = false; manualPlayRef.current = true; setPlayRequested(true); setVideoUnlocked(true); };
   const [profileOverrides, setProfileOverrides] = useState<Record<string, Partial<User>>>({});
 
   useEffect(() => {
@@ -181,7 +192,7 @@ export const PostCard: React.FC<PostCardProps> = ({
         video.pause();
         return;
       }
-      if ((reelsAutoplay && !blockedByDataSaver && !manualPauseRef.current) || (allowManual && manualPlayRef.current)) {
+      if ((reelsAutoplay && !blockedByDataSaver && !lowData && !manualPauseRef.current) || (allowManual && manualPlayRef.current)) {
         pauseOtherReels();
         video.muted = isReelMuted;
         void video.play().catch(async (error: unknown) => {
@@ -225,7 +236,7 @@ export const PostCard: React.FC<PostCardProps> = ({
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => { observer?.disconnect(); document.removeEventListener('visibilitychange', onVisibilityChange); video.pause(); };
-  }, [reelMode, reelActive, post.id, reelsAutoplay, wifiOnlyAutoplay, isReelMuted]);
+  }, [reelMode, reelActive, post.id, reelsAutoplay, wifiOnlyAutoplay, isReelMuted, lowData, videoGated]);
 
   useEffect(() => {
     const onReelSettings = () => {
@@ -651,7 +662,8 @@ export const PostCard: React.FC<PostCardProps> = ({
               )}
               {post.sharedPost.mediaUrl && (
                 post.sharedPost.mediaType === 'video'
-                  ? <video src={post.sharedPost.mediaUrl} controls className="w-full max-h-80 object-contain bg-black" />
+                  ? <SharedVideo url={post.sharedPost.mediaUrl} />
+                  : lowData ? <PostPhotoGrid urls={[post.sharedPost.mediaUrl]} altPrefix="Shared photo" />
                   : <img src={post.sharedPost.mediaUrl} alt="" className="w-full max-h-80 object-cover" />
               )}
             </>
@@ -664,8 +676,10 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* Post Media (Image / Video) */}
       {postMediaUrls.length > 0 && (
         <div className={`relative mx-auto flex items-center justify-center overflow-hidden bg-slate-900 ${reelMode ? 'absolute inset-0 z-0 h-full w-full max-h-none max-w-none' : 'w-full'}`}>
-          {post.mediaType === 'video' ? (
-            <video data-echat-reel-video={reelMode ? 'true' : undefined} ref={videoRef} src={assetUrl(postMediaUrls[0])} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls={!reelMode} playsInline loop={reelMode} preload={reelMode ? reelPreload : 'none'} muted={reelMode ? isReelMuted : false} onClick={reelMode ? handleReelTap : undefined} onPointerDown={reelMode ? onReelPressStart : undefined} onPointerUp={reelMode ? onReelPressEnd : undefined} onPointerCancel={reelMode ? onReelPressEnd : undefined} onContextMenu={reelMode ? event => event.preventDefault() : undefined} onPlay={() => { setIsReelPlaying(true); setIsReelBuffering(false); }} onPause={() => setIsReelPlaying(false)} onLoadStart={() => { if (reelMode) { setIsReelBuffering(true); setReelPlaybackError(false); } }} onWaiting={() => reelMode && setIsReelBuffering(true)} onCanPlay={() => setIsReelBuffering(false)} onError={() => { if (reelMode) { setIsReelBuffering(false); setReelPlaybackError(true); } }} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
+          {post.mediaType === 'video' && videoGated ? (
+            <LowDataVideoCover url={firstMediaUrl} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} onPlay={unlockVideo} countsAsSaving={reelMode} label={reelMode ? 'Play Reel' : 'Play video'} className={reelMode ? 'h-full min-h-full' : 'aspect-video max-h-[500px]'} />
+          ) : post.mediaType === 'video' ? (
+            <video data-echat-reel-video={reelMode ? 'true' : undefined} ref={videoRef} src={lightVideo} autoPlay={playRequested} poster={post.thumbnailUrl ? assetUrl(post.thumbnailUrl) : undefined} controls={!reelMode} playsInline loop={reelMode} preload={reelMode ? (lowData ? 'none' : reelPreload) : 'none'} muted={reelMode ? isReelMuted : false} onClick={reelMode ? handleReelTap : undefined} onPointerDown={reelMode ? onReelPressStart : undefined} onPointerUp={reelMode ? onReelPressEnd : undefined} onPointerCancel={reelMode ? onReelPressEnd : undefined} onContextMenu={reelMode ? event => event.preventDefault() : undefined} onPlay={() => { setIsReelPlaying(true); setIsReelBuffering(false); }} onPause={() => setIsReelPlaying(false)} onLoadStart={() => { if (reelMode) { setIsReelBuffering(true); setReelPlaybackError(false); } }} onWaiting={() => reelMode && setIsReelBuffering(true)} onCanPlay={() => setIsReelBuffering(false)} onError={() => { if (lightVideo !== firstMediaUrl) { setLightVideoFailed(true); return; } if (reelMode) { setIsReelBuffering(false); setReelPlaybackError(true); } }} className={reelMode ? 'h-full w-full object-cover' : `w-full object-contain ${detailMode ? 'max-h-[78vh]' : 'max-h-[500px]'}`} />
           ) : (
             <>
               {!reelMode && (
@@ -685,8 +699,8 @@ export const PostCard: React.FC<PostCardProps> = ({
               {imageToast&&<p role="status" className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/80 px-4 py-2 text-xs font-semibold text-white">{imageToast}</p>}
             </>
           )}
-          {reelMode && !isReelPlaying && (autoplayBlockedByDataSaver || !reelsAutoplay || manualPauseRef.current) && <button type="button" onClick={event => { event.stopPropagation(); toggleReelPlayback(); }} aria-label="Play Reel" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/25 text-white"><span className="grid h-14 w-14 place-items-center rounded-full bg-black/60"><Play size={24} fill="currentColor" /></span>{autoplayBlockedByDataSaver && <span className="rounded-full bg-black/60 px-3 py-1 text-xs">Tap to play — you’re on mobile data</span>}</button>}
-          {reelMode && isReelBuffering && !isReelPlaying && !reelPlaybackError && ((reelsAutoplay && !autoplayBlockedByDataSaver) || manualPlayRef.current) && <div aria-label="Loading Reel" className="pointer-events-none absolute inset-0 grid place-items-center bg-black/10 text-white"><Loader2 size={32} className="animate-spin" /></div>}
+          {reelMode && !videoGated && !isReelPlaying && (autoplayBlockedByDataSaver || !reelsAutoplay || manualPauseRef.current) && <button type="button" onClick={event => { event.stopPropagation(); toggleReelPlayback(); }} aria-label="Play Reel" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/25 text-white"><span className="grid h-14 w-14 place-items-center rounded-full bg-black/60"><Play size={24} fill="currentColor" /></span>{autoplayBlockedByDataSaver && <span className="rounded-full bg-black/60 px-3 py-1 text-xs">Tap to play — you’re on mobile data</span>}</button>}
+          {reelMode && !videoGated && isReelBuffering && !isReelPlaying && !reelPlaybackError && ((reelsAutoplay && !autoplayBlockedByDataSaver) || manualPlayRef.current) && <div aria-label="Loading Reel" className="pointer-events-none absolute inset-0 grid place-items-center bg-black/10 text-white"><Loader2 size={32} className="animate-spin" /></div>}
           {reelMode && reelPlaybackError && <div className="absolute inset-0 grid place-items-center bg-black/60 p-4 text-center text-white"><div><p className="mb-2 text-sm font-semibold">This Reel couldn’t play.</p><button type="button" onClick={() => { setReelPlaybackError(false); setIsReelBuffering(true); videoRef.current?.load(); if (reelsAutoplay) videoRef.current?.play().catch(() => {}); }} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-900">Tap to retry</button></div></div>}
           {/* Reels sound: the 🔊/🔇 button in the Reels top bar (and tapping the video) controls every reel. */}
         </div>
@@ -939,4 +953,15 @@ export const PostCard: React.FC<PostCardProps> = ({
       {photoIndex !== null && post.mediaType !== 'video' && <PhotoViewer post={post} images={postMediaUrls} initialIndex={photoIndex} onClose={() => setPhotoIndex(null)} onPostUpdated={onPostUpdated} />}
     </div>
   );
+};
+
+/** Re-shared video: in Low Data Mode a cover first, then a 480p copy. */
+const SharedVideo: React.FC<{ url: string }> = ({ url }) => {
+  const [lowData] = useLowDataMode();
+  const [open, setOpen] = useState(() => isUnlocked(url));
+  const [requested, setRequested] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (lowData && !open) return <LowDataVideoCover url={url} countsAsSaving={false} onPlay={() => { setOpen(true); setRequested(true); }} className="aspect-video max-h-80" />;
+  const src = lowData && !failed ? lightVideoUrl(url) : url;
+  return <video src={src} autoPlay={requested} controls playsInline preload="none" onError={() => { if (src !== url) setFailed(true); }} className="w-full max-h-80 object-contain bg-black" />;
 };

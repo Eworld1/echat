@@ -1,4 +1,5 @@
 import { AvatarViewerHost } from './components/AvatarViewer';
+import { LowDataSuggestion } from './components/LowData';
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider, useSocket } from './context/SocketContext';
@@ -440,6 +441,9 @@ export function MainApp() {
         />}
 
       {showBackToast && <div role="status" className="fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">Press back again to exit</div>}
+
+      {/* "Slow network detected. Turn ON Low Data Mode?" (2G / 3G only) */}
+      <LowDataSuggestion />
 
       {/* Full-screen profile picture viewer (tap any avatar) */}
       <AvatarViewerHost

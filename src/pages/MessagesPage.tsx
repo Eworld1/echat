@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChatMediaGate } from '../components/LowData';
 import { ArrowLeft, Camera, Download, ExternalLink, FileArchive, FileAudio, FileText, Image as ImageIcon, Mic, MessageSquare, Paperclip, Phone, Play, SendHorizontal, Share2, Smile, Square, Video, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
@@ -92,14 +93,14 @@ const MessageBubble: React.FC<{
   return <div className={cls}>
     {displayText && <p>{displayText.startsWith('[CALL]') ? `📞 ${displayText.slice(6)}` : displayText}</p>}
     {attachments.map(item => item.kind === 'image' || item.kind === 'video'
-      ? <div key={item.id} className="group relative mt-1.5 overflow-hidden rounded-xl">
+      ? <ChatMediaGate key={item.id} url={item.url} kind={item.kind} size={item.size} name={item.name}><div className="group relative mt-1.5 overflow-hidden rounded-xl">
           <button type="button" onClick={()=>onOpenMedia(item.id)} aria-label={`Open ${item.kind}: ${item.name}`} className="block max-w-full">
             {item.kind === 'image'
               ? <img src={item.url} alt={item.name} loading="lazy" className="max-h-72 max-w-full rounded-xl object-contain"/>
               : <span className="relative block"><video src={item.url} muted playsInline preload="metadata" className="max-h-72 max-w-full rounded-xl"/><span className="absolute inset-0 grid place-items-center bg-black/20 text-white"><Play size={34} fill="currentColor"/></span></span>}
           </button>
           {renderActions(item)}
-        </div>
+        </div></ChatMediaGate>
       : <div key={item.id} className="mt-1.5 min-w-0 max-w-full rounded-xl border border-current/15 bg-black/5 p-3">
           <div className="flex items-center gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-black/10">

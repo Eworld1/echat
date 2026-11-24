@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { ChatMediaGate } from './LowData';
 import { User, Message } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
@@ -406,20 +407,21 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
               >
                 {/* Media Image or Video */}
                 {msg.mediaUrl && msg.mediaType === 'image' && (
-                  <img
+                  <ChatMediaGate url={msg.mediaUrl} kind="image"><img
                     src={msg.mediaUrl}
                     alt="attachment"
                     className="rounded-xl max-h-48 w-full object-cover mb-1.5 cursor-pointer"
                     onClick={() => window.open(msg.mediaUrl, '_blank')}
-                  />
+                  /></ChatMediaGate>
                 )}
 
                 {msg.mediaUrl && msg.mediaType === 'video' && (
-                  <video
+                  <ChatMediaGate url={msg.mediaUrl} kind="video"><video
                     src={msg.mediaUrl}
                     controls
+                    preload="metadata"
                     className="rounded-xl max-h-48 w-full object-cover mb-1.5"
-                  />
+                  /></ChatMediaGate>
                 )}
 
                 {msg.attachments?.map((attachment, attachmentIndex) => {
@@ -427,8 +429,8 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
                   const isImage = attachment.mimeType.startsWith('image/');
                   const isVideo = attachment.mimeType.startsWith('video/');
                   return <div key={`${msg.id}-file-${attachmentIndex}`} className="mb-2 min-w-36 max-w-full">
-                    {isImage ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} loading="lazy" className="max-h-48 rounded-lg object-cover" /></a>
-                      : isVideo ? <video src={url} controls playsInline className="max-h-48 max-w-full rounded-lg" />
+                    {isImage ? <ChatMediaGate url={url} kind="image" size={attachment.size} name={attachment.name}><a href={url} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} loading="lazy" className="max-h-48 rounded-lg object-cover" /></a></ChatMediaGate>
+                      : isVideo ? <ChatMediaGate url={url} kind="video" size={attachment.size} name={attachment.name}><video src={url} controls playsInline preload="metadata" className="max-h-48 max-w-full rounded-lg" /></ChatMediaGate>
                       : <a href={url} download={attachment.name} className="flex items-center gap-2 rounded-lg border border-current/20 p-2 text-xs underline"><Download size={14} />{attachment.name}</a>}
                     <div className="mt-1 flex items-center justify-between gap-3 text-[10px] opacity-70"><span className="truncate">{attachment.name}</span><span className="shrink-0">{(attachment.size / (1024 * 1024)).toFixed(2)} MB</span><a href={url} download={attachment.name} aria-label={`Download ${attachment.name}`} className="shrink-0 underline">Download</a></div>
                   </div>;

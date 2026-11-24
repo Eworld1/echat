@@ -3,6 +3,7 @@ import { Eye, Send, Trash2, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../services/firebase';
 import { MediaPlayer } from './MediaPlayer';
+import { isLowDataMode } from '../../services/lowData';
 import { StickerPreview } from './CreateStudio';
 import { DEFAULT_EDIT, IMAGE_SECONDS, MAX_STORY_SECONDS, deleteStory, listenStoryVotes, recordStoryView, voteOnStory, type MediaEdit, type StorySticker } from '../../services/reels/reelsStore';
 import type { User } from '../../types';
@@ -181,6 +182,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ groups, startGroup, on
               maxSeconds={maxSeconds}
               onProgress={setProgress}
               onEnded={next}
+              lowData={isLowDataMode()}
             />
           )}
         </div>

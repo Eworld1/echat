@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { setChatSoundVolume } from '../utils/sounds';
 import { listenBlockIds, unblockLiveUser } from '../services/liveDiscovery';
+import { LowDataSettingsCard } from '../components/LowData';
 import {
   Settings as SettingsIcon,
   Shield,
@@ -31,7 +32,7 @@ interface SettingsProps {
 
 export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
   const { user, updateUser, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'privacy' | 'settings' | 'profile'>('privacy');
+  const [activeTab, setActiveTab] = useState<'privacy' | 'settings' | 'profile'>(() => (typeof window !== 'undefined' && window.location.hash === '#data-storage' ? 'settings' : 'privacy'));
 
   // Tab 1: Privacy State
   const [postVisibility, setPostVisibility] = useState<'public' | 'friends' | 'only_me'>('public');
@@ -519,6 +520,12 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                   <option key={name} value={name}>{LANGUAGES[name].label}</option>
                 ))}
               </select>
+            </div>
+
+            {/* Data & Storage */}
+            <div id="data-storage" className="space-y-3 pt-4 border-t border-slate-100">
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Data &amp; Storage</h3>
+              <LowDataSettingsCard />
             </div>
 
             {/* Notifications Toggle */}

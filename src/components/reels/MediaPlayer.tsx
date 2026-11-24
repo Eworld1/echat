@@ -1,4 +1,5 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { lightImageUrl, lightVideoUrl } from '../../services/lowData';
 import { IMAGE_SECONDS, filterCss, type DuetSource, type MediaEdit, type MediaType } from '../../services/reels/reelsStore';
 
 /**
@@ -59,12 +60,19 @@ interface MediaPlayerProps {
   onSoundBlocked?: () => void;
   className?: string;
   children?: React.ReactNode;
+  /** Low Data Mode: play a 480p video / 800px photo copy (falls back to the original if that fails). */
+  lowData?: boolean;
 }
 
 export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(function MediaPlayer({
   mediaType, mediaUrl, coverUrl, edit, duet, active, muted, paused = false, loop = true, maxSeconds, preload = 'auto',
-  onProgress, onEnded, onDuration, onSoundBlocked, className = '', children
+  onProgress, onEnded, onDuration, onSoundBlocked, className = '', children, lowData = false
 }, handleRef) {
+  const [lightFailed, setLightFailed] = useState(false);
+  const useLight = lowData && !lightFailed;
+  const src = useLight ? (mediaType === 'video' ? lightVideoUrl(mediaUrl) : lightImageUrl(mediaUrl)) : mediaUrl;
+  useEffect(() => { setLightFailed(false); }, [mediaUrl]);
+  const onLightError = () => { if (src !== mediaUrl) { setLightFailed(true); return true; } return false; };
   const videoRef = useRef<HTMLVideoElement>(null);
   const duetRef = useRef<HTMLVideoElement>(null);
   const musicRef = useRef<HTMLAudioElement>(null);
@@ -165,7 +173,7 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
     if (music && edit.soundUrl && !muted) void tryPlay(music);
     else music?.pause();
     imageClock.current.last = performance.now();
-  }, [shouldPlay, muted, edit.soundUrl, mediaUrl]);
+  }, [shouldPlay, muted, edit.soundUrl, mediaUrl, src]);
 
   // Clock: trim loop, timed effects, progress, image timer.
   useEffect(() => {
@@ -210,7 +218,7 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
   const media = mediaType === 'video'
     ? <video
         ref={videoRef}
-        src={mediaUrl}
+        src={src}
         poster={coverUrl || undefined}
         playsInline
         muted
@@ -220,13 +228,14 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
         onWaiting={() => setBuffering(true)}
         onPlaying={() => setBuffering(false)}
         onCanPlay={() => setBuffering(false)}
-        onError={() => setBuffering(false)}
+        onError={() => { if (!onLightError()) setBuffering(false); }}
         className="h-full w-full object-cover object-center"
         style={{ filter }}
       />
     : <img
         key={cycle}
-        src={mediaUrl}
+        src={src}
+        onError={onLightError}
         alt=""
         draggable={false}
         className="h-full w-full object-cover"
@@ -235,12 +244,12 @@ export const MediaPlayer = forwardRef<MediaPlayerHandle, MediaPlayerProps>(funct
 
   return (
     <div className={`relative h-full w-full overflow-hidden bg-black ${className}`} style={{ containerType: 'inline-size' }}>
-      {(coverUrl || mediaType === 'image') && <img src={coverUrl || mediaUrl} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-2xl" />}
+      {(coverUrl || mediaType === 'image') && <img src={coverUrl || src} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-2xl" />}
       {duet ? (
         <div className="relative grid h-full w-full grid-cols-2">
           <div className="relative h-full overflow-hidden border-r border-black">
             {duet.mediaType === 'video'
-              ? <video ref={duetRef} src={duet.mediaUrl} playsInline muted preload={preload} className="h-full w-full object-cover" />
+              ? <video ref={duetRef} src={lowData ? lightVideoUrl(duet.mediaUrl) : duet.mediaUrl} playsInline muted preload={preload} className="h-full w-full object-cover" />
               : <img src={duet.mediaUrl} alt="" className="h-full w-full object-cover" />}
             <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white">@{duet.creatorName}</span>
           </div>

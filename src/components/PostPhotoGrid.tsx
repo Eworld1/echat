@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { ImageUp } from 'lucide-react';
+import { blurPreviewUrl, countSaving, fetchMediaSize, isUnlocked, unlock, useLowDataMode } from '../services/lowData';
 
 interface PostPhotoGridProps {
   urls: string[];
@@ -20,17 +22,39 @@ export const PostPhotoGrid: React.FC<PostPhotoGridProps> = ({
   onTileDrop
 }) => {
   const images = Array.from(new Set(urls.filter(Boolean)));
+  // Low Data Mode: tiny blurred preview first, full photo only after "Tap to load HD".
+  const [lowData] = useLowDataMode();
+  const [, setHdVersion] = useState(0);
+  const isLight = (url: string) => lowData && /^https?:\/\//.test(url) && !isUnlocked(url); // never blur local previews (blob:)
+  const lightKey = images.filter(isLight).join('|');
+  useEffect(() => {
+    if (!lightKey) return;
+    let alive = true;
+    lightKey.split('|').slice(0, 4).forEach(url => { void fetchMediaSize(url).then(size => { if (alive && size) countSaving(url, Math.max(0, size - 2048)); }); });
+    return () => { alive = false; };
+  }, [lightKey]);
   if (images.length === 0) return null;
 
+  const loadHd = (url: string) => { unlock(url); setHdVersion(value => value + 1); };
+  const hdButton = (url: string) => isLight(url) && (
+    <button type="button" onClick={event => { event.stopPropagation(); loadHd(url); }} className="absolute left-1/2 top-1/2 z-10 flex min-h-10 -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full bg-black/65 px-4 text-xs font-bold text-white shadow-lg backdrop-blur-sm hover:bg-black/80">
+      <ImageUp size={15} />Tap to load HD
+    </button>
+  );
+
   const renderImage = (url: string, index: number, single = false) => {
-    const image = (
+    const light = isLight(url);
+    const preview = light ? blurPreviewUrl(url) : '';
+    const image = light && !preview ? (
+      <span aria-label={`${altPrefix} ${index + 1}`} role="img" className={single ? 'block aspect-[4/3] w-full bg-gradient-to-br from-slate-300 to-slate-400 dark:from-slate-700 dark:to-slate-800' : 'block h-full w-full bg-gradient-to-br from-slate-300 to-slate-400 dark:from-slate-700 dark:to-slate-800'} />
+    ) : (
       <img
-        src={url}
+        src={light ? preview : url}
         alt={`${altPrefix} ${index + 1}`}
         loading="lazy"
-        className={single
+        className={`${single
           ? 'block h-auto max-h-[600px] w-full object-contain'
-          : 'h-full w-full object-cover object-top transition group-hover:brightness-95'}
+          : 'h-full w-full object-cover object-top transition group-hover:brightness-95'}${light ? ' scale-105 blur-md' : ''}`}
       />
     );
 
@@ -53,6 +77,7 @@ export const PostPhotoGrid: React.FC<PostPhotoGridProps> = ({
     return (
       <div className="group relative mx-auto max-h-[600px] w-full overflow-hidden bg-black">
         {renderImage(images[0], 0, true)}
+        {hdButton(images[0])}
         {renderTileControls?.(0)}
       </div>
     );
@@ -74,6 +99,7 @@ export const PostPhotoGrid: React.FC<PostPhotoGridProps> = ({
           className={`group relative min-h-0 min-w-0 overflow-hidden ${images.length === 3 && index === 0 ? 'row-span-2' : ''}`}
         >
           {renderImage(url, index)}
+          {!(images.length > 4 && index === 3) && hdButton(url)}
           {images.length > 4 && index === 3 && (onSelect ? (
             <button
               type="button"

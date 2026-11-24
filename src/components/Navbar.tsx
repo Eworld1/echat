@@ -1,4 +1,5 @@
 import { usePreferences } from '../context/PreferencesContext';
+import { isLowDataMode } from '../services/lowData';
 import { BrandWordmark, GlowLogo } from './BrandLogo';
 import { initialsAvatar } from '../utils/avatar';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
@@ -278,7 +279,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       return;
     }
     loadNotifications();
-    const onVisible = () => { if (document.visibilityState === 'visible') loadNotifications(); };
+    let lastLoad = Date.now();
+    // Low Data Mode: don't re-download notifications every time the app is reopened (live ones still arrive).
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (isLowDataMode() && Date.now() - lastLoad < 5 * 60 * 1000) return;
+      lastLoad = Date.now();
+      loadNotifications();
+    };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('echat:messages-seen', loadNotifications);
     return () => {

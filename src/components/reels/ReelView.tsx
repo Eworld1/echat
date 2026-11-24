@@ -3,6 +3,8 @@ import { UserAvatar } from '../UserAvatar';
 import { Bookmark, Eye, Heart, MessageCircle, MoreHorizontal, Music2, Pause, Play, Share2, Volume2, VolumeX } from 'lucide-react';
 import { followCreator, listenFollowingState, unfollowCreator } from '../../services/liveDiscovery';
 import { MediaPlayer, type MediaPlayerHandle } from './MediaPlayer';
+import { LowDataVideoCover } from '../LowData';
+import { isUnlocked, useLowDataMode } from '../../services/lowData';
 import { reelSound, recordReelView, type Reel } from '../../services/reels/reelsStore';
 import type { Viewer } from './ReelSheets';
 
@@ -43,7 +45,12 @@ interface ReelViewProps {
 }
 
 /** One full-screen Reel (TikTok-style): double-tap like, right action bar, creator + caption + sound marquee. */
-export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = true, nearby, muted, viewer, liked, saved, onSetMuted, onLike, onSave, onComments, onShare, onSound, onMore, onViewProfile, onSoundBlocked, onActivePlayer }) => {
+export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay: autoplayPref = true, nearby, muted, viewer, liked, saved, onSetMuted, onLike, onSave, onComments, onShare, onSound, onMore, onViewProfile, onSoundBlocked, onActivePlayer }) => {
+  // Low Data Mode: never autoplay; each video shows a cover (thumbnail + Play + size) until tapped.
+  const [lowData] = useLowDataMode();
+  const autoplay = autoplayPref && !lowData;
+  const [unlocked, setUnlocked] = useState(() => isUnlocked(reel.mediaUrl));
+  const gated = lowData && reel.mediaType === 'video' && !unlocked;
   const [paused, setPaused] = useState(false);
   const [held, setHeld] = useState(false);
   const [flash, setFlash] = useState<{ id: number; muted: boolean } | null>(null);
@@ -130,7 +137,9 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
-      {nearby ? (
+      {nearby && gated ? (
+        <div className="absolute inset-0 z-[15]"><LowDataVideoCover url={reel.mediaUrl} poster={reel.coverUrl} label="Play Reel" className="h-full" onPlay={() => { setUnlocked(true); setPaused(false); }} /></div>
+      ) : nearby ? (
         <MediaPlayer
           mediaType={reel.mediaType}
           mediaUrl={reel.mediaUrl}
@@ -141,13 +150,14 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay = tru
           active={active}
           muted={muted}
           paused={paused || held}
-          preload={active ? 'auto' : 'metadata'}
+          preload={active ? 'auto' : lowData ? 'none' : 'metadata'}
+          lowData={lowData}
           onSoundBlocked={onSoundBlocked}
         />
       ) : reel.coverUrl ? <img src={reel.coverUrl} alt="" loading="lazy" className="h-full w-full object-cover opacity-80" /> : null}
 
       <div className="absolute inset-0 z-10 select-none" onClick={onTap} onPointerDown={onPressStart} onPointerUp={onPressEnd} onPointerCancel={onPressEnd} onPointerLeave={onPressEnd} onContextMenu={event => event.preventDefault()} aria-hidden="true" />
-      {paused && active && <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white"><Play size={30} className="ml-1" /></div>}
+      {paused && active && !gated && <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white"><Play size={30} className="ml-1" /></div>}
       {held && active && <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white"><Pause size={28} /></div>}
       {flash && <div key={flash.id} className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-20 w-20 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white" style={{ animation: 'echatSoundFlash .7s ease-out forwards' }} role="status" aria-label={flash.muted ? 'Sound off' : 'Sound on'}>{flash.muted ? <VolumeX size={36} /> : <Volume2 size={36} />}</div>}
 

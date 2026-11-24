@@ -44,7 +44,14 @@ export async function makeVideoThumbnail(file: File): Promise<{ file: File | nul
   }
 }
 
-export async function compressVideoInBrowser(file: File, onProgress: (percent: number) => void): Promise<File> {
+import { isLowDataMode } from '../services/lowData';
+
+/** Videos already shrunk in the browser (the uploader won't shrink them a second time). */
+export const browserCompressedVideos = new WeakSet<Blob>();
+
+/** Low Data Mode → 480p (854×480) at ~0.9 Mbps; otherwise up to 720p at 3.5 Mbps. */
+export async function compressVideoInBrowser(file: File, onProgress: (percent: number) => void, options: { lowData?: boolean } = {}): Promise<File> {
+  const lowData = options.lowData ?? isLowDataMode();
   const video = document.createElement('video');
   const url = URL.createObjectURL(file);
   video.preload = 'auto';
@@ -66,7 +73,11 @@ export async function compressVideoInBrowser(file: File, onProgress: (percent: n
       video.src = url;
       video.load();
     });
-    const scale = Math.min(1, 1280 / video.videoWidth, 720 / video.videoHeight);
+    const longSide = Math.max(video.videoWidth, video.videoHeight);
+    const shortSide = Math.min(video.videoWidth, video.videoHeight);
+    const scale = lowData
+      ? Math.min(1, 854 / longSide, 480 / shortSide)
+      : Math.min(1, 1280 / video.videoWidth, 720 / video.videoHeight);
     canvas.width = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
     canvas.height = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
     const context = canvas.getContext('2d');
@@ -76,7 +87,7 @@ export async function compressVideoInBrowser(file: File, onProgress: (percent: n
     const output = new MediaStream([...canvasStream.getVideoTracks(), ...sourceStream.getAudioTracks()]);
     const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/mp4;codecs=h264,aac', 'video/mp4']
       .find(type => MediaRecorder.isTypeSupported(type));
-    const recorder = new MediaRecorder(output, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond: 3_500_000, audioBitsPerSecond: 128_000 });
+    const recorder = new MediaRecorder(output, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond: lowData ? 900_000 : 3_500_000, audioBitsPerSecond: lowData ? 64_000 : 128_000 });
     const chunks: BlobPart[] = [];
     const result = new Promise<File>((resolve, reject) => {
       recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
@@ -85,7 +96,9 @@ export async function compressVideoInBrowser(file: File, onProgress: (percent: n
         const type = recorder.mimeType || mimeType || 'video/webm';
         const extension = type.includes('mp4') ? 'mp4' : 'webm';
         const compressed = new File(chunks, `compressed-reel.${extension}`, { type });
-        resolve(compressed.size < file.size ? compressed : file);
+        const output = compressed.size < file.size ? compressed : file;
+        browserCompressedVideos.add(output);
+        resolve(output);
       };
     });
     let frame = 0;
