@@ -280,7 +280,7 @@ service cloud.firestore {
         data.description is string && data.description.size() <= 5000 &&
         data.price is int && data.price >= 0 && data.price <= 1000000000 &&
         data.totalTickets is int && data.totalTickets >= 1 && data.totalTickets <= 100000 &&
-        data.whatsapp is string && data.whatsapp.size() <= 60 &&
+        data.whatsapp is string && data.whatsapp.size() <= 300 &&
         data.creatorName is string && data.creatorName.size() <= 120;
     }
 

@@ -1,15 +1,25 @@
 import { useState, useMemo, useEffect } from "react";
-import { Search, MapPin, Clock, Briefcase, Plus, Pencil, Trash2, X, ArrowLeft, Phone, Banknote, Building2 } from "lucide-react";
+import { Search, MapPin, Clock, Briefcase, Plus, Pencil, Trash2, X, ArrowLeft, Banknote, Building2, Bookmark, BookmarkCheck, Share2 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../services/api";
 import type { JobItem, JobType } from "../types";
-import { ListingImage, ListingPhotoPicker, canManageListing, timeAgo, ContactLink, type PhotoSelection } from "../components/ListingPhoto";
+import { ListingImage, ListingPhotoPicker, canManageListing, timeAgo, type PhotoSelection } from "../components/ListingPhoto";
+import { APPLY_SECONDARY, ApplyActionsCard, ApplyMethodField, encodeApply, splitApply, validateApply, type ApplyMethod } from "../components/ApplyActions";
 
 const JOB_TYPES: JobType[] = ["Full-time", "Part-time", "Remote", "Contract"];
 const COMMON_LOCATIONS = ["Freetown", "Bo", "Kenema", "Makeni", "Koidu", "Remote"];
 
-type JobForm = { title: string; company: string; location: string; type: JobType; salary: string; description: string; contactInfo: string };
-const emptyForm: JobForm = { title: "", company: "", location: "Freetown", type: "Full-time", salary: "", description: "", contactInfo: "" };
+type JobForm = { title: string; company: string; location: string; type: JobType; salary: string; description: string; applyMethod: ApplyMethod; applyValue: string };
+const emptyForm: JobForm = { title: "", company: "", location: "Freetown", type: "Full-time", salary: "", description: "", applyMethod: "website", applyValue: "" };
+
+const SAVED_JOBS_KEY = "echat_saved_jobs";
+const readSavedJobs = (): string[] => {
+  try { const value = JSON.parse(localStorage.getItem(SAVED_JOBS_KEY) || "[]"); return Array.isArray(value) ? value.filter(id => typeof id === "string") : []; }
+  catch { return []; }
+};
+const jobIdFromUrl = () => {
+  try { return new URLSearchParams(window.location.search).get("job"); } catch { return null; }
+};
 const noPhoto: PhotoSelection = { file: null, removed: false };
 
 export default function Jobs() {
@@ -20,7 +30,42 @@ export default function Jobs() {
   const [locationFilter, setLocationFilter] = useState("All");
   const [typeFilter, setTypeFilter] = useState("All");
   const [search, setSearch] = useState("");
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [selectedJobId, setSelectedJobIdState] = useState<string | null>(jobIdFromUrl);
+  const [savedJobs, setSavedJobs] = useState<string[]>(readSavedJobs);
+  const [shareNotice, setShareNotice] = useState("");
+
+  /** Keeps ?job=<id> in the address bar so a job can be shared and reopened. */
+  const setSelectedJobId = (id: string | null) => {
+    setSelectedJobIdState(id);
+    setShareNotice("");
+    try {
+      const url = new URL(window.location.href);
+      if (id) url.searchParams.set("job", id); else url.searchParams.delete("job");
+      window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}`);
+    } catch { /* ignore */ }
+  };
+
+  const toggleSaved = (id: string) => {
+    setSavedJobs(prev => {
+      const next = prev.includes(id) ? prev.filter(item => item !== id) : [id, ...prev];
+      try { localStorage.setItem(SAVED_JOBS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+      return next;
+    });
+  };
+
+  const shareJob = async (job: JobItem) => {
+    const url = `${window.location.origin}/jobs?job=${encodeURIComponent(job.id)}`;
+    try {
+      if (navigator.share && window.matchMedia("(pointer: coarse)").matches) {
+        await navigator.share({ title: job.title, text: `${job.title} at ${job.company} on eChat`, url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      setShareNotice("Link copied");
+    } catch (error) {
+      if ((error as DOMException)?.name !== "AbortError") setShareNotice("Could not share this job");
+    }
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [editingJob, setEditingJob] = useState<JobItem | null>(null);
@@ -67,7 +112,8 @@ export default function Jobs() {
 
   const openEdit = (job: JobItem) => {
     setEditingJob(job);
-    setForm({ title: job.title, company: job.company, location: job.location, type: job.type, salary: job.salary, description: job.description, contactInfo: job.contactInfo });
+    const apply = splitApply(job.contactInfo, "job");
+    setForm({ title: job.title, company: job.company, location: job.location, type: job.type, salary: job.salary, description: job.description, applyMethod: apply.method, applyValue: apply.value });
     setPhoto(noPhoto);
     setFormError("");
     setShowForm(true);
@@ -87,10 +133,13 @@ export default function Jobs() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title.trim() || !form.company.trim()) { setFormError("Job title and company are required."); return; }
+    const applyError = validateApply(form.applyMethod, form.applyValue);
+    if (applyError) { setFormError(applyError); return; }
     setIsSaving(true);
     setFormError("");
     try {
-      const input = { fields: { ...form }, image: photo.file, removeImage: photo.removed };
+      const { applyMethod, applyValue, ...rest } = form;
+      const input = { fields: { ...rest, contactInfo: encodeApply(applyMethod, applyValue) }, image: photo.file, removeImage: photo.removed };
       if (editingJob) {
         const updated = await api.updateJob(editingJob.id, input);
         setJobs(prev => prev.map(j => j.id === updated.id ? updated : j));
@@ -142,8 +191,19 @@ export default function Jobs() {
               <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-5 mb-1">Job Description</h3>
               <p className="text-sm whitespace-pre-wrap break-words">{activeJob.description || "No description provided."}</p>
 
-              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-5 mb-1">How to Apply / Contact</h3>
-              <p className="text-sm flex items-start gap-2"><Phone size={15} className="mt-0.5 shrink-0" />{activeJob.contactInfo ? <ContactLink value={activeJob.contactInfo} /> : <span className="text-gray-500">No contact info provided.</span>}</p>
+              <ApplyActionsCard
+                kind="job"
+                contact={activeJob.contactInfo}
+                title={activeJob.title}
+                className="mt-5"
+                secondary={<>
+                  <button type="button" onClick={() => toggleSaved(activeJob.id)} aria-pressed={savedJobs.includes(activeJob.id)} className={APPLY_SECONDARY}>
+                    {savedJobs.includes(activeJob.id) ? <><BookmarkCheck size={17} className="text-[#b68428]" />Saved</> : <><Bookmark size={17} />Save Job</>}
+                  </button>
+                  <button type="button" onClick={() => void shareJob(activeJob)} className={APPLY_SECONDARY}><Share2 size={17} />Share Job</button>
+                </>}
+              />
+              {shareNotice && <p role="status" className="mt-2 text-center text-xs font-semibold text-green-700">{shareNotice}</p>}
 
               <p className="text-xs text-gray-400 mt-5">Posted by {activeJob.ownerName || "Member"}</p>
               <div className="flex flex-wrap gap-2 mt-3">{ownerActions(activeJob)}</div>
@@ -209,7 +269,11 @@ export default function Jobs() {
             </div>
             <input placeholder="Salary e.g. Le 3,000,000 / month" value={form.salary} onChange={e => setForm({ ...form, salary: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
             <textarea placeholder="Description" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full border rounded-lg px-3 py-2" rows={3} />
-            <input placeholder="Contact info (phone, email or how to apply)" value={form.contactInfo} onChange={e => setForm({ ...form, contactInfo: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
+            <ApplyMethodField kind="job" idPrefix="job-apply" method={form.applyMethod} value={form.applyValue}
+              onMethod={applyMethod => { setForm({ ...form, applyMethod }); setFormError(""); }}
+              onValue={applyValue => setForm({ ...form, applyValue })}
+              labelClassName="block text-xs font-bold text-gray-500 uppercase tracking-wider mt-1 mb-1"
+              inputClassName="w-full border rounded-lg px-3 py-2 bg-white" />
             <ListingPhotoPicker currentImage={editingJob?.image} value={photo} onChange={setPhoto} disabled={isSaving} />
             {formError && <p role="alert" className="text-sm text-red-600">{formError}</p>}
             <button type="submit" disabled={isSaving} className="w-full bg-blue-600 text-white py-2 rounded-full mt-1 disabled:opacity-60">{isSaving ? "Saving..." : editingJob ? "Save Changes" : "Post Job"}</button>

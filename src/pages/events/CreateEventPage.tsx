@@ -6,6 +6,7 @@ import { api } from '../../services/api';
 import { compressImage } from '../../utils/image';
 import { createEvent } from '../../services/eventTickets';
 import { navigateTo } from '../../utils/eventsNav';
+import { ApplyMethodField, encodeApply, validateApply, type ApplyMethod } from '../../components/ApplyActions';
 
 type Errors = Partial<Record<'title' | 'date' | 'time' | 'location' | 'description' | 'price' | 'totalTickets' | 'whatsapp' | 'cover', string>>;
 
@@ -21,6 +22,7 @@ export const CreateEventPage: React.FC = () => {
   const [isPaid, setIsPaid] = useState(false);
   const [price, setPrice] = useState('');
   const [totalTickets, setTotalTickets] = useState('100');
+  const [contactMethod, setContactMethod] = useState<ApplyMethod>('whatsapp');
   const [whatsapp, setWhatsapp] = useState('');
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreview, setCoverPreview] = useState('');
@@ -78,7 +80,9 @@ export const CreateEventPage: React.FC = () => {
     }
     const total = Number(totalTickets);
     if (!Number.isInteger(total) || total < 1 || total > 100000) next.totalTickets = 'Enter between 1 and 100,000 tickets.';
-    if (whatsapp.trim() && !/^\+?[\d\s()-]{6,20}$/.test(whatsapp.trim())) next.whatsapp = 'Enter a valid phone number, e.g. +232 76 123456.';
+    const contactError = validateApply(contactMethod, whatsapp);
+    if (contactError) next.whatsapp = contactError;
+    else if (encodeApply(contactMethod, whatsapp).length > 300) next.whatsapp = 'This link is too long (300 characters max).';
     return { errors: next, dateTime };
   };
 
@@ -101,7 +105,7 @@ export const CreateEventPage: React.FC = () => {
         description,
         price: isPaid ? Number(price) : 0,
         totalTickets: Number(totalTickets),
-        whatsapp
+        whatsapp: encodeApply(contactMethod, whatsapp)
       }, { id: creatorId, name: user.name || 'EChat member' });
       navigateTo(`/events/${id}`);
     } catch (err) {
@@ -185,9 +189,9 @@ export const CreateEventPage: React.FC = () => {
         </div>
 
         <div>
-          <label htmlFor="ev-whatsapp" className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-600">WhatsApp / Contact</label>
-          <input id="ev-whatsapp" type="tel" value={whatsapp} onChange={e => setWhatsapp(e.target.value)} maxLength={20} placeholder="+232 76 123456" className={inputClass(errors.whatsapp)} />
-          {fieldError('whatsapp')}
+          <ApplyMethodField kind="event" idPrefix="ev-contact" method={contactMethod} value={whatsapp}
+            onMethod={method => { setContactMethod(method); setErrors(prev => ({ ...prev, whatsapp: undefined })); }}
+            onValue={setWhatsapp} error={errors.whatsapp} inputClassName={inputClass(errors.whatsapp)} />
         </div>
 
         {submitError && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{submitError}</p>}

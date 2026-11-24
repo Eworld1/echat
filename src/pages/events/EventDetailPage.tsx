@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Banknote, CalendarDays, CheckCircle2, MapPin, MessageCircle, QrCode, Share2, Star, Ticket, Users } from 'lucide-react';
+import { ArrowLeft, Banknote, CalendarDays, CheckCircle2, MapPin, QrCode, Share2, Star, Ticket, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../services/firebase';
 import { api } from '../../services/api';
 import { ListingImage } from '../../components/ListingPhoto';
+import { ApplyActionsCard } from '../../components/ApplyActions';
 import { BuyTicketModal } from '../../components/events/BuyTicketModal';
 import {
   confirmTicket,
@@ -45,11 +46,6 @@ export function legacyToEchatEvent(item: EventItem): EchatEvent {
     legacy: true
   };
 }
-
-const whatsappLink = (value: string) => {
-  const digits = value.replace(/[^\d]/g, '');
-  return digits.length >= 6 ? `https://wa.me/${digits}` : '';
-};
 
 const statusBadge = (status: EventTicket['status']) =>
   status === 'Confirmed' ? 'bg-emerald-100 text-emerald-700' : status === 'Checked-in' ? 'bg-[#E7F0FD] text-[#1877F2]' : 'bg-amber-100 text-amber-800';
@@ -117,7 +113,6 @@ export const EventDetailPage: React.FC<{ eventId: string }> = ({ eventId }) => {
   const remaining = ticketsRemaining(event);
   const soldOut = !event.legacy && remaining <= 0;
   const isGoing = event.legacy ? Boolean(user && legacyRaw?.going?.includes(user.id)) : goingIds.has(event.id);
-  const wa = whatsappLink(event.whatsapp);
 
   const toggleGoing = async () => {
     if (!user) { setNotice('Sign in to mark yourself as going.'); return; }
@@ -176,14 +171,14 @@ export const EventDetailPage: React.FC<{ eventId: string }> = ({ eventId }) => {
               <Star size={17} className={isGoing ? 'fill-[#1877F2]' : ''} />{isGoing ? 'Going' : 'Interested / Going'}
             </button>
             <button type="button" onClick={() => void shareEvent(event).then(message => message && setNotice(message))} className="flex min-h-12 items-center gap-2 rounded-xl bg-slate-100 px-4 text-sm font-bold text-slate-700 hover:bg-slate-200"><Share2 size={17} />Share</button>
-            {wa && <a href={wa} target="_blank" rel="noopener noreferrer" className="flex min-h-12 items-center gap-2 rounded-xl bg-emerald-50 px-4 text-sm font-bold text-emerald-700 hover:bg-emerald-100"><MessageCircle size={17} />WhatsApp</a>}
           </div>
           {notice && <p role="status" className="rounded-xl bg-slate-100 p-3 text-sm text-slate-700">{notice}</p>}
+
+          {event.whatsapp.trim() && <ApplyActionsCard kind="event" contact={event.whatsapp} title={event.title} />}
 
           <div className="border-t border-slate-100 pt-4">
             <h2 className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">About this event</h2>
             <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">{event.description || 'No description provided.'}</p>
-            {event.whatsapp && !wa && <p className="mt-2 text-sm text-slate-700">Contact: {event.whatsapp}</p>}
           </div>
         </div>
       </article>
