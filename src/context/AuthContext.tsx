@@ -27,6 +27,7 @@ import {
   updateDoc 
 } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
+import { disablePush } from '../services/push';
 import { 
   getUserById, 
   getUserByEmail
@@ -778,6 +779,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       const current = auth.currentUser;
+      // Stop this phone getting the next person's notifications (needs the session, so before signOut).
+      if (current) await disablePush({ keepChoice: true }).catch(() => {});
       if (current) {
         await updateDoc(doc(db, 'users', current.uid), {
           isOnline: false,

@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
 import { getNotifications as getFirestoreNotifications, markNotificationsRead as markFirestoreNotificationsRead } from '../services/db';
+import { setAppBadge } from '../services/push';
 import { User, Notification, Post } from '../types';
 import {
   MessageSquare,
@@ -461,6 +462,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const unreadNotificationsCount = notifications.filter(n => !n.read && n.type !== 'message').length;
   const unreadMessageCount = notifications.filter(n => !n.read && n.type === 'message').length;
+  // Same count on the installed app's icon (cleared when everything is read).
+  useEffect(() => { setAppBadge(unreadNotificationsCount + unreadMessageCount); }, [unreadNotificationsCount, unreadMessageCount]);
 
   return (
     <header className={`ec-glass sticky top-0 ${showProfileMenu ? 'z-[100]' : 'z-30'} border-x-0 border-t-0 border-b border-violet-100/80 shadow-[0_6px_24px_-16px_rgba(76,29,149,0.35)] dark:border-white/10`}>
@@ -948,9 +951,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowNotifications(!showNotifications);
                 if (!showNotifications) {
                   handleMarkNotificationsRead();
-                  if ('Notification' in window && window.Notification.permission === 'default') {
-                    window.Notification.requestPermission().catch(() => {});
-                  }
                 }
               }}
               className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-50 text-violet-800 transition hover:-translate-y-0.5 hover:bg-violet-100 hover:shadow-md hover:shadow-violet-500/15 min-[1025px]:relative min-[1025px]:flex min-[1025px]:h-10 min-[1025px]:w-10 cursor-pointer dark:bg-white/5 dark:text-violet-200 dark:hover:bg-white/10"

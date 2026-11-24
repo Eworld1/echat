@@ -10,6 +10,7 @@ import { db, hashPassword } from './server/db.js';
 import { SocketManager } from './server/socket.js';
 import { firebaseProjectId, firestore, getFirebaseAdminAuth } from './server/firebase-admin.js';
 import { verifyFirebaseIdToken } from './server/firebase-token.js';
+import { isValidPushToken, pushReady, removePushToken, savePushToken, sendPush, type PushPayload } from './server/push.js';
 import { RESPONSE_TIMING, VerificationError, completeReset, completeSignup, completeVerify, normalizeEmail, sendResetCode, sendSignupCode, sendVerifyCode, verificationStatus } from './server/verification.js';
 import { resolveLiveCreatedAt } from './serverless/live-age.js';
 import { describeLiveKitError, getOrCreateLiveStreamIngress, resetLiveStreamIngress } from './serverless/live-stream-key.js';
@@ -735,6 +736,33 @@ async function verifiedTokenUid(req: Request): Promise<string> {
 }
 
 app.use('/api/verify', authRateLimit);
+// ----------------- PUSH NOTIFICATIONS (FCM) -----------------
+// The device token is tied to the Firebase account proven by the ID token (never to a header id),
+// so nobody can register their phone to receive someone else's notifications.
+const pushUidOf = (userId: string) => { const found = db.getUserById(userId); return found?.firebaseUid || found?.id || userId; };
+const unreadBadge = (userId: string) => db.getNotifications(userId).filter(n => !n.read).length;
+const pushIcon = (avatar?: string) => (avatar && /^https:\/\//.test(avatar) ? avatar : undefined);
+function pushTo(userIds: string[], payload: Omit<PushPayload, 'badge'>) {
+  for (const userId of new Set(userIds)) {
+    void sendPush([pushUidOf(userId)], { ...payload, badge: unreadBadge(userId) });
+  }
+}
+const pushRoute = (handler: (uid: string, token: string, req: Request) => Promise<void>) => async (req: Request, res: Response) => {
+  try {
+    const uid = await verifiedTokenUid(req);
+    const token = req.body?.token;
+    if (!isValidPushToken(token)) return res.status(400).json({ error: 'Invalid notification token.' });
+    await handler(uid, token, req);
+    res.json({ success: true });
+  } catch (error) {
+    const status = error instanceof VerificationError ? error.status : 503;
+    res.status(status).json({ error: error instanceof Error ? error.message : 'Could not update notifications.' });
+  }
+};
+app.get('/api/push/status', (_req: Request, res: Response) => res.json({ ready: pushReady() }));
+app.post('/api/push/token', pushRoute((uid, token, req) => savePushToken(uid, token, { platform: req.body?.platform, userAgent: req.get('user-agent') })));
+app.post('/api/push/token/remove', pushRoute((uid, token) => removePushToken(uid, token)));
+
 app.get('/api/verify/status', (_req: Request, res: Response) => {
   const status = verificationStatus();
   res.json({ ready: status.ready, email: status.email, firebaseAdmin: status.firebaseAdmin });
@@ -938,6 +966,7 @@ app.post('/api/friends/request', (req: Request, res: Response) => {
     type: 'new_notification',
     message: `${authUser.name} sent you a friend request.`
   });
+  pushTo([String(toUserId)], { kind: 'friend_request', title: 'New friend request', body: `${authUser.name} sent you a friend request.`, url: '/friends', tag: `friend-${authUser.id}`, icon: pushIcon(authUser.avatar) });
 
   res.json({ success: true });
 });
@@ -954,6 +983,7 @@ app.post('/api/friends/accept', (req: Request, res: Response) => {
     type: 'new_notification',
     message: `${authUser.name} accepted your friend request.`
   });
+  pushTo([String(fromUserId)], { kind: 'friend_accept', title: 'Friend request accepted', body: `${authUser.name} accepted your friend request.`, url: `/profile?user=${encodeURIComponent(authUser.id)}`, tag: `friend-${authUser.id}`, icon: pushIcon(authUser.avatar) });
 
   res.json({ success: true });
 });
@@ -1782,6 +1812,8 @@ app.post('/api/messages', (req: Request, res: Response) => {
     : 'sent you a photo';
   const notif = db.upsertMessageNotification(receiverId, authUser.id, text ? `${authUser.name}: ${what}` : `${authUser.name} ${what}`);
   socketManager.sendToUser(receiverId, { type: 'new_notification', notification: populateNotification(notif) });
+  // Push to the phone too (works with eChat closed). One notification per chat: newer ones replace it.
+  pushTo([receiverId], { kind: 'message', title: authUser.name, body: text ? String(text).slice(0, 160) : what.charAt(0).toUpperCase() + what.slice(1), url: `/messages?chat=${encodeURIComponent(authUser.id)}`, tag: `chat-${authUser.id}`, icon: pushIcon(authUser.avatar) });
 
   res.json(message);
 });
@@ -2906,6 +2938,13 @@ app.post('/api/groups/:id/leave', (req: Request, res: Response) => {
   }
 });
 
+/** Group message: tell the other members (capped so a huge group can't flood the server). */
+function pushGroupPost(group: { id: string; name: string; members: string[] }, post: { authorId: string; authorName?: string; content?: string; mediaUrl?: string }) {
+  const body = post.content ? `${post.authorName || 'Someone'}: ${String(post.content).slice(0, 140)}` : `${post.authorName || 'Someone'} shared ${post.mediaUrl ? 'a photo or video' : 'a post'}`;
+  const members = group.members.filter(id => id !== post.authorId && !db.isBlockedBetween(id, post.authorId)).slice(0, 500);
+  pushTo(members, { kind: 'group_post', title: group.name, body, url: `/groups?group=${encodeURIComponent(group.id)}`, tag: `group-${group.id}` });
+}
+
 app.post('/api/groups/:id/posts', (req: Request, res: Response) => {
   try {
     const authUser = getAuthUser(req);
@@ -2933,6 +2972,7 @@ app.post('/api/groups/:id/posts', (req: Request, res: Response) => {
     });
 
     socketManager.broadcast({ type: 'group_post_created', groupId: req.params.id, post: newPost });
+    if (newPost.status === 'approved') pushGroupPost(group, newPost);
     res.status(201).json(newPost);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -2948,6 +2988,8 @@ app.post('/api/groups/:id/posts/:postId/approve', (req: Request, res: Response) 
     if (!success) return res.status(403).json({ error: 'Cannot approve this post (unauthorized or not found)' });
 
     const group = db.getGroupById(req.params.id);
+    const approved = group?.posts?.find(post => post.id === req.params.postId);
+    if (group && approved) pushGroupPost(group, approved);
     socketManager.broadcast({ type: 'group_updated', group });
     res.json({ success: true, group });
   } catch (e: any) {

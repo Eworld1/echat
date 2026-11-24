@@ -1,4 +1,5 @@
 import { AvatarViewerHost } from './components/AvatarViewer';
+import { PushPermissionPrompt } from './components/PushNotifications';
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider, useSocket } from './context/SocketContext';
@@ -122,6 +123,33 @@ export function MainApp() {
     window.addEventListener('popstate', syncRoute);
     return () => { window.removeEventListener('echat:navigate', syncRoute); window.removeEventListener('popstate', syncRoute); };
   }, [user?.id, canAdmin, isLoading]);
+  // Push notification taps: /messages?chat=<id> opens that chat; the service worker sends
+  // "echat:open" when eChat is already open, so the right screen shows without a reload.
+  useEffect(() => {
+    if (!user) return;
+    const openChatFromUrl = () => {
+      const search = new URLSearchParams(window.location.search);
+      const chat = search.get('chat');
+      if (window.location.pathname !== '/messages' || !chat) return;
+      search.delete('chat');
+      const rest = search.toString();
+      window.history.replaceState({ echatApp: true, tab: 'messages' }, '', `/messages${rest ? `?${rest}` : ''}`);
+      setActiveDmUserId(chat);
+      setCurrentView('messages');
+    };
+    const onWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type !== 'echat:open' || typeof event.data.url !== 'string') return;
+      const target = new URL(event.data.url, window.location.origin);
+      if (target.origin !== window.location.origin) return;
+      const tab = target.pathname === '/messages' ? 'messages' : target.pathname.replace(/^\//, '') || 'feed';
+      window.history.pushState({ echatApp: true, tab }, '', `${target.pathname}${target.search}`);
+      window.dispatchEvent(new Event('echat:navigate'));
+      openChatFromUrl();
+    };
+    openChatFromUrl();
+    navigator.serviceWorker?.addEventListener('message', onWorkerMessage);
+    return () => navigator.serviceWorker?.removeEventListener('message', onWorkerMessage);
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useBackButton(Boolean(activeChatPartner), () => setActiveChatPartner(null), 'chat-conversation');
   useEffect(() => {
     if (isLoading) return;
@@ -451,6 +479,9 @@ export function MainApp() {
         />}
 
       {showBackToast && <div role="status" className="fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-xl">Press back again to exit</div>}
+
+      {/* "Turn on notifications?" after login (push works with eChat closed) */}
+      <PushPermissionPrompt userId={user?.id ?? null} />
 
       {/* Full-screen profile picture viewer (tap any avatar) */}
       <AvatarViewerHost

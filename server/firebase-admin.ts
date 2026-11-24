@@ -44,6 +44,8 @@ if (serviceAccountJson) {
 }
 
 export const firestore = firestoreInstance;
+/** The Admin app (null when FIREBASE_SERVICE_ACCOUNT_JSON is missing). Used for FCM push. */
+export const firebaseAdminApp = adminApp;
 export function getFirebaseAdminAuth(): Auth | null {
   return authInstance;
 }

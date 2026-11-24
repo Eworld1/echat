@@ -6,6 +6,7 @@ import { api } from '../services/api';
 import { setChatSoundVolume } from '../utils/sounds';
 import { listenBlockIds, unblockLiveUser } from '../services/liveDiscovery';
 import { LowDataSettingsCard } from '../components/LowData';
+import { PushNotificationsCard } from '../components/PushNotifications';
 import {
   Settings as SettingsIcon,
   Shield,
@@ -13,7 +14,6 @@ import {
   Moon,
   Sun,
   Globe,
-  Bell,
   Trash2,
   Lock,
   Key,
@@ -44,10 +44,6 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
 
   // Tab 2: General Settings State
   const { theme, setTheme, language, setLanguage, t } = usePreferences();
-  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem('echat_notifications');
-    return saved !== null ? saved === 'true' : true;
-  });
   const [birthdayRemindersEnabled, setBirthdayRemindersEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('echat_birthday_reminders');
     return saved !== null ? saved === 'true' : user?.birthdayReminderEnabled !== false;
@@ -138,7 +134,6 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
 
   // Save General Settings
   const handleSaveGeneralSettings = () => {
-    localStorage.setItem('echat_notifications', String(notificationsEnabled));
     localStorage.setItem('echat_sound', String(soundEnabled));
     localStorage.setItem('echat_ringtone', ringtone);
     localStorage.setItem('echat_chat_sound', String(chatSoundEnabled));
@@ -534,28 +529,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                 {t('notifications_audio')}
               </h3>
 
-              <div className="flex items-center justify-between py-1">
-                <div>
-                  <div className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                    <Bell size={16} className="text-blue-600" />
-                    Push & In-App Notifications
-                  </div>
-                  <div className="text-xs text-slate-500">Receive alerts when friends comment, call, or post.</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setNotificationsEnabled(!notificationsEnabled)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
-                    notificationsEnabled ? 'bg-blue-600' : 'bg-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      notificationsEnabled ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
+              <PushNotificationsCard />
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 p-3">
                 <div><div className="text-sm font-bold text-slate-900">Birthday Reminders</div><div className="text-xs text-slate-500">Notify me about friends’ birthdays.</div></div>
