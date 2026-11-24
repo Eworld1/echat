@@ -4,6 +4,10 @@ import { ConnectionBanner } from './components/ConnectionBanner.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { PreferencesProvider } from './context/PreferencesContext.tsx';
 import './index.css';
+import { installAvatarFallback } from './utils/avatar';
+
+// Any profile picture that fails to load turns into an initials circle (no broken-image icons).
+installAvatarFallback();
 
 // Makes the app installable and fast. Production only, so dev hot-reload is never cached.
 if ('serviceWorker' in navigator && import.meta.env.PROD) {

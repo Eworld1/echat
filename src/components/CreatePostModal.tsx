@@ -1,4 +1,5 @@
 import { usePreferences } from '../context/PreferencesContext';
+import { UserAvatar } from './UserAvatar';
 import { compressImage } from '../utils/image';
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
@@ -383,11 +384,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         {/* User header */}
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img
-              src={user?.avatar}
-              alt={user?.name}
-              className="w-11 h-11 rounded-full object-cover border border-slate-200 shadow-xs"
-            />
+            <UserAvatar src={user?.avatar} name={user?.name || 'You'} size={44} className="ring-1 ring-slate-200" />
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 <p className="text-sm font-bold text-slate-900">{user?.name}</p>

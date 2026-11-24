@@ -1,4 +1,4 @@
-import { initialsAvatar } from '../utils/avatar';
+import { avatarSrc } from './UserAvatar';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Story, User } from '../types';
 import { api } from '../services/api';
@@ -138,7 +138,7 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
             aria-label={ownGroup ? 'View your story' : 'Add to your story'}
             className={`h-[68px] w-[68px] rounded-full p-[3px] sm:h-[76px] sm:w-[76px] ${ownGroup ? ring(ownGroup) : 'bg-slate-200'}`}
           >
-            <img src={user.avatar || initialsAvatar(user.name || '')} alt="" className="h-full w-full rounded-full border-2 border-white object-cover" />
+            <img src={avatarSrc(user.avatar, user.name || '')} alt={user.name || 'Your story'} data-avatar="" data-name={user.name || ''} className="h-full w-full rounded-full border-2 border-white object-cover" />
           </button>
           <button type="button" onClick={() => setMenuOpen(true)} aria-label="Add to story" className="absolute right-0 top-[48px] grid h-7 w-7 place-items-center rounded-full border-2 border-white bg-[#1877F2] text-white shadow sm:top-[54px]"><Plus size={17} /></button>
           <span className="w-full truncate text-xs font-semibold text-slate-800">Your Story</span>
@@ -148,7 +148,7 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
           const index = groups.indexOf(group);
           return (
             <button key={group.authorId} type="button" onClick={() => setViewerGroup(index)} className="flex w-[68px] shrink-0 flex-col items-center gap-1.5 text-center sm:w-[76px]">
-              <span className={`block h-[68px] w-[68px] rounded-full p-[3px] sm:h-[76px] sm:w-[76px] ${ring(group)}`}><img src={group.authorAvatar || initialsAvatar(group.authorName)} alt="" className="h-full w-full rounded-full border-2 border-white object-cover" /></span>
+              <span className={`block h-[68px] w-[68px] rounded-full p-[3px] sm:h-[76px] sm:w-[76px] ${ring(group)}`}><img src={avatarSrc(group.authorAvatar, group.authorName)} alt={group.authorName} data-avatar="" data-name={group.authorName} loading="lazy" className="h-full w-full rounded-full border-2 border-white object-cover" /></span>
               <span className="w-full truncate text-xs font-semibold text-slate-800">{group.authorName}</span>
             </button>
           );

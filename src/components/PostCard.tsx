@@ -1,4 +1,5 @@
 import { usePreferences } from '../context/PreferencesContext';
+import { UserAvatar } from './UserAvatar';
 import { getReelsMuted, setReelsMuted } from '../services/reels/reelSound';
 import { SharePostModal, postPermalink } from './SharePostModal';
 import { initialsAvatar } from '../utils/avatar';
@@ -47,6 +48,27 @@ interface PostCardProps {
   reelPreload?: 'metadata' | 'auto';
 }
 
+const SEE_MORE_CHARS = 280;
+
+/** "Just now", "5m", "3h", "2d", then a date — like Facebook. */
+function timeAgo(timestamp: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return 'Just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)}d`;
+  const date = new Date(timestamp);
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric', ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) });
+}
+
+let likeCss = false;
+if (typeof document !== 'undefined' && !likeCss) {
+  likeCss = true;
+  const style = document.createElement('style');
+  style.textContent = '@keyframes echatLikePop { 0% { transform: scale(1); } 35% { transform: scale(1.35) rotate(-12deg); } 70% { transform: scale(0.92); } 100% { transform: scale(1); } }';
+  document.head.appendChild(style);
+}
+
 const REACTIONS: { type: ReactionType; label: string; emoji: string; color: string }[] = [
   { type: 'like', label: 'Like', emoji: '👍', color: 'text-blue-600' },
   { type: 'love', label: 'Love', emoji: '❤️', color: 'text-rose-500' },
@@ -70,6 +92,8 @@ export const PostCard: React.FC<PostCardProps> = ({
   const { t } = usePreferences();
   const [showReactionsBar, setShowReactionsBar] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [textExpanded, setTextExpanded] = useState(false);
+  const [likePop, setLikePop] = useState(0);
   const [commentInput, setCommentInput] = useState('');
   const [showOptions, setShowOptions] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
@@ -278,7 +302,9 @@ export const PostCard: React.FC<PostCardProps> = ({
     name: 'EChat User',
     avatar: initialsAvatar('Echat User'),
     isVerified: false
-  }), ...(profileOverrides[post.authorId] || {}) } as Partial<User> & { id: string; name: string; avatar: string };
+  }), ...(profileOverrides[post.authorId] || {}),
+    // My own posts: show my current name + photo instantly after I change them.
+    ...(user && post.authorId === user.id && !(post.author as { isPage?: boolean } | undefined)?.isPage ? { name: user.name, avatar: user.avatar } : {}) } as Partial<User> & { id: string; name: string; avatar: string };
 
   const myReaction = user ? post.reactions.find(r => r.userId === user.id) : null;
   const currentReactionMeta = myReaction ? REACTIONS.find(r => r.type === myReaction.type) : null;
@@ -390,18 +416,14 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   const isDevAuthor = author.isOfficialDeveloper || author.email?.toLowerCase().trim() === 'eldermoses89@gmail.com';
   const displayName = isDevAuthor ? 'EChat Official - Developer' : author.name;
+  const isLongText = (post.content || '').length > SEE_MORE_CHARS + 40 || (post.content || '').split('\n').length > 7;
 
   return (
-    <div ref={cardRef} id={`post-${post.id}`} onClick={handleCardClick} role={detailMode ? undefined : 'button'} tabIndex={detailMode ? undefined : 0} onKeyDown={detailMode ? undefined : e => { if (e.key === 'Enter' && e.target === e.currentTarget) openPostDetail(); }} className={reelMode ? 'relative isolate h-full min-h-0 w-full overflow-hidden bg-black text-white' : `bg-white rounded-2xl shadow-xs border border-slate-200/90 overflow-hidden transition scroll-mt-20 ${detailMode ? '' : 'cursor-pointer'}`}>
+    <div ref={cardRef} id={`post-${post.id}`} onClick={handleCardClick} role={detailMode ? undefined : 'button'} tabIndex={detailMode ? undefined : 0} onKeyDown={detailMode ? undefined : e => { if (e.key === 'Enter' && e.target === e.currentTarget) openPostDetail(); }} className={reelMode ? 'relative isolate h-full min-h-0 w-full overflow-hidden bg-black text-white' : `bg-white rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.08),0_2px_8px_rgba(15,23,42,0.04)] border border-slate-200/80 overflow-hidden transition scroll-mt-20 ${detailMode ? '' : 'cursor-pointer'}`}>
       {/* Post Header */}
       <div className={reelMode ? 'absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/75 to-transparent p-3 pb-7 text-white' : 'p-4 flex items-center justify-between'}>
         <div className="flex items-center gap-3">
-          <img
-            src={author.avatar || initialsAvatar(author.name || '')}
-            alt={author.name}
-            onClick={() => onViewProfile(author.id)}
-            className="w-10 h-10 rounded-full object-cover cursor-pointer hover:opacity-90 transition border border-slate-100"
-          />
+          <UserAvatar src={author.avatar} name={author.name || 'EChat user'} size={40} onClick={() => onViewProfile(author.id)} className={reelMode ? 'ring-2 ring-white/80' : 'ring-1 ring-slate-200'} />
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
               <span
@@ -430,7 +452,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               )}
             </div>
             <div className={`flex items-center gap-1.5 text-xs font-medium mt-0.5 ${reelMode ? 'text-white/75' : 'text-slate-400'}`}>
-              <span>{new Date(post.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+              <time dateTime={new Date(post.createdAt).toISOString()} title={new Date(post.createdAt).toLocaleString()}>{timeAgo(post.createdAt)}</time>
               {post.editedAt && <span className={reelMode ? 'text-white/70' : 'text-slate-400'}>· Edited</span>}
               <span>•</span>
               {post.privacy === 'only_me' ? (
@@ -593,8 +615,13 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* Post Text Content */}
       {!isEditing && post.content && (
         <div className={reelMode ? 'absolute bottom-28 left-3 right-16 z-20 max-h-[20dvh] overflow-hidden drop-shadow-md' : 'px-4 pb-3'}>
-          <p className={`text-sm sm:text-base leading-relaxed whitespace-pre-line ${reelMode ? 'line-clamp-4 text-white' : 'text-slate-800'}`}>
-            {post.content}
+          <p className={`whitespace-pre-line break-words leading-relaxed ${reelMode ? 'line-clamp-4 text-sm text-white' : 'text-[15px] text-slate-800'}`}>
+            {!reelMode && isLongText && !textExpanded ? `${post.content.slice(0, SEE_MORE_CHARS).trimEnd()}… ` : post.content}
+            {!reelMode && isLongText && (
+              <button type="button" onClick={event => { event.stopPropagation(); setTextExpanded(value => !value); }} className="font-semibold text-slate-500 hover:underline">
+                {textExpanded ? ' See less' : 'See more'}
+              </button>
+            )}
           </p>
         </div>
       )}
@@ -670,18 +697,22 @@ export const PostCard: React.FC<PostCardProps> = ({
       <div className={reelMode ? 'absolute bottom-[58px] left-3 right-16 z-20 flex items-center justify-between gap-2 rounded-xl bg-black/55 px-3 py-1.5 text-[11px] font-semibold text-white drop-shadow-md' : 'px-4 py-2 border-b border-slate-100 flex items-center justify-between gap-3 text-xs text-slate-500 font-medium'}>
         {!reelMode ? (
           <>
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="whitespace-nowrap">👍 {post.reactions?.length || 0}</span>
-              <button onClick={() => setShowComments(!showComments)} className="whitespace-nowrap hover:underline">💬 {(post.comments || []).length}</button>
-              <span className="flex items-center gap-1 whitespace-nowrap"><Share2 size={13} />{post.sharesCount || 0} shares</span>
+            <div className="flex min-w-0 items-center gap-1.5">
+              {(post.reactions?.length || 0) > 0 ? (
+                <>
+                  <span className="flex items-center">
+                    {(topReactions.length ? topReactions : REACTIONS.slice(0, 1)).map(r => (
+                      <span key={r.type} title={`${r.label}`} className="-ml-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-white text-[11px] ring-2 ring-white first:ml-0">{r.emoji}</span>
+                    ))}
+                  </span>
+                  <span className="whitespace-nowrap text-[13px] text-slate-500">{post.reactions.length}</span>
+                </>
+              ) : <span className="text-[13px] text-slate-400">Be the first to like this</span>}
             </div>
-            <div className="flex shrink-0 items-center">
-              {topReactions.map(r => (
-                <span key={r.type} title={`${r.label} reaction`} className="-ml-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-white text-[11px] first:ml-0">
-                  {r.emoji}
-                </span>
-              ))}
-              {user?.id === post.authorId && <button onClick={handleLoadPostViewers} className="ml-2 whitespace-nowrap text-[10px] hover:underline" title="See who viewed this post">Views {post.viewsCount || 0}</button>}
+            <div className="flex shrink-0 items-center gap-3 text-[13px] text-slate-500">
+              {(post.comments || []).length > 0 && <button onClick={() => setShowComments(!showComments)} className="whitespace-nowrap hover:underline">{(post.comments || []).length} comment{(post.comments || []).length === 1 ? '' : 's'}</button>}
+              {(post.sharesCount || 0) > 0 && <span className="whitespace-nowrap">{post.sharesCount} share{post.sharesCount === 1 ? '' : 's'}</span>}
+              {user?.id === post.authorId && <button onClick={handleLoadPostViewers} className="whitespace-nowrap hover:underline" title="See who viewed this post">{post.viewsCount || 0} views</button>}
             </div>
           </>
         ) : (
@@ -746,16 +777,19 @@ export const PostCard: React.FC<PostCardProps> = ({
         {/* Like Button */}
         <button
           onMouseEnter={() => setShowReactionsBar(true)}
-          onClick={() => handleReact(myReaction ? myReaction.type : 'like')}
+          onClick={() => { setLikePop(value => value + 1); handleReact(myReaction ? myReaction.type : 'like'); }}
+          aria-pressed={Boolean(myReaction)}
           className={`flex-1 py-2 flex items-center justify-center gap-2 rounded-xl transition cursor-pointer ${reelMode ? 'hover:bg-white/15' : 'hover:bg-slate-50'} ${
             currentReactionMeta ? `${currentReactionMeta.color} font-bold` : reelMode ? 'text-white' : 'text-slate-600'
           }`}
         >
-          {currentReactionMeta ? (
-            <span className="text-base">{currentReactionMeta.emoji}</span>
-          ) : (
-            <ThumbsUp size={18} />
-          )}
+          <span key={likePop} className="inline-flex" style={likePop ? { animation: 'echatLikePop .38s ease-out' } : undefined}>
+            {currentReactionMeta ? (
+              currentReactionMeta.type === 'like' ? <ThumbsUp size={18} className="fill-current" /> : <span className="text-base">{currentReactionMeta.emoji}</span>
+            ) : (
+              <ThumbsUp size={18} />
+            )}
+          </span>
           <span>{currentReactionMeta ? currentReactionMeta.label : 'Like'}</span>
         </button>
 
@@ -783,25 +817,22 @@ export const PostCard: React.FC<PostCardProps> = ({
         <div className={reelMode ? 'absolute inset-x-0 bottom-0 z-30 max-h-[45%] overflow-y-auto overscroll-contain bg-white p-4 text-slate-900 shadow-2xl' : 'p-4 bg-slate-50/70 border-t border-slate-100 space-y-3'}>
           {/* Add comment input */}
           <form onSubmit={handleAddComment} className="flex items-center gap-2.5">
-            <img
-              src={user?.avatar || initialsAvatar(user?.name || '')}
-              alt={user?.name || 'User'}
-              className="w-8 h-8 rounded-full object-cover border border-slate-200"
-            />
+            <UserAvatar src={user?.avatar} name={user?.name || 'You'} size={32} />
             <div className="flex-1 relative flex items-center">
               <input
                 type="text"
                 value={commentInput}
                 onChange={(e) => setCommentInput(e.target.value)}
-                placeholder={t('write_comment')}
-                className="min-h-[48px] w-full bg-white text-slate-800 text-base pl-4 pr-10 py-2 rounded-full border border-slate-200 focus:border-blue-400 focus:outline-hidden transition shadow-2xs"
+                placeholder="Write a comment..."
+                aria-label="Write a comment"
+                className="min-h-[44px] w-full rounded-full border border-slate-200 bg-[#F0F2F5] py-2 pl-4 pr-16 text-base text-slate-800 transition focus:border-blue-400 focus:bg-white focus:outline-hidden"
               />
               <button
                 type="submit"
                 disabled={!commentInput.trim()}
-                className="absolute right-2 p-1.5 text-blue-600 hover:text-blue-700 disabled:opacity-30 transition cursor-pointer"
+                className="absolute right-1.5 flex min-h-8 items-center gap-1 rounded-full bg-[#1877F2] px-3 text-xs font-bold text-white transition hover:bg-[#166FE5] disabled:bg-slate-300 cursor-pointer"
               >
-                <Send size={15} />
+                <Send size={13} />Post
               </button>
             </div>
           </form>
@@ -813,15 +844,10 @@ export const PostCard: React.FC<PostCardProps> = ({
                 id: comment.authorId,
                 name: 'User',
                 avatar: initialsAvatar('Echat User')
-              }), ...(profileOverrides[comment.authorId] || {}) };
+              }), ...(profileOverrides[comment.authorId] || {}), ...(user && comment.authorId === user.id ? { name: user.name, avatar: user.avatar } : {}) };
               return (
                 <div key={comment.id} className="flex items-start gap-2.5 group">
-                  <img
-                    src={commentAuthor.avatar || initialsAvatar(commentAuthor.name || '')}
-                    alt={commentAuthor.name}
-                    onClick={() => onViewProfile(comment.authorId)}
-                    className="w-8 h-8 rounded-full object-cover cursor-pointer hover:opacity-90 transition mt-0.5"
-                  />
+                  <UserAvatar src={commentAuthor.avatar} name={commentAuthor.name || 'EChat user'} size={32} onClick={() => onViewProfile(comment.authorId)} className="mt-0.5" />
                   <div className="flex-1">
                     <div className="bg-white rounded-2xl px-3.5 py-2 shadow-2xs border border-slate-200/70 inline-block max-w-full">
                       <p
@@ -907,7 +933,7 @@ export const PostCard: React.FC<PostCardProps> = ({
         <div role="dialog" aria-modal="true" aria-label="Post viewers" className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onClick={() => setShowViewersModal(false)}>
           <section className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-900">Post viewers</h2><button onClick={() => setShowViewersModal(false)} className="rounded-full p-2 hover:bg-slate-100" aria-label="Close">×</button></div>
-            {loadingViewers ? <p className="py-6 text-center text-sm text-slate-500">Loading viewers…</p> : postViewers.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">No viewers yet.</p> : <div className="max-h-[60vh] space-y-3 overflow-y-auto">{postViewers.map(viewer => <div key={viewer.id} className="flex items-center gap-3"><img src={viewer.avatar || initialsAvatar(viewer.name)} alt="" className="h-10 w-10 rounded-full object-cover"/><span className="flex-1 text-sm font-semibold text-slate-800">{viewer.name}</span><time className="text-xs text-slate-500">{new Date(viewer.viewedAt).toLocaleString()}</time></div>)}</div>}
+            {loadingViewers ? <p className="py-6 text-center text-sm text-slate-500">Loading viewers…</p> : postViewers.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">No viewers yet.</p> : <div className="max-h-[60vh] space-y-3 overflow-y-auto">{postViewers.map(viewer => <div key={viewer.id} className="flex items-center gap-3"><UserAvatar src={viewer.avatar} name={viewer.name} size={40} /><span className="flex-1 text-sm font-semibold text-slate-800">{viewer.name}</span><time className="text-xs text-slate-500">{new Date(viewer.viewedAt).toLocaleString()}</time></div>)}</div>}
           </section>
         </div>
       )}
