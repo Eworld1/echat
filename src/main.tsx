@@ -13,6 +13,8 @@ installAvatarFallback();
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(err => console.warn('Service worker not registered:', err));
+    // Push notifications worker (public/firebase-messaging-sw.js), ready before "Turn on" is tapped.
+    navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/firebase-cloud-messaging-push-scope' }).catch(err => console.warn('Push service worker not registered:', err));
   });
 }
 

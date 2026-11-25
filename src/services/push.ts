@@ -48,10 +48,35 @@ export async function getPushState(): Promise<PushState> {
   return Notification.permission === 'granted' && read(PREF_KEY) !== 'off' && read(TOKEN_KEY) ? 'on' : 'off';
 }
 
+/** The push worker: public/firebase-messaging-sw.js in FCM's own scope (separate from /sw.js). */
+export const PUSH_SW_URL = '/firebase-messaging-sw.js';
+export const PUSH_SW_SCOPE = '/firebase-cloud-messaging-push-scope';
+
+/** Resolves once the worker is ACTIVE: subscribing earlier fails with "no active Service Worker". */
+function whenActive(registration: ServiceWorkerRegistration, timeoutMs = 20000): Promise<ServiceWorkerRegistration> {
+  if (registration.active) return Promise.resolve(registration);
+  return new Promise((resolve, reject) => {
+    const worker = registration.installing || registration.waiting;
+    if (!worker) { reject(new Error('Notifications could not start. Please reload eChat and try again.')); return; }
+    const timer = window.setTimeout(() => reject(new Error('Notifications are still starting. Please wait a moment and tap Turn on again.')), timeoutMs);
+    const check = () => {
+      if (registration.active || worker.state === 'activated') { window.clearTimeout(timer); worker.removeEventListener('statechange', check); resolve(registration); }
+      else if (worker.state === 'redundant') { window.clearTimeout(timer); worker.removeEventListener('statechange', check); reject(new Error('Notifications could not start. Please reload eChat and try again.')); }
+    };
+    worker.addEventListener('statechange', check);
+    check();
+  });
+}
+
+/** Register (or reuse) the push worker. Called on app load and again before subscribing. */
+export async function registerPushServiceWorker(): Promise<ServiceWorkerRegistration> {
+  const registration = (await navigator.serviceWorker.getRegistration(PUSH_SW_SCOPE))
+    ?? await navigator.serviceWorker.register(PUSH_SW_URL, { scope: PUSH_SW_SCOPE });
+  return whenActive(registration);
+}
+
 async function serviceWorker(): Promise<ServiceWorkerRegistration> {
-  const existing = await navigator.serviceWorker.getRegistration('/');
-  if (!existing) await navigator.serviceWorker.register('/sw.js');
-  return navigator.serviceWorker.ready;
+  return registerPushServiceWorker();
 }
 
 async function callServer(path: string, body: Record<string, unknown>) {
@@ -72,7 +97,16 @@ export async function enablePush(): Promise<PushState> {
   write(ASKED_KEY, String(Date.now()));
   if (permission !== 'granted') { changed(); return permission === 'denied' ? 'blocked' : 'off'; }
   const { getMessaging, getToken } = await import('firebase/messaging');
-  const token = await getToken(getMessaging(app), { serviceWorkerRegistration: await serviceWorker(), vapidKey: VAPID_KEY });
+  const messaging = getMessaging(app);
+  let token: string;
+  try {
+    token = await getToken(messaging, { serviceWorkerRegistration: await serviceWorker(), vapidKey: VAPID_KEY });
+  } catch (error) {
+    // A phone can still be swapping workers at the moment of the tap: wait for the active one and retry once.
+    if (!/no active service worker|registration failed|not registered/i.test(String((error as Error)?.message))) throw error;
+    await new Promise(resolve => window.setTimeout(resolve, 1500));
+    token = await getToken(messaging, { serviceWorkerRegistration: await serviceWorker(), vapidKey: VAPID_KEY });
+  }
   if (!token) throw new Error('Could not turn on notifications. Please try again.');
   await callServer('/api/push/token', { token, platform: isInstalledApp() ? 'pwa' : 'browser' });
   write(TOKEN_KEY, token);
