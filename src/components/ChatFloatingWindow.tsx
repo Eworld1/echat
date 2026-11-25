@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { describeActivity, dmChatId, useActivitySender, useChatActivity } from '../services/chatActivity';
 import { ChatMediaGate } from './LowData';
 import { User, Message } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -71,7 +72,13 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
   const longPressTimerRef = useRef<number | null>(null);
 
   const isPartnerOnline = onlineUserIds.includes(partner.id);
-  const isPartnerTyping = Boolean(typingUsers[partner.id]);
+  // "… is typing" / "… is recording a voice message" (Firestore listener + socket), like WhatsApp.
+  const activityChatId = user?.id ? dmChatId(user.id, partner.id) : null;
+  const partnerActivity = useChatActivity(activityChatId, user?.id);
+  const activityInfo = describeActivity(partnerActivity, false);
+  const activityReceivers = useMemo(() => [partner.id], [partner.id]);
+  const myActivity = useActivitySender(activityChatId, user ? { id: user.id, name: user.name } : null, activityReceivers);
+  const isPartnerTyping = Boolean(typingUsers[partner.id]) || Boolean(activityInfo);
 
   useEffect(() => setPartner(initialPartner), [initialPartner]);
   useEffect(() => {
@@ -167,6 +174,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
     e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
 
     // Trigger typing indicator
+    myActivity.typed(e.target.value);
     sendTyping(partner.id, true);
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
@@ -193,6 +201,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
     setMessages(prev => [...prev, pendingMessage]);
     setInputText('');
     sendTyping(partner.id, false);
+    myActivity.sent();
 
     try {
       const sent = await api.sendMessage(payload);
@@ -208,6 +217,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
 
   const handleVoiceSend = (audioUrl: string, durationSecs: number) => {
     setIsRecordingVoice(false);
+    myActivity.recording(false);
     handleSend({
       mediaUrl: audioUrl,
       mediaType: 'audio',
@@ -509,10 +519,13 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
         {isPartnerTyping && (
           <div className="flex items-center gap-2 text-slate-500 text-xs py-1">
             <img src={partner.avatar} alt={partner.name} className="w-6 h-6 rounded-full object-cover" />
-            <div className="bg-white border border-slate-200 px-3 py-1.5 rounded-full flex items-center gap-1">
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:0ms]" />
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:150ms]" />
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:300ms]" />
+            <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 ${activityInfo?.recording ? 'border-red-200 bg-red-50 text-red-600' : 'border-slate-200 bg-white'}`}>
+              {activityInfo && <span className="font-semibold">{activityInfo.text}</span>}
+              {!activityInfo?.recording && <>
+                <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:0ms]" />
+                <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:150ms]" />
+                <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:300ms]" />
+              </>}
             </div>
           </div>
         )}
@@ -544,7 +557,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
         {isRecordingVoice ? (
           <VoiceRecorder
             onSendVoice={handleVoiceSend}
-            onCancel={() => setIsRecordingVoice(false)}
+            onCancel={() => { setIsRecordingVoice(false); myActivity.recording(false); }}
           />
         ) : (
           <div className="flex w-full min-w-0 items-end gap-1.5">
@@ -560,7 +573,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
             </label>
 
             <button
-              onClick={() => setIsRecordingVoice(true)}
+              onClick={() => { setIsRecordingVoice(true); myActivity.recording(true); }}
               className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center text-blue-600 hover:bg-blue-50 rounded-full transition"
               title="Record Voice Note"
             >
@@ -603,7 +616,7 @@ export const ChatFloatingWindow: React.FC<ChatFloatingWindowProps> = ({ partner:
                 className="flex h-12 w-12 min-w-12 shrink-0 touch-manipulation items-center justify-center bg-blue-600 text-white rounded-full shadow-md hover:bg-blue-700 disabled:opacity-50 transition"
               >
                 <Send size={19} />
-              </button> : <button type="button" onClick={() => setIsRecordingVoice(true)} aria-label="Record voice message" className="flex h-12 w-12 min-w-12 shrink-0 touch-manipulation items-center justify-center bg-blue-600 text-white rounded-full shadow-md"><Mic size={19} /></button>}
+              </button> : <button type="button" onClick={() => { setIsRecordingVoice(true); myActivity.recording(true); }} aria-label="Record voice message" className="flex h-12 w-12 min-w-12 shrink-0 touch-manipulation items-center justify-center bg-blue-600 text-white rounded-full shadow-md"><Mic size={19} /></button>}
             </form>
           </div>
         )}

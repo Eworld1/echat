@@ -141,6 +141,19 @@ export class SocketManager {
         break;
       }
 
+      case 'chat_activity': {
+        // "typing…" / "recording a voice message…": the sender is whoever this verified socket belongs to.
+        const fromUserId = this.userIdOf(ws);
+        const receivers: unknown[] = Array.isArray(payload.receiverIds) ? payload.receiverIds.slice(0, 50) : [];
+        if (!fromUserId || typeof payload.chatId !== 'string' || payload.chatId.length > 200) return;
+        const state = payload.state === 'typing' || payload.state === 'recording' ? payload.state : null;
+        const name = String(payload.name || '').slice(0, 60);
+        for (const receiverId of receivers) {
+          if (typeof receiverId === 'string' && receiverId !== fromUserId) this.sendToUser(receiverId, { type: 'chat_activity', chatId: payload.chatId, fromUserId, name, state });
+        }
+        break;
+      }
+
       case 'typing_start': {
         const { senderId, receiverId } = payload;
         this.sendToUser(receiverId, {

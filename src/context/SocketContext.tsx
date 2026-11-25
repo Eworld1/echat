@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, useCallb
 import { useAuth } from './AuthContext';
 import { Message, Post, Story, LiveStream, LiveComment, Notification as AppNotification, User } from '../types';
 import { auth, firestore } from '../services/firebase';
+import { registerActivitySocket } from '../services/chatActivity';
 import { playSound } from '../utils/sounds';
 import {
   collection,
@@ -454,6 +455,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     ws.onopen = () => {
       retry = 0;
       setIsConnected(true);
+      registerActivitySocket(payload => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload)); });
       // The server checks this Firebase ID token, so only this account receives its private messages.
       void (auth.currentUser?.getIdToken().catch(() => '') ?? Promise.resolve('')).then(idToken => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'auth', userId: user.id, idToken }));
@@ -495,6 +497,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             });
             break;
 
+          case 'chat_activity':
+            window.dispatchEvent(new CustomEvent('echat:chat-activity', { detail: { chatId: data.chatId, userId: data.fromUserId, name: data.name, state: data.state || null } }));
+            break;
           case 'user_typing':
             setTypingUsers(prev => ({
               ...prev,

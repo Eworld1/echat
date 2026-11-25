@@ -652,6 +652,25 @@ service cloud.firestore {
     function callParty() {
       return signedIn() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
     }
+    // "typing…" / "recording a voice message…" status. Private chats (dm_<id>_<id>): only the two
+    // people can see it. Each person can only write their own status doc.
+    match /chatActivity/{chatId}/members/{uid} {
+      function inChat() {
+        return signedIn() && (
+          chatId.matches('^dm_(.+_)?' + request.auth.uid + '(_.+)?$') ||
+          chatId.matches('^group_[A-Za-z0-9_-]{1,120}$')
+        );
+      }
+      allow read: if inChat();
+      allow delete: if inChat() && request.auth.uid == uid;
+      allow create, update: if inChat() && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly(['state', 'name', 'userId', 'at']) &&
+        request.resource.data.state in ['typing', 'recording'] &&
+        request.resource.data.name is string && request.resource.data.name.size() <= 60 &&
+        request.resource.data.userId is string && request.resource.data.userId.size() <= 128 &&
+        request.resource.data.at is int;
+    }
+
     match /calls/{callId} {
       allow read: if callParty();
       allow create: if signedIn() &&

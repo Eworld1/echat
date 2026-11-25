@@ -10,6 +10,8 @@ import { assetUrl } from '../services/apiBase';
 import { ChatMediaViewer, downloadChatAttachment, shareChatAttachment, type ChatAttachmentItem, type ChatMediaItem } from '../components/ChatMediaViewer';
 import { messagePreview } from '../../server/messagePreview';
 import { clearUnreadMessages } from '../services/unread';
+import { dmChatId, useActivitySender, useChatActivity } from '../services/chatActivity';
+import { ChatActivityIndicator } from '../components/ChatActivityIndicator';
 
 interface MessagesPageProps { initialUserId: string | null; onViewProfile: (userId: string) => void; }
 const timeLabel = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -136,10 +138,14 @@ interface ComposerProps {
   onSendAttachments:(files:File[],caption:string)=>Promise<number>;
   sending:boolean;
   uploadStatus:string;
+  /** typing / recording status for the other person ("… is typing", "… is recording a voice message") */
+  onTyping?:(text:string)=>void;
+  onRecording?:(on:boolean)=>void;
 }
 const iconButton = 'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
 
-const MessageComposer: React.FC<ComposerProps> = ({ value, onChange, onSend, onSendMedia, onSendAttachments, sending, uploadStatus }) => {
+const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, onSend, onSendMedia, onSendAttachments, sending, uploadStatus, onTyping, onRecording }) => {
+  const onChange = (text:string) => { setValue(text); onTyping?.(text); };
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const attachMenuRef = useRef<HTMLDivElement>(null);
@@ -205,10 +211,10 @@ const MessageComposer: React.FC<ComposerProps> = ({ value, onChange, onSend, onS
     textareaRef.current?.focus();
   };
   const startRecording = async () => {
-    try { const stream=await navigator.mediaDevices.getUserMedia({audio:true}); const rec=new MediaRecorder(stream); chunksRef.current=[]; recRef.current=rec; rec.ondataavailable=e=>{ if(e.data.size) chunksRef.current.push(e.data); }; rec.onstop=async()=>{ stream.getTracks().forEach(tr=>tr.stop()); const blob=new Blob(chunksRef.current,{type:'audio/webm'}); const reader=new FileReader(); reader.onload=()=>{ void onSendMedia(`[VOICE]${reader.result}`); }; reader.readAsDataURL(blob); }; rec.start(); setRecording(true); setRecSecs(0); recTimerRef.current=window.setInterval(()=>setRecSecs(s=>s+1),1000); }
+    try { const stream=await navigator.mediaDevices.getUserMedia({audio:true}); const rec=new MediaRecorder(stream); chunksRef.current=[]; recRef.current=rec; rec.ondataavailable=e=>{ if(e.data.size) chunksRef.current.push(e.data); }; rec.onstop=async()=>{ stream.getTracks().forEach(tr=>tr.stop()); const blob=new Blob(chunksRef.current,{type:'audio/webm'}); const reader=new FileReader(); reader.onload=()=>{ void onSendMedia(`[VOICE]${reader.result}`); }; reader.readAsDataURL(blob); }; rec.start(); setRecording(true); onRecording?.(true); setRecSecs(0); recTimerRef.current=window.setInterval(()=>setRecSecs(s=>s+1),1000); }
     catch { setNotice('Mic permission denied. Allow microphone in browser.'); }
   };
-  const stopRecording = () => { if(recTimerRef.current) window.clearInterval(recTimerRef.current); recRef.current?.stop(); setRecording(false); };
+  const stopRecording = () => { if(recTimerRef.current) window.clearInterval(recTimerRef.current); recRef.current?.stop(); setRecording(false); onRecording?.(false); };
   const takePhoto = () => { const v=videoRef.current; if(!v) return; const c=document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d')?.drawImage(v,0,0); void onSendMedia(`[IMAGE]${c.toDataURL('image/jpeg',0.85)}`); setShowCamera(false); };
   return (
     <form onSubmit={e=>{e.preventDefault(); void submit();}} className="relative shrink-0 border-t border-slate-200 bg-white px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-2 md:pb-3">
@@ -259,6 +265,11 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [hasLoadedChat, setHasLoadedChat] = useState(false);
   const [draft, setDraft] = useState('');
+  // WhatsApp-style "… is typing" / "… is recording a voice message" (Firestore listener + socket).
+  const activityChatId = currentUser?.id && selectedUserId ? dmChatId(currentUser.id, selectedUserId) : null;
+  const partnerActivity = useChatActivity(activityChatId, currentUser?.id);
+  const activityReceivers = useMemo(() => (selectedUserId ? [selectedUserId] : []), [selectedUserId]);
+  const myActivity = useActivitySender(activityChatId, currentUser ? { id: currentUser.id, name: currentUser.name } : null, activityReceivers);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingChat, setLoadingChat] = useState(false);
   const [chatReloadKey, setChatReloadKey] = useState(0);
@@ -555,13 +566,14 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
             <button type="button" onClick={()=>startDmCall('audio')} title="Voice call" aria-label="Voice call" className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100"><Phone size={20}/></button>
             <button type="button" onClick={()=>startDmCall('video')} title="Video call" aria-label="Video call" className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100"><Video size={20}/></button>
           </div>
+          <ChatActivityIndicator activity={partnerActivity} className="shrink-0 border-b border-slate-100 bg-white" />
           <div ref={messagesContainerRef} onScroll={e=>{ const c=e.currentTarget; isNearBottomRef.current = c.scrollHeight - c.clientHeight - c.scrollTop <= 120; }} className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-50 px-3 pt-5 pb-4 sm:px-6">
             {loadingChat && sortedMessages.length===0 && <p className="m-auto text-sm text-slate-500">Loading messages…</p>}
             {!loadingChat && !hasLoadedChat && sortedMessages.length===0 && <p className="m-auto max-w-xs text-center text-sm text-slate-500">{isOnline ? <>Unable to load messages. <button type="button" onClick={()=>{setSendError('');setChatReloadKey(key=>key+1);}} className="font-bold underline">Retry</button></> : 'Offline. Reconnect to load messages.'}</p>}
             {!loadingChat && hasLoadedChat && sortedMessages.length===0 && <p className="m-auto max-w-xs text-center text-sm text-slate-500">No messages yet. Say hi to start chatting.</p>}
             {sortedMessages.map(m=><div key={m._id} className={`max-w-[82%] sm:max-w-[70%] ${m.senderId===currentUser?.id?'self-end':'self-start'}`}><MessageBubble message={m} isMine={m.senderId===currentUser?.id} onOpenMedia={openMedia} onDownload={item=>void downloadAttachment(item)} onShare={item=>void shareAttachment(item)}/><div className={`mt-1 text-[10px] text-slate-400 ${m.senderId===currentUser?.id?'text-right':''}`}>{timeLabel(m.createdAt)}</div></div>)}
           </div>
-          <div className="z-10 shrink-0"><MessageComposer value={draft} onChange={setDraft} onSend={send} onSendMedia={sendMedia} onSendAttachments={sendAttachments} sending={sending} uploadStatus={uploadStatus}/></div>
+          <div className="z-10 shrink-0"><MessageComposer value={draft} onChange={setDraft} onSend={()=>{ myActivity.sent(); return send(); }} onSendMedia={text=>{ myActivity.sent(); return sendMedia(text); }} onSendAttachments={(files,caption)=>{ myActivity.sent(); return sendAttachments(files,caption); }} sending={sending} uploadStatus={uploadStatus} onTyping={myActivity.typed} onRecording={myActivity.recording}/></div>
         </> : <div className="hidden flex-1 flex-col items-center justify-center text-center md:flex"><div className="mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50 text-blue-600"><MessageSquare size={28}/></div><h2 className="font-bold text-slate-800">Your messages</h2><p className="mt-1 text-sm text-slate-500">Choose someone to open a private chat.</p></div>}
       </section>
     </div>
