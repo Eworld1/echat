@@ -11,6 +11,7 @@ import { CreateStudio } from './reels/CreateStudio';
 import { StoryViewer, type StoryGroup, type StoryMusic, type ViewerStory } from './reels/StoryViewer';
 import { StoryComposer } from './reels/StoryComposer';
 import { DEFAULT_EDIT, listenStories, type Story as FireStory } from '../services/reels/reelsStore';
+import { useLiveProfiles } from '../services/liveProfiles';
 
 interface StoriesBarProps {
   /** Opens a chat after replying to a story (Feed). Optional: Reels just shows a confirmation. */
@@ -108,7 +109,7 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
     return () => window.clearTimeout(timeout);
   }, [storyToast]);
 
-  const groups = useMemo<StoryGroup[]>(() => {
+  const rawGroups = useMemo<StoryGroup[]>(() => {
     const now = Date.now();
     const all = [
       ...fireStories.filter(story => story.expiresAt > now).map(fromFirestore),
@@ -133,6 +134,12 @@ export const StoriesBar: React.FC<StoriesBarProps> = ({ onOpenChatWithUser }) =>
       return (b.stories[b.stories.length - 1]?.createdAt || 0) - (a.stories[a.stories.length - 1]?.createdAt || 0);
     });
   }, [fireStories, legacyStories, seen, uid, user]);
+  // Live names/photos on the story rings and in the viewer (not the copies saved with each story).
+  const liveAuthors = useLiveProfiles(rawGroups.map(group => group.authorId));
+  const groups = useMemo(() => rawGroups.map(group => {
+    const live = liveAuthors[group.authorId];
+    return live ? { ...group, authorName: live.name || group.authorName, authorAvatar: live.avatar || group.authorAvatar } : group;
+  }), [rawGroups, liveAuthors]);
 
   // Shared link (?story=…): open that story once it has loaded (only people allowed to see it can).
   useEffect(() => {

@@ -32,7 +32,7 @@ interface SettingsProps {
 }
 
 export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
-  const { user, updateUser, logout } = useAuth();
+  const { user, updateUser, updateCurrentUser, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'privacy' | 'settings' | 'profile'>(() => (typeof window !== 'undefined' && window.location.hash === '#data-storage' ? 'settings' : 'privacy'));
 
   // Tab 1: Privacy State
@@ -206,14 +206,15 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
     setIsUpdatingProfile(true);
     setProfileSuccessMsg('');
     try {
-      const updated = await api.updateProfile(user.id, {
+      // Saves to the profile (Firestore + server) and tells every screen at once, so the new name
+      // shows on all posts, comments, stories and chats instantly.
+      await updateCurrentUser({
         name: name.trim(),
         bio: bio.trim(),
         location: location.trim(),
         work: work.trim(),
         education: education.trim()
       });
-      updateUser(updated);
       setProfileSuccessMsg('Profile updated successfully!');
       setTimeout(() => setProfileSuccessMsg(''), 3000);
     } catch (e: any) {

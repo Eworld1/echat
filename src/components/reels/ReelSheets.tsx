@@ -7,6 +7,7 @@ import {
 } from '../../services/reels/reelsStore';
 import type { StudioPreset } from './CreateStudio';
 import type { SoundInfo } from '../../services/reels/soundCatalog';
+import { useLiveList } from '../../services/liveProfiles';
 
 export interface Viewer { uid: string; name: string; avatar: string; friends: string[] }
 
@@ -24,7 +25,8 @@ const ago = (ts: number) => { const m = Math.max(1, Math.round((Date.now() - ts)
 
 // ---------------- Comments (with replies + likes) ----------------
 export const CommentsSheet: React.FC<{ reel: Reel; viewer: Viewer | null; onClose: () => void }> = ({ reel, viewer, onClose }) => {
-  const [comments, setComments] = useState<ReelComment[]>([]);
+  const [savedComments, setComments] = useState<ReelComment[]>([]);
+  const comments = useLiveList(savedComments, 'authorId', 'authorName', 'authorAvatar');
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState<ReelComment | null>(null);

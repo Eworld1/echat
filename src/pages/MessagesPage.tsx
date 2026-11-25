@@ -13,6 +13,7 @@ import { clearUnreadMessages } from '../services/unread';
 import { dmChatId, useActivitySender, useChatActivity } from '../services/chatActivity';
 import { ChatActivityIndicator } from '../components/ChatActivityIndicator';
 import { ConfirmDialog, DeleteMessageModal, MessageActionSheet, ReplyQuote, SwipeableMessage, VoiceNotePreview } from '../components/chat/ChatActions';
+import { useLiveProfiles, withLive } from '../services/liveProfiles';
 
 interface MessagesPageProps { initialUserId: string | null; onViewProfile: (userId: string) => void; }
 const timeLabel = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -296,9 +297,13 @@ const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, o
 export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onViewProfile }) => {
   const { user: currentUser } = useAuth();
   const { startCall, isConnected, onDirectMessage, onDirectMessagesRead } = useSocket();
-  const [conversations, setConversations] = useState<DirectConversation[]>([]);
+  const [savedConversations, setConversations] = useState<DirectConversation[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string|null>(initialUserId);
-  const [selectedUser, setSelectedUser] = useState<User|null>(null);
+  const [savedSelectedUser, setSelectedUser] = useState<User|null>(null);
+  // Live names/photos in the chat list and chat header (update instantly when someone changes theirs).
+  const liveChatProfiles = useLiveProfiles([...savedConversations.map(c => c.user.id), savedSelectedUser?.id]);
+  const conversations = useMemo(() => savedConversations.map(c => liveChatProfiles[c.user.id] ? { ...c, user: withLive(c.user, liveChatProfiles[c.user.id]) as User } : c), [savedConversations, liveChatProfiles]);
+  const selectedUser = useMemo(() => savedSelectedUser && liveChatProfiles[savedSelectedUser.id] ? withLive(savedSelectedUser, liveChatProfiles[savedSelectedUser.id]) as User : savedSelectedUser, [savedSelectedUser, liveChatProfiles]);
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [hasLoadedChat, setHasLoadedChat] = useState(false);
   const [draft, setDraft] = useState('');

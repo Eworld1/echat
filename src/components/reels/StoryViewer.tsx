@@ -13,6 +13,8 @@ import {
   type MediaEdit, type StoryComment, type StorySticker
 } from '../../services/reels/reelsStore';
 import type { User } from '../../types';
+import { useLiveList } from '../../services/liveProfiles';
+const NO_COMMENTS: StoryComment[] = [];
 
 /* ------------------------------------------------------------------ types */
 
@@ -613,7 +615,9 @@ const RailButton: React.FC<{ label: string; count?: number; onClick: () => void;
 
 const CommentsSheet: React.FC<{ story: ViewerStory; uid: string; isOwnStory: boolean; onClose: () => void; onTyping: (typing: boolean) => void }> = ({ story, uid, isOwnStory, onClose, onTyping }) => {
   const { user } = useAuth();
-  const [comments, setComments] = useState<StoryComment[] | null>(null);
+  const [savedComments, setComments] = useState<StoryComment[] | null>(null);
+  const liveComments = useLiveList(savedComments || NO_COMMENTS, 'authorId', 'authorName', 'authorAvatar');
+  const comments = savedComments === null ? null : liveComments;
   const [error, setError] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);

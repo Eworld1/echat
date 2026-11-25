@@ -8,6 +8,7 @@ import {
   addProfilePhotoComment, deleteProfilePhotoComment, findProfilePhotoPostId, listenProfilePhotoComments, listenProfilePhotoPost,
   setProfilePhotoLike, type ProfilePhotoComment, type ProfilePhotoPost
 } from '../services/profilePhotoPosts';
+import { useLiveList } from '../services/liveProfiles';
 
 export interface AvatarViewerTarget {
   userId: string;
@@ -72,7 +73,8 @@ const AvatarViewer: React.FC<{ target: AvatarViewerTarget; onClose: () => void; 
   const [post, setPost] = useState<ProfilePhotoPost | null>(null);
   const [lookupDone, setLookupDone] = useState(Boolean(target.postId));
   const [commentsOpen, setCommentsOpen] = useState(Boolean(target.showComments));
-  const [comments, setComments] = useState<ProfilePhotoComment[]>([]);
+  const [savedComments, setComments] = useState<ProfilePhotoComment[]>([]);
+  const comments = useLiveList(savedComments, 'userId', 'userName', 'userAvatar');
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

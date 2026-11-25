@@ -15,6 +15,7 @@ import type { DirectMessageRecord } from './server/persistence.js';
 import type { Message } from './server/types.js';
 import { isValidPushToken, pushReady, removePushToken, savePushToken, sendPush, type PushPayload } from './server/push.js';
 import { RESPONSE_TIMING, VerificationError, completeReset, completeSignup, completeVerify, normalizeEmail, sendResetCode, sendSignupCode, sendVerifyCode, verificationStatus } from './server/verification.js';
+import { migrateEmbeddedProfilesOnce, publicProfile, refreshEmbeddedProfile } from './server/profileSync.js';
 import { resolveLiveCreatedAt } from './serverless/live-age.js';
 import { describeLiveKitError, getOrCreateLiveStreamIngress, resetLiveStreamIngress } from './serverless/live-stream-key.js';
 
@@ -915,6 +916,22 @@ app.get('/api/users', (req: Request, res: Response) => {
   res.json(users);
 });
 
+/** A Firestore uid -> the server's user record (ids are the Firebase uid; older accounts keep it in firebaseUid). */
+function lookupProfileOwner(uid: string) {
+  return uid ? db.getUserById(uid) || db.getUsers().find(u => u.firebaseUid === uid) : undefined;
+}
+
+// Live author info for cards (posts, comments, stories, reels): only public fields, never email/dob.
+app.get('/api/users-public', (req: Request, res: Response) => {
+  const ids = String(req.query.ids || '').split(',').map(id => id.trim()).filter(id => /^[A-Za-z0-9_-]{1,128}$/.test(id)).slice(0, 100);
+  const out = ids.map(id => {
+    const user = lookupProfileOwner(id);
+    return user ? { ...publicProfile(user), id } : null;
+  }).filter(Boolean);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(out);
+});
+
 app.get('/api/users/:id', (req: Request, res: Response) => {
   const user = db.getUserById(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -1006,6 +1023,8 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     }
   }
 
+  const before = db.getUserById(req.params.id);
+  const previousName = before?.name, previousAvatar = before?.avatar;
   const updated = db.updateUser(req.params.id, {
     ...(name && { name: String(name).trim() }),
     ...(dob !== undefined && { dob }),
@@ -1026,6 +1045,18 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
 
   if (!updated) return res.status(404).json({ error: 'User not found' });
   const sanitized = db.sanitizeUser(updated);
+
+  // Name or photo changed: refresh every copy saved in older posts/comments/stories/reels (Facebook-style).
+  if (updated.name !== previousName || updated.avatar !== previousAvatar) {
+    db.refreshEmbeddedAuthor(updated.id, updated.name, updated.avatar || '');
+    const uid = updated.firebaseUid || updated.id;
+    const profile = { name: updated.name, avatar: updated.avatar || '' };
+    void (async () => {
+      if (firestore) await firestore.collection('users').doc(uid).update(profile).catch(() => {});
+      const count = await refreshEmbeddedProfile(firestore, uid, profile);
+      if (count) console.info(`[profileSync] Updated ${count} older documents for ${uid}.`);
+    })().catch(error => console.warn('[profileSync] refresh failed:', error instanceof Error ? error.message : error));
+  }
 
   // Broadcast instant real-time update
   if (isDeveloperUser(updated)) {
@@ -3736,7 +3767,10 @@ async function startServer() {
   });
 
   // Bind Render's port before starting the existing database initialization.
-  void db.init();
+  void Promise.resolve(db.init()).then(() => {
+    // One-time: refresh names/photos copied into older Firestore posts, comments, stories and reels.
+    setTimeout(() => { void migrateEmbeddedProfilesOnce(firestore, lookupProfileOwner); }, 20_000);
+  }).catch(() => {});
 
   // Dev only: also answer on :5173 so http://localhost:5173 works like a Vite dev server.
   if (!isProd && PORT !== 5173) {

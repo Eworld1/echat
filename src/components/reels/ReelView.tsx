@@ -7,6 +7,7 @@ import { LowDataVideoCover } from '../LowData';
 import { isUnlocked, useLowDataMode } from '../../services/lowData';
 import { reelSound, recordReelView, type Reel } from '../../services/reels/reelsStore';
 import type { Viewer } from './ReelSheets';
+import { useAuthor } from '../../services/liveProfiles';
 
 const MARQUEE_CSS = '@keyframes echatMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } } @keyframes echatSoundFlash { 0% { opacity: 0; transform: translate(-50%,-50%) scale(.7); } 20% { opacity: 1; transform: translate(-50%,-50%) scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } } @keyframes echatHeartPop { 0% { transform: translate(-50%,-50%) scale(0.3); opacity: 0; } 15% { transform: translate(-50%,-50%) scale(1.2); opacity: 1; } 30% { transform: translate(-50%,-50%) scale(0.95); } 80% { opacity: 1; } 100% { transform: translate(-50%,-70%) scale(1); opacity: 0; } }';
 let cssInjected = false;
@@ -46,6 +47,7 @@ interface ReelViewProps {
 
 /** One full-screen Reel (TikTok-style): double-tap like, right action bar, creator + caption + sound marquee. */
 export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay: autoplayPref = true, nearby, muted, viewer, liked, saved, onSetMuted, onLike, onSave, onComments, onShare, onSound, onMore, onViewProfile, onSoundBlocked, onActivePlayer }) => {
+  const creator = useAuthor(reel.creatorId, { name: reel.creatorName, avatar: reel.creatorAvatar });
   // Low Data Mode: never autoplay; each video shows a cover (thumbnail + Play + size) until tapped.
   const [lowData] = useLowDataMode();
   const autoplay = autoplayPref && !lowData;
@@ -176,8 +178,8 @@ export const ReelView: React.FC<ReelViewProps> = ({ reel, active, autoplay: auto
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/35 to-transparent px-3 pb-4 pr-[76px] pt-24 text-white [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_p]:pointer-events-auto">
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => onViewProfile?.(reel.creatorId)} className="flex min-w-0 items-center gap-2">
-            <UserAvatar src={reel.creatorAvatar} name={reel.creatorName || 'EChat user'} size={36} className="ring-2 ring-white" />
-            <span className="truncate text-sm font-extrabold">{reel.creatorName}</span>
+            <UserAvatar src={creator.avatar} name={creator.name || 'EChat user'} size={36} className="ring-2 ring-white" />
+            <span className="truncate text-sm font-extrabold">{creator.name}</span>
           </button>
           {viewer && !isOwn && <button type="button" disabled={followBusy} onClick={() => void toggleFollow()} className={`min-h-8 shrink-0 rounded-lg px-3 text-xs font-bold ${following ? 'border border-white/70 text-white' : 'bg-[#1877F2] text-white'}`}>{following ? 'Following' : 'Follow'}</button>}
         </div>

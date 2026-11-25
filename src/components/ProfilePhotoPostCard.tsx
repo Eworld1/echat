@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { UserAvatar, avatarSrc } from './UserAvatar';
 import { openAvatarViewer } from './AvatarViewer';
 import { timeAgo } from '../services/market';
+import { useLiveProfiles, withLive } from '../services/liveProfiles';
+import { VerifiedBadge } from './VerifiedBadge';
 import {
   addProfilePhotoComment, deleteProfilePhotoComment, deleteProfilePhotoPost, listenProfilePhotoComments, profilePhotoPostLink,
   setProfilePhotoLike, type ProfilePhotoComment, type ProfilePhotoPost
@@ -31,7 +33,11 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
   useEffect(() => (commentsOpen ? listenProfilePhotoComments(post.id, setComments) : undefined), [commentsOpen, post.id]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 3000); return () => clearTimeout(timer); }, [notice]);
 
-  const view = () => openAvatarViewer({ userId: post.userId, name: post.userName, avatar: post.newPhotoURL, postId: post.id });
+  // Live name / current photo / badge of the author and commenters (not the copies saved in the post).
+  const live = useLiveProfiles([post.userId, ...comments.map(comment => comment.userId)]);
+  const author = withLive({ name: post.userName, avatar: post.newPhotoURL, isVerified: false, isOfficialDeveloper: false }, live[post.userId]);
+  const name = author.name;
+  const view = () => openAvatarViewer({ userId: post.userId, name, avatar: post.newPhotoURL, postId: post.id });
   const toggleLike = async () => {
     if (!user) return;
     if (!liked) { setLikePop(true); setTimeout(() => setLikePop(false), 400); }
@@ -46,7 +52,7 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
   };
   const share = async () => {
     const url = profilePhotoPostLink(post.id);
-    const text = `${post.userName} updated their profile picture on EChat`;
+    const text = `${name} updated their profile picture on EChat`;
     try {
       if (navigator.share) { await navigator.share({ title: 'EChat', text, url }); return; }
       await navigator.clipboard.writeText(url);
@@ -64,10 +70,10 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
   return (
     <article id={`post-${post.id}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <header className="flex items-start gap-3 px-4 pb-2 pt-3">
-        <UserAvatar src={post.newPhotoURL} name={post.userName} size={40} onClick={view} className="ring-1 ring-slate-200" />
+        <UserAvatar src={author.avatar || post.newPhotoURL} name={name} size={40} onClick={view} className="ring-1 ring-slate-200" />
         <div className="min-w-0 flex-1">
           <p className="text-[15px] leading-5 text-slate-900">
-            <button type="button" onClick={() => onViewProfile(post.userId)} className="font-bold hover:underline">{post.userName}</button>
+            <button type="button" onClick={() => onViewProfile(post.userId)} className="font-bold hover:underline">{name}</button>{(author.isVerified || author.isOfficialDeveloper) && <span className="ml-1 inline-flex align-[-2px]"><VerifiedBadge size={14} /></span>}
             <span className="text-slate-600"> updated their profile picture.</span>
           </p>
           <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-500">{timeAgo(post.createdAt)} · <Globe2 size={12} aria-label="Public" /></p>
@@ -85,14 +91,14 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
       </header>
 
       {/* Big round picture on a soft backdrop, like Facebook */}
-      <button type="button" onClick={view} aria-label={`View ${post.userName}'s profile picture`} className="relative block w-full overflow-hidden bg-gradient-to-b from-slate-200 to-slate-100">
-        <img src={avatarSrc(post.newPhotoURL, post.userName)} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-40 blur-2xl" />
+      <button type="button" onClick={view} aria-label={`View ${name}'s profile picture`} className="relative block w-full overflow-hidden bg-gradient-to-b from-slate-200 to-slate-100">
+        <img src={avatarSrc(post.newPhotoURL, name)} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-40 blur-2xl" />
         <span className="relative flex justify-center py-8">
           <img
-            src={avatarSrc(post.newPhotoURL, post.userName)}
-            alt={`${post.userName}'s new profile picture`}
+            src={avatarSrc(post.newPhotoURL, name)}
+            alt={`${name}'s new profile picture`}
             data-avatar=""
-            data-name={post.userName}
+            data-name={name}
             loading="lazy"
             className="aspect-square w-[min(72%,320px)] rounded-full border-4 border-white bg-slate-200 object-cover shadow-xl"
           />
@@ -116,7 +122,7 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
 
       {commentsOpen && (
         <div className="space-y-3 border-t border-slate-200 px-4 py-3">
-          {comments.map(comment => (
+          {comments.map(saved => { const comment = { ...saved, ...(live[saved.userId]?.name ? { userName: live[saved.userId].name! } : {}), ...(live[saved.userId]?.avatar ? { userAvatar: live[saved.userId].avatar! } : {}) }; return (
             <div key={comment.id} className="flex gap-2">
               <UserAvatar src={comment.userAvatar} name={comment.userName} size={32} onClick={() => openAvatarViewer({ userId: comment.userId, name: comment.userName, avatar: comment.userAvatar })} />
               <div className="min-w-0 flex-1">
@@ -130,7 +136,7 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
                 </div>
               </div>
             </div>
-          ))}
+          ); })}
           <form onSubmit={event => void send(event)} className="flex items-center gap-2">
             <UserAvatar src={user?.avatar} name={user?.name || 'You'} size={32} />
             <input ref={inputRef} value={draft} onChange={event => setDraft(event.target.value)} maxLength={1000} placeholder="Write a comment…" aria-label="Write a comment" className="h-10 min-w-0 flex-1 rounded-full bg-slate-100 px-4 text-[15px] outline-none focus:ring-2 focus:ring-blue-200" />

@@ -596,6 +596,18 @@ class Database {
     }
   }
 
+  /** Name/photo copied into group posts and their comments: bring them up to date. Returns how many changed. */
+  refreshEmbeddedAuthor(userId: string, name: string, avatar: string): number {
+    let changed = 0;
+    for (const group of this.data.groups || []) {
+      for (const post of group.posts || []) {
+        if (post.authorId === userId && (post.authorName !== name || post.authorAvatar !== avatar)) { post.authorName = name; post.authorAvatar = avatar; changed++; }
+      }
+    }
+    if (changed) this.save();
+    return changed;
+  }
+
   sanitizeUser(user: User, viewerId?: string): Omit<User, 'passwordHash'> & { dobMonthDay?: string } {
     const { passwordHash, liveAuthSecret, dob, dobVisibility = 'public', chatClearedAt: _cleared, ...safe } = user;
     void _cleared;

@@ -9,6 +9,7 @@ import { Post, ReactionType, User } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { assetUrl } from '../services/apiBase';
+import { useLiveProfiles, withLive } from '../services/liveProfiles';
 import { VerifiedBadge } from './VerifiedBadge';
 import { VideoLinkCard } from './VideoLinkCard';
 import { LinkPreviewCard } from './LinkPreviewCard';
@@ -136,17 +137,8 @@ export const PostCard: React.FC<PostCardProps> = ({
   const videoGated = lowData && post.mediaType === 'video' && !videoUnlocked;
   const lightVideo = lowData && !lightVideoFailed ? lightVideoUrl(firstMediaUrl) : firstMediaUrl;
   const unlockVideo = () => { manualPauseRef.current = false; manualPlayRef.current = true; setPlayRequested(true); setVideoUnlocked(true); };
-  const [profileOverrides, setProfileOverrides] = useState<Record<string, Partial<User>>>({});
-
-  useEffect(() => {
-    const updateProfile = (event: Event) => {
-      const profile = (event as CustomEvent<Partial<User>>).detail;
-      const id = profile?.id;
-      if (id) setProfileOverrides(current => ({ ...current, [id]: { ...current[id], ...profile } }));
-    };
-    window.addEventListener('echat:profile-updated', updateProfile);
-    return () => window.removeEventListener('echat:profile-updated', updateProfile);
-  }, []);
+  // Live names/photos (Facebook-style): the author, the original of a share, and every commenter.
+  const liveProfiles = useLiveProfiles([post.authorId, post.sharedPost?.author?.id, ...(post.comments || []).map(comment => comment.authorId)]);
 
   const openPostDetail = () => {
     if (detailMode || showDetailModal) return;
@@ -312,7 +304,7 @@ export const PostCard: React.FC<PostCardProps> = ({
     name: 'EChat User',
     avatar: initialsAvatar('Echat User'),
     isVerified: false
-  }), ...(profileOverrides[post.authorId] || {}),
+  }), ...(!(post.author as { isPage?: boolean } | undefined)?.isPage ? withLive({}, liveProfiles[post.authorId]) : {}),
     // My own posts: show my current name + photo instantly after I change them.
     ...(user && post.authorId === user.id && !(post.author as { isPage?: boolean } | undefined)?.isPage ? { name: user.name, avatar: user.avatar } : {}) } as Partial<User> & { id: string; name: string; avatar: string };
 
@@ -641,17 +633,17 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* Re-shared post: the original is embedded */}
       {post.sharedPostId && !reelMode && (
         <div className="mx-4 mb-3 rounded-2xl border border-slate-200 overflow-hidden bg-slate-50/60">
-          {post.sharedPost ? (
+          {post.sharedPost ? (() => { const sharedAuthor = withLive({ ...post.sharedPost.author }, post.sharedPost.author.id ? liveProfiles[post.sharedPost.author.id] : undefined); return (
             <>
               <div className="p-3 flex items-center gap-2.5">
                 <img
-                  src={post.sharedPost.author.avatar || initialsAvatar(post.sharedPost.author.name || '')}
+                  src={sharedAuthor.avatar || initialsAvatar(sharedAuthor.name || '')}
                   alt=""
                   onClick={() => post.sharedPost?.author.id && onViewProfile(post.sharedPost.author.id)}
                   className="w-8 h-8 rounded-full object-cover cursor-pointer"
                 />
                 <div>
-                  <p className="text-xs font-bold text-slate-900">{post.sharedPost.author.name}</p>
+                  <p className="text-xs font-bold text-slate-900">{sharedAuthor.name}</p>
                   <p className="text-[10px] text-slate-400">
                     {new Date(post.sharedPost.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </p>
@@ -667,7 +659,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                   : <img src={post.sharedPost.mediaUrl} alt="" className="w-full max-h-80 object-cover" />
               )}
             </>
-          ) : (
+          ); })() : (
             <p className="p-4 text-xs text-slate-500">This post is no longer available.</p>
           )}
         </div>
@@ -857,7 +849,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 id: comment.authorId,
                 name: 'User',
                 avatar: initialsAvatar('Echat User')
-              }), ...(profileOverrides[comment.authorId] || {}), ...(user && comment.authorId === user.id ? { name: user.name, avatar: user.avatar } : {}) };
+              }), ...withLive({}, liveProfiles[comment.authorId]), ...(user && comment.authorId === user.id ? { name: user.name, avatar: user.avatar } : {}) };
               return (
                 <div key={comment.id} className="flex items-start gap-2.5 group">
                   <UserAvatar src={commentAuthor.avatar} name={commentAuthor.name || 'EChat user'} size={32} onClick={() => openAvatarViewer({ userId: comment.authorId, name: commentAuthor.name || 'EChat user', avatar: commentAuthor.avatar })} className="mt-0.5" />
