@@ -8,6 +8,8 @@ import { api, invalidateApiReadCache, type DirectConversation, type DirectMessag
 import type { MessageAttachment, User } from '../types';
 import { assetUrl } from '../services/apiBase';
 import { ChatMediaViewer, downloadChatAttachment, shareChatAttachment, type ChatAttachmentItem, type ChatMediaItem } from '../components/ChatMediaViewer';
+import { messagePreview } from '../../server/messagePreview';
+import { clearUnreadMessages } from '../services/unread';
 
 interface MessagesPageProps { initialUserId: string | null; onViewProfile: (userId: string) => void; }
 const timeLabel = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -18,18 +20,8 @@ const messagesAreEqual = (c: DirectMessage[], n: DirectMessage[]) => c.length===
 const fmtCall = (s:number)=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 
 const fileSizeLabel = (size:number) => size < 1024 ? `${size} B` : size < 1024*1024 ? `${(size/1024).toFixed(1)} KB` : `${(size/(1024*1024)).toFixed(1)} MB`;
-const conversationPreview = (message:DirectMessage) => {
-  const text=message.text||'';
-  if(text.startsWith('[SIGNAL]'))return '📞 Incoming call…';
-  if(text.startsWith('[CALL]'))return `📞 ${text.slice(6)}`;
-  if(text&&!text.startsWith('[IMAGE]')&&!text.startsWith('[FILE]')&&!text.startsWith('[VOICE]'))return text;
-  if(text.startsWith('[IMAGE]')||message.mediaType==='image')return '📷 Photo';
-  if(text.startsWith('[VOICE]')||message.mediaType==='audio')return '🎤 Voice message';
-  if(message.mediaType==='video')return '🎥 Video';
-  if(message.attachments?.length)return `📎 ${message.attachments.length} attachment${message.attachments.length===1?'':'s'}`;
-  if(text.startsWith('[FILE]'))return '📎 File';
-  return text;
-};
+// Same safe preview as notifications: never base64 (voice -> "🎤 Voice message"), text -> first 50 characters.
+const conversationPreview = (message:DirectMessage) => messagePreview(message);
 const inferredMimeType = (file:File) => {
   const extension=file.name.toLowerCase().split('.').pop()||'';
   const types:Record<string,string> = {
@@ -452,6 +444,9 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
         message.senderId === selectedUserId && message.receiverId === currentUser?.id && !message.readAt
       );
       if (hasUnread && !document.hidden) {
+        // Chat opened (also from a notification / push): badge drops now, server marks all read.
+        clearUnreadMessages(rows.filter(message => message.senderId === selectedUserId && message.receiverId === currentUser?.id && !message.readAt).length);
+        setConversations(previous => previous.map(item => item.user.id === selectedUserId ? { ...item, unreadCount: 0 } : item));
         void api.markDmRead(selectedUserId, currentUser?.id).then(() => {
           setConversations(previous => previous.map(item => item.user.id === selectedUserId ? { ...item, unreadCount: 0 } : item));
         }).catch(error => console.warn('[DM] Could not mark messages read:', error));
@@ -541,7 +536,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
     void startCall(selectedUserId, selectedUser.name, selectedUser.avatar, callType);
   };
 
-  const selectConversation=(item:DirectConversation)=>{ setSelectedUserId(item.user.id); setSelectedUser(item.user); setShowContacts(false); };
+  const selectConversation=(item:DirectConversation)=>{ setConversations(previous=>previous.map(c=>c.user.id===item.user.id?{...c,unreadCount:0}:c)); setSelectedUserId(item.user.id); setSelectedUser(item.user); setShowContacts(false); };
   const selectContact=(contact:User)=>{ setSelectedUserId(contact.id); setSelectedUser(contact); setShowContacts(false); };
   const chatHeight = Math.max(180, visibleViewportHeight - (keyboardOpen ? 90 : 150));
 

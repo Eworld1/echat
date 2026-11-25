@@ -1006,6 +1006,11 @@ class Database {
     return msg;
   }
 
+  /** Every message in the older chat store for this person (story replies, missed calls, orders, game invites...). */
+  listLegacyMessagesForUser(userId: string): Message[] {
+    return this.data.messages.filter(m => (m.senderId === userId || m.receiverId === userId) && !m.deletedFor?.includes(userId));
+  }
+
   /** Unread messages in the older chat store (the newer /api/dm store is counted separately). */
   countUnreadLegacyMessages(userId: string): number {
     return this.data.messages.filter(m => m.receiverId === userId && m.status !== 'seen' && !m.deletedFor?.includes(userId)).length;

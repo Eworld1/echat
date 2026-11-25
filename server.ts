@@ -10,6 +10,9 @@ import { db, hashPassword } from './server/db.js';
 import { SocketManager } from './server/socket.js';
 import { firebaseProjectId, firestore, getFirebaseAdminAuth } from './server/firebase-admin.js';
 import { verifyFirebaseIdToken } from './server/firebase-token.js';
+import { cleanNotificationText, messagePreview } from './server/messagePreview.js';
+import type { DirectMessageRecord } from './server/persistence.js';
+import type { Message } from './server/types.js';
 import { isValidPushToken, pushReady, removePushToken, savePushToken, sendPush, type PushPayload } from './server/push.js';
 import { RESPONSE_TIMING, VerificationError, completeReset, completeSignup, completeVerify, normalizeEmail, sendResetCode, sendSignupCode, sendVerifyCode, verificationStatus } from './server/verification.js';
 import { resolveLiveCreatedAt } from './serverless/live-age.js';
@@ -1123,7 +1126,7 @@ function audit(actor: any, action: string, target?: { type?: string; id?: string
 
 function populateNotification(n: any) {
   const actor = db.getUserById(n.actorId);
-  return { ...n, actor: actor ? db.sanitizeUser(actor) : null };
+  return { ...n, message: cleanNotificationText(String(n.message || '')), actor: actor ? db.sanitizeUser(actor) : null };
 }
 
 function populatePost(post: any) {
@@ -1694,11 +1697,30 @@ app.post('/api/stories/:id/view', (req: Request, res: Response) => {
 // ----------------- MESSAGES / CHAT ROUTES -----------------
 // Isolated 1-on-1 DM routes. These use the dedicated Mongo collection and never touch
 // the legacy `messages` array or its write-through persistence.
+/**
+ * Messages from the older chat store (story replies, missed calls, Marketplace orders, game invites)
+ * shown in the Messages page too, so every unread message can be opened and the badge can reach 0.
+ */
+function legacyAsDirect(m: Message): DirectMessageRecord {
+  const missed = /^__echat_missed_call__:(audio|video)$/.exec(m.text || '');
+  return {
+    _id: m.id,
+    senderId: m.senderId,
+    receiverId: m.receiverId,
+    text: missed ? `[CALL]Missed ${missed[1] === 'video' ? 'video' : 'voice'} call` : (m.text || ''),
+    ...(m.mediaUrl ? { mediaUrl: m.mediaUrl, mediaType: m.mediaType } : {}),
+    ...(m.audioDuration !== undefined ? { audioDuration: m.audioDuration } : {}),
+    ...(m.attachments?.length ? { attachments: m.attachments } : {}),
+    createdAt: m.createdAt,
+    readAt: m.status === 'seen' ? m.createdAt : null
+  } as DirectMessageRecord;
+}
+
 app.get('/api/dm/conversations', async (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
   try {
-    const messages = await db.listDirectMessagesForUser(authUser.id);
+    const messages = [...await db.listDirectMessagesForUser(authUser.id), ...db.listLegacyMessagesForUser(authUser.id).map(legacyAsDirect)];
     const latestByPartner = new Map<string, typeof messages[number]>();
     for (const message of messages) {
       const partnerId = message.senderId === authUser.id ? message.receiverId : message.senderId;
@@ -1728,7 +1750,8 @@ app.get('/api/dm/:userId', async (req: Request, res: Response) => {
   const otherUserId = String(req.params.userId || '');
   if (otherUserId !== authUser.id && !db.getUserById(otherUserId)) return res.status(404).json({ error: 'User not found' });
   try {
-    return res.json(await db.listDirectMessagesBetween(authUser.id, otherUserId));
+    const merged = [...await db.listDirectMessagesBetween(authUser.id, otherUserId), ...db.getConversation(authUser.id, otherUserId).map(legacyAsDirect)];
+    return res.json(merged.sort((a, b) => Number(a.createdAt) - Number(b.createdAt)));
   } catch (error) {
     console.error('[DM] Could not load conversation:', error);
     return res.status(503).json({ error: 'Direct messaging storage is unavailable' });
@@ -1742,7 +1765,9 @@ app.post('/api/dm/:userId/read', async (req: Request, res: Response) => {
   if (!db.getUserById(senderId)) return res.status(404).json({ error: 'User not found' });
   try {
     const readAt = Date.now();
+    // Opening a chat reads EVERYTHING from that person, in both chat stores, so the badge goes to 0.
     await db.markDirectMessagesRead(senderId, authUser.id, readAt);
+    db.markConversationSeen(authUser.id, senderId);
     db.markMessageNotificationsRead(authUser.id, senderId);
     socketManager.sendToUser(senderId, {
       type: 'direct_messages_read',
@@ -1832,10 +1857,11 @@ app.post('/api/dm/:userId', async (req: Request, res: Response) => {
         message,
         partner: db.sanitizeUser(authUser, receiverId)
       });
-      const preview = text && !text.startsWith('data:') ? text.slice(0, 80) : mediaType === 'audio' ? 'sent you a voice message' : mediaType === 'video' ? 'sent you a video' : attachments.length || mediaUrl ? 'sent you a photo or file' : 'sent you a message';
-      const notif = db.upsertMessageNotification(receiverId, authUser.id, text && !text.startsWith('data:') ? `${authUser.name}: ${preview}` : `${authUser.name} ${preview}`);
+      // Never base64 in a notification: voice -> "🎤 Voice message", photo -> "📷 Photo", text -> 50 chars.
+      const preview = messagePreview({ text, mediaType, mediaUrl, attachments });
+      const notif = db.upsertMessageNotification(receiverId, authUser.id, `${authUser.name}: ${preview}`);
       socketManager.sendToUser(receiverId, { type: 'new_notification', notification: populateNotification(notif) });
-      pushTo([receiverId], { kind: 'message', title: authUser.name, body: text && !text.startsWith('data:') ? preview : preview.charAt(0).toUpperCase() + preview.slice(1), url: `/messages?chat=${encodeURIComponent(authUser.id)}`, tag: `chat-${authUser.id}`, icon: pushIcon(authUser.avatar) });
+      pushTo([receiverId], { kind: 'message', title: authUser.name, body: preview, url: `/messages?chat=${encodeURIComponent(authUser.id)}`, tag: `chat-${authUser.id}`, icon: pushIcon(authUser.avatar) });
     }
     return res.status(201).json(message);
   } catch (error) {
@@ -1901,16 +1927,11 @@ app.post('/api/messages', (req: Request, res: Response) => {
   });
 
   // Bell notification for the recipient (one rolling entry per sender), pushed live
-  const what =
-    text ? String(text).slice(0, 80)
-    : mediaType === 'audio' ? 'sent you a voice message'
-    : mediaType === 'video' ? 'sent you a video'
-    : attachments.length ? `sent you ${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`
-    : 'sent you a photo';
-  const notif = db.upsertMessageNotification(receiverId, authUser.id, text ? `${authUser.name}: ${what}` : `${authUser.name} ${what}`);
+  const what = messagePreview({ text, mediaType, mediaUrl, attachments });
+  const notif = db.upsertMessageNotification(receiverId, authUser.id, `${authUser.name}: ${what}`);
   socketManager.sendToUser(receiverId, { type: 'new_notification', notification: populateNotification(notif) });
   // Push to the phone too (works with eChat closed). One notification per chat: newer ones replace it.
-  pushTo([receiverId], { kind: 'message', title: authUser.name, body: text ? String(text).slice(0, 160) : what.charAt(0).toUpperCase() + what.slice(1), url: `/messages?chat=${encodeURIComponent(authUser.id)}`, tag: `chat-${authUser.id}`, icon: pushIcon(authUser.avatar) });
+  pushTo([receiverId], { kind: 'message', title: authUser.name, body: what, url: `/messages?chat=${encodeURIComponent(authUser.id)}`, tag: `chat-${authUser.id}`, icon: pushIcon(authUser.avatar) });
 
   res.json(message);
 });
@@ -1947,6 +1968,7 @@ app.post('/api/messages/seen', (req: Request, res: Response) => {
 
   const { partnerId } = req.body;
   db.markConversationSeen(authUser.id, partnerId);
+  void db.markDirectMessagesRead(String(partnerId), authUser.id, Date.now()).catch(() => {});
   db.markMessageNotificationsRead(authUser.id, partnerId);
 
   socketManager.sendToUser(partnerId, {
@@ -2032,6 +2054,7 @@ app.get('/api/notifications', (req: Request, res: Response) => {
     const actor = db.getUserById(n.actorId);
     return {
       ...n,
+      message: cleanNotificationText(n.message), // older ones may contain voice/photo base64
       actor: actor ? db.sanitizeUser(actor) : null
     };
   });

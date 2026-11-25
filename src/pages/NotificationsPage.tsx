@@ -6,6 +6,7 @@ import { useSocket } from '../context/SocketContext';
 import { setUnreadCounts, useUnreadCounts } from '../services/unread';
 import { initialsAvatar } from '../utils/avatar';
 import type { Notification } from '../types';
+import { cleanNotificationText } from '../../server/messagePreview';
 
 /**
  * Notifications tab: EVERYTHING in one place, newest first - messages, friend requests, accepted
@@ -150,7 +151,7 @@ export const NotificationsPage: React.FC<Props> = ({ onOpenChat, onViewProfile, 
                       <span className={`absolute -bottom-0.5 -right-0.5 grid h-6 w-6 place-items-center rounded-full text-white ring-2 ring-white dark:ring-[#161033] ${look.bg}`}>{look.icon}</span>
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className={`block text-[14px] leading-snug ${n.read ? 'text-slate-700 dark:text-slate-300' : 'font-semibold text-slate-900 dark:text-white'}`}>{n.message}</span>
+                      <span className={`block text-[14px] leading-snug ${n.read ? 'text-slate-700 dark:text-slate-300' : 'font-semibold text-slate-900 dark:text-white'}`}>{cleanNotificationText(n.message)}</span>
                       <span className={`mt-0.5 block text-xs ${n.read ? 'text-slate-500' : 'font-semibold text-blue-600 dark:text-blue-300'}`}>{timeAgo(n.createdAt)}</span>
                     </span>
                     {!n.read && <span className="mt-2 h-3 w-3 shrink-0 rounded-full bg-blue-600" aria-label="Unread" />}

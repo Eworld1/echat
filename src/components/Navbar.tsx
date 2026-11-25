@@ -8,6 +8,7 @@ import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
 import { getNotifications as getFirestoreNotifications, markNotificationsRead as markFirestoreNotificationsRead } from '../services/db';
 import { setAppBadge } from '../services/push';
+import { cleanNotificationText } from '../../server/messagePreview';
 import { badgeLabel, setUnreadCounts, useUnreadCounts } from '../services/unread';
 import { User, Notification, Post } from '../types';
 import {
@@ -1026,7 +1027,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className={`text-xs leading-snug ${n.type === 'missed_call' ? 'text-red-700 font-semibold' : 'text-slate-800'}`}>
-                            {n.message}
+                            {cleanNotificationText(n.message)}
                           </p>
                           <span className="text-[10px] text-slate-400 mt-1 block">
                             {new Date(n.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -1064,7 +1065,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <p className={`text-xs font-bold ${toast.type === 'missed_call' ? 'text-red-600' : 'text-blue-600'}`}>
                   {toast.type === 'missed_call' ? 'Missed call' : toast.type === 'message' ? 'New message' : toast.type === 'announcement' ? 'Announcement' : 'Notification'}
                 </p>
-                <p className="text-xs text-slate-700 leading-snug break-words">{toast.message}</p>
+                <p className="text-xs text-slate-700 leading-snug break-words">{cleanNotificationText(toast.message || '')}</p>
                 {toast.type === 'message' && (
                   <button
                     onClick={() => { setToast(null); onOpenMessenger(); }}

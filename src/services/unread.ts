@@ -24,6 +24,11 @@ function publish(next: UnreadCounts) {
   subscribers.forEach(fn => fn(counts));
 }
 
+/** A chat with `count` unread messages was just opened: drop the badge now, the server confirms it. */
+export function clearUnreadMessages(count: number) {
+  if (count > 0) publish({ ...counts, messages: Math.max(0, counts.messages - count) });
+}
+
 /** Instant local update (e.g. a chat was just opened) before the server confirms it. */
 export function setUnreadCounts(partial: Partial<UnreadCounts>) {
   publish({ ...counts, ...partial });
