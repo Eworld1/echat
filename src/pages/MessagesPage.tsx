@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChatMediaGate } from '../components/LowData';
-import { ArrowLeft, Camera, Download, ExternalLink, FileArchive, FileAudio, FileText, Image as ImageIcon, Mic, MessageSquare, Paperclip, Phone, Play, SendHorizontal, Share2, Smile, Square, Video, X } from 'lucide-react';
+import { ArrowLeft, Camera, Check, Download, MoreVertical, Pencil, Trash2, ExternalLink, FileArchive, FileAudio, FileText, Image as ImageIcon, Mic, MessageSquare, Paperclip, Phone, Play, SendHorizontal, Share2, Smile, Square, Video, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { avatarClick } from '../components/AvatarViewer';
@@ -12,13 +12,17 @@ import { messagePreview } from '../../server/messagePreview';
 import { clearUnreadMessages } from '../services/unread';
 import { dmChatId, useActivitySender, useChatActivity } from '../services/chatActivity';
 import { ChatActivityIndicator } from '../components/ChatActivityIndicator';
+import { ConfirmDialog, DeleteMessageModal, MessageActionSheet, ReplyQuote, SwipeableMessage, VoiceNotePreview } from '../components/chat/ChatActions';
 
 interface MessagesPageProps { initialUserId: string | null; onViewProfile: (userId: string) => void; }
 const timeLabel = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const MAX_MESSAGE_LENGTH = 2000;
 const INPUT_MAX_HEIGHT = 100;
 const dedupeMessages = (rows: DirectMessage[]) => { const m = new Map(rows.map(x => [x._id, x])); return [...m.values()].sort((a,b)=>a.createdAt-b.createdAt); };
-const messagesAreEqual = (c: DirectMessage[], n: DirectMessage[]) => c.length===n.length && c.every((msg,i)=>{ const nx=n[i]; return msg._id===nx._id && msg.senderId===nx.senderId && msg.receiverId===nx.receiverId && msg.text===nx.text && msg.mediaUrl===nx.mediaUrl && msg.mediaType===nx.mediaType && JSON.stringify(msg.attachments||[])===JSON.stringify(nx.attachments||[]) && msg.createdAt===nx.createdAt && msg.readAt===nx.readAt; });
+const messagesAreEqual = (c: DirectMessage[], n: DirectMessage[]) => c.length===n.length && c.every((msg,i)=>{ const nx=n[i]; return msg._id===nx._id && msg.senderId===nx.senderId && msg.receiverId===nx.receiverId && msg.text===nx.text && msg.mediaUrl===nx.mediaUrl && msg.mediaType===nx.mediaType && JSON.stringify(msg.attachments||[])===JSON.stringify(nx.attachments||[]) && msg.createdAt===nx.createdAt && msg.readAt===nx.readAt && msg.editedAt===nx.editedAt && Boolean(msg.deletedForEveryone)===Boolean(nx.deletedForEveryone) && msg.replyTo?.id===nx.replyTo?.id; });
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
+const MEDIA_TEXT = /^(\[(VOICE|AUDIO|IMAGE|VIDEO|FILE|CALL|SIGNAL)\]|data:|__echat_missed_call__)/;
+const isPlainText = (m: DirectMessage) => Boolean(m.text) && !MEDIA_TEXT.test(m.text) && !m.mediaUrl && !m.attachments?.length && !m.deletedForEveryone;
 const fmtCall = (s:number)=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 
 const fileSizeLabel = (size:number) => size < 1024 ? `${size} B` : size < 1024*1024 ? `${(size/1024).toFixed(1)} KB` : `${(size/(1024*1024)).toFixed(1)} MB`;
@@ -74,9 +78,15 @@ const MessageBubble: React.FC<{
   onOpenMedia: (id:string)=>void;
   onDownload: (item:ChatAttachmentItem)=>void;
   onShare: (item:ChatAttachmentItem)=>void;
-}> = ({message, isMine, onOpenMedia, onDownload, onShare}) => {
+  /** Tapping the quoted message scrolls to the original. */
+  onQuoteClick?: (id:string)=>void;
+  partnerName?: string;
+  myId?: string;
+}> = ({message, isMine, onOpenMedia, onDownload, onShare, onQuoteClick, partnerName, myId}) => {
   const text = message.text || '';
-  if (text.startsWith('[VOICE]')) return <div className={`rounded-2xl px-4 py-2.5 ${isMine?'rounded-br-md bg-blue-600':'rounded-bl-md border border-slate-200 bg-white'}`}><audio controls src={text.slice(7)} className="w-56 max-w-full" /></div>;
+  if (message.deletedForEveryone) return <div className={`flex items-center gap-1.5 rounded-2xl px-3 py-2.5 text-sm italic ${isMine ? 'rounded-br-md bg-blue-600/70 text-white/90' : 'rounded-bl-md border border-slate-200 bg-white text-slate-500'}`}><span aria-hidden="true">🚫</span>{isMine ? 'You deleted this message' : 'This message was deleted'}</div>;
+  const quote = message.replyTo ? <ReplyQuote isMine={isMine} name={message.replyTo.senderId === myId ? 'You' : (message.replyTo.senderName || partnerName || 'Message')} preview={message.replyTo.preview} onClick={() => onQuoteClick?.(message.replyTo!.id)} /> : null;
+  if (text.startsWith('[VOICE]')) return <div className={`rounded-2xl px-3 py-2.5 ${isMine?'rounded-br-md bg-blue-600':'rounded-bl-md border border-slate-200 bg-white'}`}>{quote}<audio controls src={text.slice(7)} className="w-56 max-w-full" /></div>;
   const attachments = getMessageAttachments(message);
   const displayText = text.startsWith('[IMAGE]') || text.startsWith('[FILE]') ? '' : text;
   const cls = `whitespace-pre-wrap break-words rounded-2xl px-3 py-2.5 text-sm leading-relaxed ${isMine ? 'rounded-br-md bg-blue-600 text-white' : 'rounded-bl-md border border-slate-200 bg-white text-slate-900'}`;
@@ -85,6 +95,7 @@ const MessageBubble: React.FC<{
     <button type="button" onClick={()=>onShare(item)} aria-label={`Share ${item.name}`} className="grid h-9 w-9 place-items-center rounded-full bg-black/70 text-white shadow-sm"><Share2 size={16}/></button>
   </div>;
   return <div className={cls}>
+    {quote}
     {displayText && <p>{displayText.startsWith('[CALL]') ? `📞 ${displayText.slice(6)}` : displayText}</p>}
     {attachments.map(item => item.kind === 'image' || item.kind === 'video'
       ? <ChatMediaGate key={item.id} url={item.url} kind={item.kind} size={item.size} name={item.name}><div className="group relative mt-1.5 overflow-hidden rounded-xl">
@@ -134,17 +145,24 @@ interface ComposerProps {
   value:string;
   onChange:(v:string)=>void;
   onSend:()=>void|Promise<void>;
-  onSendMedia:(text:string)=>Promise<void>;
+  /** Resolves true when sent (the voice preview only closes after a successful send). */
+  onSendMedia:(text:string)=>Promise<boolean|void>;
   onSendAttachments:(files:File[],caption:string)=>Promise<number>;
   sending:boolean;
   uploadStatus:string;
   /** typing / recording status for the other person ("… is typing", "… is recording a voice message") */
   onTyping?:(text:string)=>void;
   onRecording?:(on:boolean)=>void;
+  /** "Replying to …" / "Editing message" bar shown above the input. */
+  topBar?:React.ReactNode;
+  /** Editing an existing message: Enter / ✓ saves it, voice and attachments are hidden. */
+  editing?:boolean;
+  /** Changes when Reply / Edit is chosen, so the keyboard opens on the input. */
+  focusSignal?:number;
 }
 const iconButton = 'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
 
-const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, onSend, onSendMedia, onSendAttachments, sending, uploadStatus, onTyping, onRecording }) => {
+const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, onSend, onSendMedia, onSendAttachments, sending, uploadStatus, onTyping, onRecording, topBar, editing, focusSignal }) => {
   const onChange = (text:string) => { setValue(text); onTyping?.(text); };
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -159,6 +177,12 @@ const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, o
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
+  // Voice note preview: listen first, then Send or Delete (never auto-sent).
+  const [voicePreview, setVoicePreview] = useState<{ blob: Blob; seconds: number } | null>(null);
+  const [voiceSending, setVoiceSending] = useState(false);
+  const recSecsRef = useRef(0);
+  recSecsRef.current = recSecs;
+  useEffect(() => { if (focusSignal) textareaRef.current?.focus(); }, [focusSignal]);
   const [showCamera, setShowCamera] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const camStreamRef = useRef<MediaStream|null>(null);
@@ -211,10 +235,20 @@ const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, o
     textareaRef.current?.focus();
   };
   const startRecording = async () => {
-    try { const stream=await navigator.mediaDevices.getUserMedia({audio:true}); const rec=new MediaRecorder(stream); chunksRef.current=[]; recRef.current=rec; rec.ondataavailable=e=>{ if(e.data.size) chunksRef.current.push(e.data); }; rec.onstop=async()=>{ stream.getTracks().forEach(tr=>tr.stop()); const blob=new Blob(chunksRef.current,{type:'audio/webm'}); const reader=new FileReader(); reader.onload=()=>{ void onSendMedia(`[VOICE]${reader.result}`); }; reader.readAsDataURL(blob); }; rec.start(); setRecording(true); onRecording?.(true); setRecSecs(0); recTimerRef.current=window.setInterval(()=>setRecSecs(s=>s+1),1000); }
+    try { const stream=await navigator.mediaDevices.getUserMedia({audio:true}); const rec=new MediaRecorder(stream); chunksRef.current=[]; recRef.current=rec; rec.ondataavailable=e=>{ if(e.data.size) chunksRef.current.push(e.data); }; rec.onstop=()=>{ stream.getTracks().forEach(tr=>tr.stop()); const blob=new Blob(chunksRef.current,{type:rec.mimeType||'audio/webm'}); if(blob.size>=1200&&recSecsRef.current>=1) setVoicePreview({ blob, seconds: recSecsRef.current }); else setNotice('Recording too short. Hold the mic a bit longer.'); }; rec.start(250); setRecording(true); onRecording?.(true); setRecSecs(0); recTimerRef.current=window.setInterval(()=>setRecSecs(s=>s+1),1000); }
     catch { setNotice('Mic permission denied. Allow microphone in browser.'); }
   };
   const stopRecording = () => { if(recTimerRef.current) window.clearInterval(recTimerRef.current); recRef.current?.stop(); setRecording(false); onRecording?.(false); };
+  const sendVoicePreview = async () => {
+    if(!voicePreview||voiceSending) return;
+    setVoiceSending(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => { const reader=new FileReader(); reader.onload=()=>resolve(String(reader.result)); reader.onerror=()=>reject(reader.error); reader.readAsDataURL(voicePreview.blob); });
+      const ok = await onSendMedia(`[VOICE]${dataUrl}`);
+      if(ok!==false) setVoicePreview(null);
+    } catch { setNotice('Could not read the recording. Please record again.'); }
+    finally { setVoiceSending(false); }
+  };
   const takePhoto = () => { const v=videoRef.current; if(!v) return; const c=document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d')?.drawImage(v,0,0); void onSendMedia(`[IMAGE]${c.toDataURL('image/jpeg',0.85)}`); setShowCamera(false); };
   return (
     <form onSubmit={e=>{e.preventDefault(); void submit();}} className="relative shrink-0 border-t border-slate-200 bg-white px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-2 md:pb-3">
@@ -226,6 +260,7 @@ const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, o
       </div>}
       {showCamera && <div className="absolute bottom-full left-2 right-2 z-30 mb-2 rounded-2xl border bg-black p-2 shadow-xl"><video ref={videoRef} autoPlay playsInline className="w-full rounded-xl" /><div className="mt-2 flex justify-center gap-2"><button type="button" onClick={takePhoto} className="rounded-full bg-white px-4 py-2 text-sm font-bold">📸 Take Photo</button><button type="button" onClick={()=>setShowCamera(false)} className="rounded-full bg-slate-700 px-4 py-2 text-sm font-bold text-white">Cancel</button></div></div>}
       {notice && <p role="status" className="mb-2 px-1 text-xs text-slate-500">{notice}</p>}
+      {topBar}
       {pendingAttachments.length>0&&<div className="mb-2 rounded-2xl border border-slate-200 bg-slate-50 p-2.5">
         <div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-700">{pendingAttachments.length} attachment{pendingAttachments.length===1?'':'s'}</span>{uploadStatus&&<span role="status" className="truncate text-[11px] text-blue-700">{uploadStatus}</span>}</div>
         <div className="flex gap-2 overflow-x-auto pb-2">
@@ -241,17 +276,19 @@ const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, o
       </div>}
       <input ref={photoVideoFileRef} type="file" accept="image/*,video/*" multiple className="hidden" disabled={sending} onChange={addFiles} />
       <input ref={fileRef} type="file" accept="*/*" multiple className="hidden" disabled={sending} onChange={addFiles} />
+      {voicePreview ? <VoiceNotePreview blob={voicePreview.blob} seconds={voicePreview.seconds} sending={voiceSending||sending} onSend={()=>void sendVoicePreview()} onDelete={()=>setVoicePreview(null)} /> :
       <div className="flex min-w-0 items-end gap-0.5 sm:gap-1">
         <button ref={emojiButtonRef} type="button" onMouseDown={e=>e.preventDefault()} onClick={()=>setPickerOpen(o=>!o)} aria-label="Emoji" className={`${iconButton} ${pickerOpen?'bg-blue-50 text-blue-600':''}`}><Smile size={22}/></button>
-        <button type="button" onClick={()=>{setPickerOpen(false);setAttachSheetOpen(o=>!o);}} aria-label="Attach files" aria-expanded={attachSheetOpen} title="Attach files, images, or videos" className={iconButton} disabled={sending}><Paperclip size={21}/></button>
+        {!editing && <button type="button" onClick={()=>{setPickerOpen(false);setAttachSheetOpen(o=>!o);}} aria-label="Attach files" aria-expanded={attachSheetOpen} title="Attach files, images, or videos" className={iconButton} disabled={sending}><Paperclip size={21}/></button>}
         <div className="flex min-w-0 flex-1 items-end rounded-3xl border border-transparent bg-slate-100 px-4 py-2 focus-within:border-blue-300 focus-within:bg-white">
-          {recording ? <div className="flex w-full items-center gap-2 text-sm text-red-600"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-600"/> Recording {fmtCall(recSecs)} — tap mic to send</div> : pendingAttachments.length ? <span className="w-full py-1 text-xs text-slate-500">{pendingAttachments.length} file{pendingAttachments.length===1?'':'s'} ready to send</span> : <textarea ref={textareaRef} value={value} rows={1} maxLength={MAX_MESSAGE_LENGTH} placeholder="Type a message" aria-label="Type a message" onChange={e=>onChange(e.target.value.slice(0,MAX_MESSAGE_LENGTH))} onKeyDown={e=>{ if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing){ e.preventDefault(); void submit(); } }} className="block max-h-[100px] w-full resize-none bg-transparent text-sm leading-5 text-slate-900 outline-none placeholder:text-slate-400" />}
+          {recording ? <div className="flex w-full items-center gap-2 text-sm text-red-600"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-600"/> Recording {fmtCall(recSecs)} — tap ■ to stop and listen</div> : pendingAttachments.length ? <span className="w-full py-1 text-xs text-slate-500">{pendingAttachments.length} file{pendingAttachments.length===1?'':'s'} ready to send</span> : <textarea ref={textareaRef} value={value} rows={1} maxLength={MAX_MESSAGE_LENGTH} placeholder="Type a message" aria-label="Type a message" onChange={e=>onChange(e.target.value.slice(0,MAX_MESSAGE_LENGTH))} onKeyDown={e=>{ if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing){ e.preventDefault(); void submit(); } }} className="block max-h-[100px] w-full resize-none bg-transparent text-sm leading-5 text-slate-900 outline-none placeholder:text-slate-400" />}
         </div>
-        <button type="button" onClick={()=>setShowCamera(s=>!s)} aria-label="Camera" title="Take photo" className={iconButton} disabled={sending}><Camera size={21}/></button>
+        {!editing && <button type="button" onClick={()=>setShowCamera(s=>!s)} aria-label="Camera" title="Take photo" className={iconButton} disabled={sending}><Camera size={21}/></button>}
         {recording ? <button type="button" onClick={stopRecording} aria-label="Stop recording" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-600 text-white"><Square size={18}/></button>
-        : hasText || pendingAttachments.length ? <button type="submit" disabled={sending} aria-label="Send message" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"><SendHorizontal size={19}/></button>
+        : hasText || pendingAttachments.length ? <button type="submit" disabled={sending} aria-label={editing ? 'Save edit' : 'Send message'} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:opacity-60">{editing ? <Check size={20}/> : <SendHorizontal size={19}/>}</button>
+        : editing ? null
         : <button type="button" onClick={startRecording} aria-label="Record a voice message" title="Voice message" className={iconButton}><Mic size={21}/></button>}
-      </div>
+      </div>}
     </form>
   );
 };
@@ -270,6 +307,19 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
   const partnerActivity = useChatActivity(activityChatId, currentUser?.id);
   const activityReceivers = useMemo(() => (selectedUserId ? [selectedUserId] : []), [selectedUserId]);
   const myActivity = useActivitySender(activityChatId, currentUser ? { id: currentUser.id, name: currentUser.name } : null, activityReceivers);
+  // Reply / edit / delete / clear chat (WhatsApp-style)
+  const [replyTo, setReplyTo] = useState<DirectMessage|null>(null);
+  const [editing, setEditing] = useState<DirectMessage|null>(null);
+  const [actionFor, setActionFor] = useState<DirectMessage|null>(null);
+  const [deleteFor, setDeleteFor] = useState<DirectMessage|null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearBusy, setClearBusy] = useState(false);
+  const [clearError, setClearError] = useState('');
+  const [highlightId, setHighlightId] = useState<string|null>(null);
+  const [focusSignal, setFocusSignal] = useState(0);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingChat, setLoadingChat] = useState(false);
   const [chatReloadKey, setChatReloadKey] = useState(0);
@@ -470,6 +520,36 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
     return () => { alive = false; };
   }, [selectedUserId, currentUser?.id, isOnline, chatReloadKey]);
 
+  // Switching chats: drop any reply / edit / menus from the previous chat.
+  useEffect(() => { setReplyTo(null); setEditing(null); setActionFor(null); setDeleteFor(null); setChatMenuOpen(false); setClearOpen(false); }, [selectedUserId]);
+
+  // Edits / deletes / clears from either phone arrive live over the socket.
+  useEffect(() => {
+    const onChange = (event: Event) => {
+      const data = (event as CustomEvent<{ type: string; message?: DirectMessage; id?: string; partnerId?: string }>).detail;
+      if (!data) return;
+      if (data.type === 'direct_message_updated' && data.message) {
+        const updated = data.message;
+        setMessages(p => p.map(m => m._id === updated._id ? updated : m));
+        setConversations(p => p.map(c => c.lastMessage._id === updated._id ? { ...c, lastMessage: updated } : c));
+        if (updated.deletedForEveryone) { setReplyTo(r => r?._id === updated._id ? null : r); setEditing(e => { if (e?._id === updated._id) { setDraft(''); return null; } return e; }); }
+        const partnerId = updated.senderId === currentUser?.id ? updated.receiverId : updated.senderId;
+        invalidateApiReadCache(`dm:conversation:${partnerId}`, currentUser?.id);
+      } else if (data.type === 'direct_message_hidden' && data.id) {
+        setMessages(p => p.filter(m => m._id !== data.id));
+        invalidateApiReadCache('dm:conversations', currentUser?.id);
+        void loadConversations();
+      } else if (data.type === 'dm_chat_cleared' && data.partnerId) {
+        if (data.partnerId === selectedUserIdRef.current) setMessages([]);
+        invalidateApiReadCache('dm:conversations', currentUser?.id);
+        invalidateApiReadCache(`dm:conversation:${data.partnerId}`, currentUser?.id);
+        void loadConversations();
+      }
+    };
+    window.addEventListener('echat:dm-change', onChange);
+    return () => window.removeEventListener('echat:dm-change', onChange);
+  }, [currentUser?.id, loadConversations]);
+
   const sortedMessages = useMemo(()=>messages.filter(m=>!(m.text||'').startsWith('[SIGNAL]')).slice().sort((a,b)=>a.createdAt-b.createdAt),[messages]);
   const mediaItems = useMemo(
     () => sortedMessages.flatMap(getMessageAttachments).filter((item):item is ChatMediaItem=>item.kind==='image'||item.kind==='video'),
@@ -486,8 +566,51 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
       return [updated, ...previous.filter(item => item.user.id !== partner.id)].sort((a, b) => b.lastMessage.createdAt - a.lastMessage.createdAt);
     });
   };
-  const send = async () => { const text=draft.trim(); if(!selectedUserId||!text||sending) return; setSending(true); setSendError(''); try{ const sent=await api.sendDm(selectedUserId,text,undefined,currentUser?.id); isNearBottomRef.current=true; setMessages(p=>dedupeMessages([...p,sent])); updateConversationPreview(sent); setDraft(''); }catch(err){ console.error('[DM] User send failed',err); setSendError('Message could not be sent. Please try again.'); }finally{ setSending(false); } };
-  const sendMedia = async (text:string) => { if(!selectedUserId||sending) return; setSending(true); setSendError(''); try{ const sent=await api.sendDm(selectedUserId,text,undefined,currentUser?.id); isNearBottomRef.current=true; setMessages(p=>dedupeMessages([...p,sent])); updateConversationPreview(sent); }catch(err){ console.error('[DM] Media send failed',err); setSendError('Media could not be sent. Please try again.'); }finally{ setSending(false); } };
+  const saveEdit = async () => {
+    const target=editing; const text=draft.trim();
+    if(!target||!text||sending) return;
+    if(text===target.text){ setEditing(null); setDraft(''); return; }
+    setSending(true); setSendError('');
+    try{ const updated=await api.editDm(target._id,text); setMessages(p=>p.map(m=>m._id===updated._id?updated:m)); setConversations(p=>p.map(c=>c.lastMessage._id===updated._id?{...c,lastMessage:updated}:c)); setEditing(null); setDraft(''); }
+    catch(err){ setSendError(err instanceof Error?err.message:'Could not edit this message.'); }
+    finally{ setSending(false); }
+  };
+  const send = async () => { if(editing){ await saveEdit(); return; } const text=draft.trim(); if(!selectedUserId||!text||sending) return; setSending(true); setSendError(''); try{ const sent=await api.sendDm(selectedUserId,text,undefined,currentUser?.id,replyTo?._id); isNearBottomRef.current=true; setMessages(p=>dedupeMessages([...p,sent])); updateConversationPreview(sent); setDraft(''); setReplyTo(null); }catch(err){ console.error('[DM] User send failed',err); setSendError('Message could not be sent. Please try again.'); }finally{ setSending(false); } };
+  const sendMedia = async (text:string):Promise<boolean> => { if(!selectedUserId||sending) return false; setSending(true); setSendError(''); try{ const sent=await api.sendDm(selectedUserId,text,undefined,currentUser?.id,replyTo?._id); isNearBottomRef.current=true; setMessages(p=>dedupeMessages([...p,sent])); updateConversationPreview(sent); setReplyTo(null); return true; }catch(err){ console.error('[DM] Media send failed',err); setSendError('Media could not be sent. Please try again.'); return false; }finally{ setSending(false); } };
+  const canEditMessage = (m:DirectMessage) => m.senderId===currentUser?.id && isPlainText(m) && Date.now()-m.createdAt<=EDIT_WINDOW_MS;
+  const startReply = (m:DirectMessage) => { if(m.deletedForEveryone) return; setEditing(null); setReplyTo(m); setActionFor(null); setFocusSignal(n=>n+1); };
+  const startEdit = (m:DirectMessage) => { setReplyTo(null); setEditing(m); setDraft(m.text); setActionFor(null); setFocusSignal(n=>n+1); };
+  const cancelEdit = () => { setEditing(null); setDraft(''); };
+  const copyMessage = (m:DirectMessage) => { setActionFor(null); void navigator.clipboard?.writeText(m.text).then(()=>setMediaNotice('Copied')).catch(()=>setMediaNotice('Could not copy')); };
+  const confirmDelete = async (scope:'everyone'|'me') => {
+    const target=deleteFor; if(!target) return;
+    setDeleteBusy(true); setDeleteError('');
+    try {
+      await api.deleteDm(target._id, scope);
+      if(scope==='me') setMessages(p=>p.filter(m=>m._id!==target._id));
+      else setMessages(p=>p.map(m=>m._id===target._id?{ _id:m._id, senderId:m.senderId, receiverId:m.receiverId, text:'', createdAt:m.createdAt, readAt:m.readAt, deletedForEveryone:true }:m));
+      if(replyTo?._id===target._id) setReplyTo(null);
+      if(editing?._id===target._id) cancelEdit();
+      setDeleteFor(null);
+      invalidateApiReadCache('dm:conversations', currentUser?.id);
+      void loadConversations();
+    } catch(err) { setDeleteError(err instanceof Error?err.message:'Could not delete this message.'); }
+    finally { setDeleteBusy(false); }
+  };
+  const confirmClearChat = async () => {
+    if(!selectedUserId) return;
+    setClearBusy(true); setClearError('');
+    try { await api.clearDmChat(selectedUserId); setMessages([]); setReplyTo(null); cancelEdit(); setClearOpen(false); setMediaNotice('Chat cleared'); invalidateApiReadCache('dm:conversations', currentUser?.id); void loadConversations(); }
+    catch(err) { setClearError(err instanceof Error?err.message:'Could not clear this chat.'); }
+    finally { setClearBusy(false); }
+  };
+  const scrollToMessage = (id:string) => {
+    const el=document.getElementById(`msg-${id}`);
+    if(!el){ setMediaNotice('The original message is no longer available'); return; }
+    el.scrollIntoView({ behavior:'smooth', block:'center' });
+    setHighlightId(id);
+    window.setTimeout(()=>setHighlightId(current=>current===id?null:current), 1600);
+  };
   const sendAttachments = async (files:File[], caption:string):Promise<number> => {
     if(!selectedUserId||!files.length||sending)return 0;
     const receiverId=selectedUserId;
@@ -565,15 +688,27 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
             <button type="button" onClick={()=>onViewProfile(selectedUser.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left"><img src={selectedUser.avatar} alt="" title="View profile picture" onClick={avatarClick({ userId: selectedUser.id, name: selectedUser.name, avatar: selectedUser.avatar })} className="h-10 w-10 shrink-0 cursor-pointer rounded-full object-cover"/><span className="min-w-0 flex-1"><span className="block truncate font-bold text-slate-900">{selectedUser.name}</span>{!isOnline ? <span className="block text-[11px] text-slate-400">Offline. Reconnect to load messages</span> : !isConnected ? <span className="block text-[11px] text-slate-400">Connecting…</span> : null}</span></button>
             <button type="button" onClick={()=>startDmCall('audio')} title="Voice call" aria-label="Voice call" className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100"><Phone size={20}/></button>
             <button type="button" onClick={()=>startDmCall('video')} title="Video call" aria-label="Video call" className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100"><Video size={20}/></button>
+            <div className="relative">
+              <button type="button" onClick={()=>setChatMenuOpen(o=>!o)} aria-label="Chat options" aria-expanded={chatMenuOpen} className="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100"><MoreVertical size={20}/></button>
+              {chatMenuOpen && <>
+                <button type="button" aria-label="Close menu" onClick={()=>setChatMenuOpen(false)} className="fixed inset-0 z-30 cursor-default" />
+                <div role="menu" className="absolute right-0 top-11 z-40 w-48 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                  <button type="button" role="menuitem" onClick={()=>{setChatMenuOpen(false);setClearError('');setClearOpen(true);}} className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"><Trash2 size={18}/>Clear chat</button>
+                </div>
+              </>}
+            </div>
           </div>
           <ChatActivityIndicator activity={partnerActivity} className="shrink-0 border-b border-slate-100 bg-white" />
           <div ref={messagesContainerRef} onScroll={e=>{ const c=e.currentTarget; isNearBottomRef.current = c.scrollHeight - c.clientHeight - c.scrollTop <= 120; }} className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-50 px-3 pt-5 pb-4 sm:px-6">
             {loadingChat && sortedMessages.length===0 && <p className="m-auto text-sm text-slate-500">Loading messages…</p>}
             {!loadingChat && !hasLoadedChat && sortedMessages.length===0 && <p className="m-auto max-w-xs text-center text-sm text-slate-500">{isOnline ? <>Unable to load messages. <button type="button" onClick={()=>{setSendError('');setChatReloadKey(key=>key+1);}} className="font-bold underline">Retry</button></> : 'Offline. Reconnect to load messages.'}</p>}
             {!loadingChat && hasLoadedChat && sortedMessages.length===0 && <p className="m-auto max-w-xs text-center text-sm text-slate-500">No messages yet. Say hi to start chatting.</p>}
-            {sortedMessages.map(m=><div key={m._id} className={`max-w-[82%] sm:max-w-[70%] ${m.senderId===currentUser?.id?'self-end':'self-start'}`}><MessageBubble message={m} isMine={m.senderId===currentUser?.id} onOpenMedia={openMedia} onDownload={item=>void downloadAttachment(item)} onShare={item=>void shareAttachment(item)}/><div className={`mt-1 text-[10px] text-slate-400 ${m.senderId===currentUser?.id?'text-right':''}`}>{timeLabel(m.createdAt)}</div></div>)}
+            {sortedMessages.map(m=><SwipeableMessage key={m._id} id={m._id} isMine={m.senderId===currentUser?.id} highlighted={highlightId===m._id} onReply={()=>startReply(m)} onLongPress={()=>setActionFor(m)}><MessageBubble message={m} isMine={m.senderId===currentUser?.id} onOpenMedia={openMedia} onDownload={item=>void downloadAttachment(item)} onShare={item=>void shareAttachment(item)} onQuoteClick={scrollToMessage} partnerName={selectedUser?.name} myId={currentUser?.id}/><div className={`mt-1 text-[10px] text-slate-400 ${m.senderId===currentUser?.id?'text-right':''}`}>{m.editedAt&&!m.deletedForEveryone&&<span className="mr-1 italic">Edited ·</span>}{timeLabel(m.createdAt)}</div></SwipeableMessage>)}
           </div>
-          <div className="z-10 shrink-0"><MessageComposer value={draft} onChange={setDraft} onSend={()=>{ myActivity.sent(); return send(); }} onSendMedia={text=>{ myActivity.sent(); return sendMedia(text); }} onSendAttachments={(files,caption)=>{ myActivity.sent(); return sendAttachments(files,caption); }} sending={sending} uploadStatus={uploadStatus} onTyping={myActivity.typed} onRecording={myActivity.recording}/></div>
+          <div className="z-10 shrink-0"><MessageComposer key={selectedUserId||'none'} focusSignal={focusSignal} editing={Boolean(editing)} topBar={editing ? <div className="mb-2 flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 ring-1 ring-blue-200"><Pencil size={16} className="shrink-0 text-blue-600"/><span className="min-w-0 flex-1"><span className="block text-xs font-bold text-blue-700">Editing message</span><span className="block truncate text-xs text-slate-600">{editing.text}</span></span><button type="button" onClick={cancelEdit} aria-label="Cancel editing" className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-500 hover:bg-blue-100"><X size={16}/></button></div> : replyTo ? <ReplyQuote name={replyTo.senderId===currentUser?.id ? 'You' : (selectedUser?.name || 'Message')} preview={`Replying to ${replyTo.senderId===currentUser?.id ? 'yourself' : (selectedUser?.name?.split(' ')[0] || 'message')}: ${messagePreview(replyTo)}`} onClose={()=>setReplyTo(null)} /> : null} value={draft} onChange={setDraft} onSend={()=>{ myActivity.sent(); return send(); }} onSendMedia={text=>{ myActivity.sent(); return sendMedia(text); }} onSendAttachments={(files,caption)=>{ myActivity.sent(); return sendAttachments(files,caption); }} sending={sending} uploadStatus={uploadStatus} onTyping={myActivity.typed} onRecording={myActivity.recording}/></div>
+          {actionFor && <MessageActionSheet preview={messagePreview(actionFor)} canEdit={canEditMessage(actionFor)} canCopy={isPlainText(actionFor)} onReply={()=>startReply(actionFor)} onCopy={()=>copyMessage(actionFor)} onEdit={()=>startEdit(actionFor)} onDelete={()=>{ const target=actionFor; setActionFor(null); setDeleteError(''); setDeleteFor(target); }} onClose={()=>setActionFor(null)} />}
+          {deleteFor && <DeleteMessageModal canDeleteForEveryone={deleteFor.senderId===currentUser?.id && !deleteFor.deletedForEveryone} busy={deleteBusy} error={deleteError} onEveryone={()=>void confirmDelete('everyone')} onMe={()=>void confirmDelete('me')} onCancel={()=>setDeleteFor(null)} />}
+          {clearOpen && <ConfirmDialog title="Clear this chat?" message="Are you sure you want to clear all messages in this chat? This cannot be undone." confirmLabel="Clear chat" busy={clearBusy} error={clearError} onConfirm={()=>void confirmClearChat()} onCancel={()=>setClearOpen(false)} />}
         </> : <div className="hidden flex-1 flex-col items-center justify-center text-center md:flex"><div className="mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50 text-blue-600"><MessageSquare size={28}/></div><h2 className="font-bold text-slate-800">Your messages</h2><p className="mt-1 text-sm text-slate-500">Choose someone to open a private chat.</p></div>}
       </section>
     </div>

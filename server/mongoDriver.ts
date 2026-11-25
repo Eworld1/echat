@@ -1,4 +1,4 @@
-import type { CollectionChange, CollectionName, DirectMessageRecord, PersistenceDriver, Snapshot } from './persistence.js';
+import type { CollectionChange, CollectionName, DirectMessageRecord, DirectMessageUpdate, PersistenceDriver, Snapshot } from './persistence.js';
 import { COLLECTIONS } from './persistence.js';
 
 /**
@@ -95,6 +95,18 @@ export class MongoDriver implements PersistenceDriver {
 
   async markDirectMessagesRead(senderId: string, receiverId: string, readAt: number): Promise<void> {
     await this.directMessages().updateMany({ senderId, receiverId, readAt: null }, { $set: { readAt } });
+  }
+
+  async getDirectMessage(id: string): Promise<DirectMessageRecord | null> {
+    return this.directMessages().findOne({ _id: id } as never);
+  }
+
+  async updateDirectMessage(id: string, update: DirectMessageUpdate): Promise<void> {
+    const ops: Record<string, unknown> = {};
+    if (update.set && Object.keys(update.set).length) ops.$set = update.set;
+    if (update.unset?.length) ops.$unset = Object.fromEntries(update.unset.map(key => [key, '']));
+    if (update.addDeletedFor) ops.$addToSet = { deletedFor: update.addDeletedFor };
+    if (Object.keys(ops).length) await this.directMessages().updateOne({ _id: id } as never, ops as never);
   }
 
   async close(): Promise<void> {

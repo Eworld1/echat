@@ -90,3 +90,7 @@ html:not(.dark) .echat-classic article.rounded-2xl.shadow-sm { box-shadow: 0 1px
 @keyframes ec-like-bump { 0% { transform: scale(1); } 40% { transform: scale(1.3); } 100% { transform: scale(1); } }
 .ec-like-bump { animation: ec-like-bump 320ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .ec-heart-pop { animation-duration: 600ms; } .ec-like-bump { animation: none; } }
+
+/* Chat: tapping a reply quote flashes the original message */
+@keyframes ec-msg-flash { 0%, 60% { background: rgba(250, 204, 21, 0.35); } 100% { background: transparent; } }
+.ec-msg-highlight { border-radius: 18px; animation: ec-msg-flash 1.6s ease-out; }

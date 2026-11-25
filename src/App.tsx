@@ -315,13 +315,13 @@ export function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  const handleOpenChat = (partner: User) => {
-    setActiveChatPartner(partner);
-  };
   const handleOpenDm = (partner: User) => {
     setActiveDmUserId(partner.id);
     handleNavigate('messages');
   };
+  // Every private chat opens the full Messages screen (reply, edit, delete, voice preview, clear chat,
+  // typing indicator), instead of the older floating window that has none of those.
+  const handleOpenChat = (partner: User) => handleOpenDm(partner);
   const closeGoLive = () => {
     setIsGoLiveOpen(false);
   };

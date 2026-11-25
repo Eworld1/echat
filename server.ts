@@ -807,7 +807,7 @@ socketManager.authVerifier = tokenOwnsUser;
 // notifications change.
 async function computeUnread(userId: string) {
   const dms = await db.listDirectMessagesForUser(userId).catch(() => []);
-  const dmUnread = dms.filter(m => m.senderId !== userId && !(m as { readAt?: number | null }).readAt).length;
+  const dmUnread = dms.filter(m => m.senderId !== userId && !(m as { readAt?: number | null }).readAt && visibleDm(userId, m)).length;
   return {
     messages: dmUnread + db.countUnreadLegacyMessages(userId),
     notifications: db.getNotifications(userId).filter(n => !n.read && n.type !== 'message').length
@@ -1712,15 +1712,112 @@ function legacyAsDirect(m: Message): DirectMessageRecord {
     ...(m.audioDuration !== undefined ? { audioDuration: m.audioDuration } : {}),
     ...(m.attachments?.length ? { attachments: m.attachments } : {}),
     createdAt: m.createdAt,
-    readAt: m.status === 'seen' ? m.createdAt : null
+    readAt: m.status === 'seen' ? m.createdAt : null,
+    ...(m.editedAt ? { editedAt: m.editedAt } : {}),
+    ...(m.deletedForEveryone ? { deletedForEveryone: true } : {}),
+    ...(m.replyTo ? { replyTo: m.replyTo } : {})
   } as DirectMessageRecord;
 }
+
+// ----- Chat actions: edit, delete for everyone / for me, clear chat (only for me), reply -----
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
+const MEDIA_TEXT = /^(\[(VOICE|AUDIO|IMAGE|VIDEO|FILE|CALL|SIGNAL)\]|data:|__echat_missed_call__)/;
+/** Hidden for this viewer? ("Delete for me", or older than their "Clear chat"). */
+function visibleDm(viewerId: string, m: DirectMessageRecord): boolean {
+  const partnerId = m.senderId === viewerId ? m.receiverId : m.senderId;
+  return !(m.deletedFor || []).includes(viewerId) && Number(m.createdAt) > db.chatClearedAt(viewerId, partnerId);
+}
+/** What the app receives: deleted-for-everyone messages carry no content; nobody sees who hid what. */
+function presentDm(m: DirectMessageRecord): DirectMessageRecord {
+  const { deletedFor: _hidden, ...rest } = m;
+  void _hidden;
+  if (!m.deletedForEveryone) return rest as DirectMessageRecord;
+  return { _id: m._id, senderId: m.senderId, receiverId: m.receiverId, text: '', createdAt: m.createdAt, readAt: m.readAt, deletedForEveryone: true, ...(m.deletedAt ? { deletedAt: m.deletedAt } : {}) };
+}
+type FoundMessage = { store: 'dm' | 'legacy'; message: DirectMessageRecord };
+async function findChatMessage(id: string): Promise<FoundMessage | null> {
+  if (!/^[\w-]{1,80}$/.test(id)) return null;
+  const legacy = id.startsWith('msg_') ? db.getLegacyMessage(id) : undefined;
+  if (legacy) return { store: 'legacy', message: { ...legacyAsDirect(legacy), deletedFor: legacy.deletedFor } };
+  const dm = await db.getDirectMessage(id);
+  return dm ? { store: 'dm', message: dm } : null;
+}
+async function reloadChatMessage(found: FoundMessage): Promise<DirectMessageRecord | null> {
+  return (await findChatMessage(found.message._id))?.message || null;
+}
+function emitMessageUpdate(message: DirectMessageRecord) {
+  const payload = { type: 'direct_message_updated', message: presentDm(message) };
+  socketManager.sendToUser(message.senderId, payload);
+  socketManager.sendToUser(message.receiverId, payload);
+}
+
+app.patch('/api/dm/message/:id', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req)!;
+  const found = await findChatMessage(String(req.params.id));
+  if (!found || !visibleDm(authUser.id, found.message)) return res.status(404).json({ error: 'Message not found' });
+  const message = found.message;
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (message.senderId !== authUser.id) return res.status(403).json({ error: 'You can only edit your own messages.' });
+  if (message.deletedForEveryone) return res.status(400).json({ error: 'This message was deleted.' });
+  if (!message.text || MEDIA_TEXT.test(message.text) || message.mediaUrl || message.attachments?.length) return res.status(400).json({ error: 'Only text messages can be edited.' });
+  if (Date.now() - Number(message.createdAt) > EDIT_WINDOW_MS) return res.status(400).json({ error: 'Messages can only be edited for 15 minutes after sending.' });
+  if (!text || text.length > 2000 || MEDIA_TEXT.test(text)) return res.status(400).json({ error: 'Type the new message (up to 2000 characters).' });
+  if (text === message.text) return res.json(presentDm(message));
+  const editedAt = Date.now();
+  if (found.store === 'dm') await db.updateDirectMessage(message._id, { set: { text, editedAt } });
+  else db.updateLegacyMessage(message._id, { text, editedAt });
+  const updated = await reloadChatMessage(found);
+  if (!updated) return res.status(404).json({ error: 'Message not found' });
+  emitMessageUpdate(updated);
+  res.json(presentDm(updated));
+});
+
+app.post('/api/dm/message/:id/delete', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req)!;
+  const scope = req.body?.scope === 'everyone' ? 'everyone' : 'me';
+  const found = await findChatMessage(String(req.params.id));
+  const message = found?.message;
+  if (!found || !message || (message.senderId !== authUser.id && message.receiverId !== authUser.id) || !visibleDm(authUser.id, message)) return res.status(404).json({ error: 'Message not found' });
+  if (scope === 'everyone') {
+    if (message.senderId !== authUser.id) return res.status(403).json({ error: 'You can only delete your own messages for everyone.' });
+    if (!message.deletedForEveryone) {
+      const deletedAt = Date.now();
+      const wipe: (keyof DirectMessageRecord)[] = ['mediaUrl', 'mediaType', 'attachments', 'audioDuration', 'replyTo', 'editedAt'];
+      if (found.store === 'dm') await db.updateDirectMessage(message._id, { set: { deletedForEveryone: true, deletedAt, text: '' }, unset: wipe });
+      else db.updateLegacyMessage(message._id, { deletedForEveryone: true, text: '' }, ['mediaUrl', 'mediaType', 'attachments', 'audioDuration', 'replyTo', 'editedAt', 'editHistory']);
+    }
+    const updated = await reloadChatMessage(found);
+    if (updated) emitMessageUpdate(updated);
+    syncUnread(message.receiverId);
+    return res.json({ success: true, message: updated ? presentDm(updated) : null });
+  }
+  if (found.store === 'dm') await db.updateDirectMessage(message._id, { addDeletedFor: authUser.id });
+  else db.deleteMessageForUser(message._id, authUser.id);
+  socketManager.sendToUser(authUser.id, { type: 'direct_message_hidden', id: message._id });
+  syncUnread(authUser.id);
+  res.json({ success: true });
+});
+
+app.post('/api/dm/:userId/clear', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req)!;
+  const partnerId = String(req.params.userId || '');
+  if (!db.getUserById(partnerId)) return res.status(404).json({ error: 'User not found' });
+  const now = Date.now();
+  db.clearChatFor(authUser.id, partnerId, now);
+  // Nothing hidden may stay "unread", or the badge would get stuck.
+  await db.markDirectMessagesRead(partnerId, authUser.id, now).catch(() => {});
+  db.markConversationSeen(authUser.id, partnerId);
+  db.markMessageNotificationsRead(authUser.id, partnerId);
+  socketManager.sendToUser(authUser.id, { type: 'dm_chat_cleared', partnerId, clearedAt: now });
+  res.json({ success: true, clearedAt: now });
+});
 
 app.get('/api/dm/conversations', async (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
   try {
-    const messages = [...await db.listDirectMessagesForUser(authUser.id), ...db.listLegacyMessagesForUser(authUser.id).map(legacyAsDirect)];
+    const messages = [...await db.listDirectMessagesForUser(authUser.id), ...db.listLegacyMessagesForUser(authUser.id).map(legacyAsDirect)]
+      .filter(message => visibleDm(authUser.id, message)).map(presentDm);
     const latestByPartner = new Map<string, typeof messages[number]>();
     for (const message of messages) {
       const partnerId = message.senderId === authUser.id ? message.receiverId : message.senderId;
@@ -1750,7 +1847,8 @@ app.get('/api/dm/:userId', async (req: Request, res: Response) => {
   const otherUserId = String(req.params.userId || '');
   if (otherUserId !== authUser.id && !db.getUserById(otherUserId)) return res.status(404).json({ error: 'User not found' });
   try {
-    const merged = [...await db.listDirectMessagesBetween(authUser.id, otherUserId), ...db.getConversation(authUser.id, otherUserId).map(legacyAsDirect)];
+    const merged = [...await db.listDirectMessagesBetween(authUser.id, otherUserId), ...db.getConversation(authUser.id, otherUserId).map(legacyAsDirect)]
+      .filter(message => visibleDm(authUser.id, message)).map(presentDm);
     return res.json(merged.sort((a, b) => Number(a.createdAt) - Number(b.createdAt)));
   } catch (error) {
     console.error('[DM] Could not load conversation:', error);
@@ -1832,10 +1930,20 @@ app.post('/api/dm/:userId', async (req: Request, res: Response) => {
   if (mediaUrl.length > 15000000) return res.status(413).json({ error: 'File is too large' });
   if (!db.getUserById(receiverId)) return res.status(404).json({ error: 'Recipient not found' });
   if (receiverId === authUser.id) return res.status(400).json({ error: 'You cannot message yourself' });
+  // Swipe-to-reply: quote must be a message in THIS chat that the sender can still see.
+  let replyTo: DirectMessageRecord['replyTo'];
+  if (typeof req.body?.replyToId === 'string' && req.body.replyToId) {
+    const quoted = (await findChatMessage(req.body.replyToId))?.message;
+    const sameChat = quoted && ((quoted.senderId === authUser.id && quoted.receiverId === receiverId) || (quoted.senderId === receiverId && quoted.receiverId === authUser.id));
+    if (quoted && sameChat && visibleDm(authUser.id, quoted)) {
+      replyTo = { id: quoted._id, senderId: quoted.senderId, senderName: db.getUserById(quoted.senderId)?.name || 'EChat user', preview: messagePreview(quoted) };
+    }
+  }
   const message = {
     _id: crypto.randomUUID(),
     senderId: authUser.id,
     receiverId,
+    ...(replyTo ? { replyTo } : {}),
     text,
     ...(mediaUrl ? { mediaUrl, mediaType } : {}),
     ...(audioDuration !== undefined ? { audioDuration } : {}),

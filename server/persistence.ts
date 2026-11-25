@@ -36,6 +36,8 @@ export interface PersistenceDriver {
   listDirectMessagesBetween?(userA: string, userB: string): Promise<DirectMessageRecord[]>;
   insertDirectMessage?(message: DirectMessageRecord): Promise<void>;
   markDirectMessagesRead?(senderId: string, receiverId: string, readAt: number): Promise<void>;
+  getDirectMessage?(id: string): Promise<DirectMessageRecord | null>;
+  updateDirectMessage?(id: string, update: DirectMessageUpdate): Promise<void>;
   close?(): Promise<void>;
 }
 
@@ -50,6 +52,21 @@ export interface DirectMessageRecord {
   attachments?: { url: string; name: string; mimeType: string; size: number }[];
   createdAt: number;
   readAt: number | null;
+  /** Set when the sender edits the text (within 15 minutes). */
+  editedAt?: number;
+  /** "Delete for everyone": content is wiped, both people see "This message was deleted". */
+  deletedForEveryone?: boolean;
+  deletedAt?: number;
+  /** "Delete for me": hidden only for these user ids. */
+  deletedFor?: string[];
+  /** Swipe-to-reply: a small snapshot of the quoted message. */
+  replyTo?: { id: string; senderId: string; senderName: string; preview: string };
+}
+
+export interface DirectMessageUpdate {
+  set?: Partial<DirectMessageRecord>;
+  unset?: (keyof DirectMessageRecord)[];
+  addDeletedFor?: string;
 }
 
 export function keyOf(collection: CollectionName, item: Record<string, unknown>): string {

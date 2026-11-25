@@ -70,6 +70,13 @@ export interface DirectMessage {
   attachments?: MessageAttachment[];
   createdAt: number;
   readAt: number | null;
+  /** Edited by the sender (shows "Edited"). */
+  editedAt?: number;
+  /** Deleted for everyone: no content, shows "This message was deleted". */
+  deletedForEveryone?: boolean;
+  deletedAt?: number;
+  /** Swipe-to-reply quote. */
+  replyTo?: { id: string; senderId: string; senderName: string; preview: string };
 }
 
 export interface DirectConversation {
@@ -391,17 +398,36 @@ export const api = {
       return readResponse<DirectMessage[]>(res, 'Could not load this conversation');
     }, authUserId);
   },
-  async sendDm(userId: string, text: string, attachments?: MessageAttachment[], authUserId?: string): Promise<DirectMessage> {
+  async sendDm(userId: string, text: string, attachments?: MessageAttachment[], authUserId?: string, replyToId?: string): Promise<DirectMessage> {
     const headers = authUserId ? await privateHeaders({ 'x-user-id': authUserId }) : await privateHeaders();
     const res = await fetchDmRequest(`/api/dm/${encodeURIComponent(userId)}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ text, attachments })
+      body: JSON.stringify({ text, attachments, ...(replyToId ? { replyToId } : {}) })
     });
     const message = await readResponse<DirectMessage>(res, 'Could not send this message');
     invalidateApiReadCache('dm:conversations', authUserId);
     invalidateApiReadCache(`dm:conversation:${userId}`, authUserId);
     return message;
+  },
+  /** Edit my own text message (within 15 minutes). */
+  async editDm(messageId: string, text: string): Promise<DirectMessage> {
+    const res = await fetch(apiUrl(`/api/dm/message/${encodeURIComponent(messageId)}`), { method: 'PATCH', headers: await privateHeaders(), body: JSON.stringify({ text }) });
+    invalidateApiReadCache('dm:conversations');
+    return readResponse<DirectMessage>(res, 'Could not edit this message');
+  },
+  /** Delete for everyone (my own messages) or only for me. */
+  async deleteDm(messageId: string, scope: 'everyone' | 'me'): Promise<void> {
+    const res = await fetch(apiUrl(`/api/dm/message/${encodeURIComponent(messageId)}/delete`), { method: 'POST', headers: await privateHeaders(), body: JSON.stringify({ scope }) });
+    await readResponse<{ success: boolean }>(res, 'Could not delete this message');
+    invalidateApiReadCache('dm:conversations');
+  },
+  /** Clear chat for me only (the other person keeps their copy). */
+  async clearDmChat(partnerId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/api/dm/${encodeURIComponent(partnerId)}/clear`), { method: 'POST', headers: await privateHeaders() });
+    await readResponse<{ success: boolean }>(res, 'Could not clear this chat');
+    invalidateApiReadCache('dm:conversations');
+    invalidateApiReadCache(`dm:conversation:${partnerId}`);
   },
   async markDmRead(userId: string, authUserId?: string): Promise<void> {
     const headers = authUserId ? await privateHeaders({ 'x-user-id': authUserId }) : await privateHeaders();

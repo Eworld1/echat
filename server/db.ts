@@ -2,7 +2,7 @@ import { gradientCover, initialsAvatar } from './avatar.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { WriteThroughSync, type DirectMessageRecord, type PersistenceDriver, type Snapshot } from './persistence.js';
+import { WriteThroughSync, type DirectMessageRecord, type DirectMessageUpdate, type PersistenceDriver, type Snapshot } from './persistence.js';
 import { AuditLog, User, Post, Story, Message, Notification, Comment, ReactionType, AdminStats, Page, PagePost, Group, GroupPost, EventItem, JobItem, SiteConfig, LiveAccessRequest, LiveAccessMode } from './types.js';
 
 // FIX: Try multiple locations because AI Studio wipes process.cwd()/data on Republish
@@ -273,6 +273,45 @@ class Database {
     if (list.some(m => m._id === message._id)) return;
     list.push(message);
     this.save();
+  }
+
+  async getDirectMessage(id: string): Promise<DirectMessageRecord | null> {
+    if (this.driver?.getDirectMessage) return this.driver.getDirectMessage(id);
+    return this.getDirectMessages().find(m => m._id === id) || null;
+  }
+
+  async updateDirectMessage(id: string, update: DirectMessageUpdate): Promise<void> {
+    if (this.driver?.updateDirectMessage) return this.driver.updateDirectMessage(id, update);
+    const message = this.getDirectMessages().find(m => m._id === id) as (DirectMessageRecord & Record<string, unknown>) | undefined;
+    if (!message) return;
+    Object.assign(message, update.set || {});
+    for (const key of update.unset || []) delete message[key];
+    if (update.addDeletedFor) message.deletedFor = Array.from(new Set([...(message.deletedFor || []), update.addDeletedFor]));
+    this.save();
+  }
+
+  /** Older chat store: one message by id, and in-place updates (edit / delete for everyone / delete for me). */
+  getLegacyMessage(id: string): Message | undefined {
+    return this.data.messages.find(m => m.id === id);
+  }
+
+  updateLegacyMessage(id: string, patch: Partial<Message> & { deletedForEveryone?: boolean }, unset: (keyof Message)[] = []): void {
+    const message = this.data.messages.find(m => m.id === id) as (Message & Record<string, unknown>) | undefined;
+    if (!message) return;
+    Object.assign(message, patch);
+    for (const key of unset) delete message[key];
+    this.save();
+  }
+
+  /** Clear chat (only for me): everything before this time in the chat with partnerId is hidden for userId. */
+  chatClearedAt(userId: string, partnerId: string): number {
+    return Number(this.getUserById(userId)?.chatClearedAt?.[partnerId] || 0);
+  }
+
+  clearChatFor(userId: string, partnerId: string, at: number): void {
+    const user = this.getUserById(userId);
+    if (!user) return;
+    this.updateUser(userId, { chatClearedAt: { ...(user.chatClearedAt || {}), [partnerId]: at } });
   }
 
   async markDirectMessagesRead(senderId: string, receiverId: string, readAt: number): Promise<void> {
@@ -558,7 +597,8 @@ class Database {
   }
 
   sanitizeUser(user: User, viewerId?: string): Omit<User, 'passwordHash'> & { dobMonthDay?: string } {
-    const { passwordHash, liveAuthSecret, dob, dobVisibility = 'public', ...safe } = user;
+    const { passwordHash, liveAuthSecret, dob, dobVisibility = 'public', chatClearedAt: _cleared, ...safe } = user;
+    void _cleared;
     const isOwner = viewerId === user.id;
     const viewer = viewerId ? this.getUserById(viewerId) : undefined;
     const isFriend = Boolean(viewer && user.friends.includes(viewer.id) && viewer.friends.includes(user.id));

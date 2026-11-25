@@ -8,11 +8,13 @@ export interface PreviewSource {
   mediaType?: string | null;
   mediaUrl?: string | null;
   attachments?: { mimeType?: string }[] | null;
+  deletedForEveryone?: boolean | null;
 }
 
 const MAX_TEXT = 50;
 
 export function messagePreview(message: PreviewSource): string {
+  if (message.deletedForEveryone) return '🚫 This message was deleted';
   const text = String(message.text || '').trim();
   const media = String(message.mediaType || '').toLowerCase();
   const mimes = (message.attachments || []).map(item => String(item?.mimeType || '').toLowerCase());

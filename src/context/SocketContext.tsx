@@ -497,6 +497,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             });
             break;
 
+          case 'direct_message_updated':
+          case 'direct_message_hidden':
+          case 'dm_chat_cleared':
+            // Edit / delete for everyone / delete for me / clear chat: MessagesPage listens to this.
+            window.dispatchEvent(new CustomEvent('echat:dm-change', { detail: data }));
+            break;
           case 'chat_activity':
             window.dispatchEvent(new CustomEvent('echat:chat-activity', { detail: { chatId: data.chatId, userId: data.fromUserId, name: data.name, state: data.state || null } }));
             break;
