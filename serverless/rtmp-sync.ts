@@ -116,7 +116,8 @@ export async function endSoftwareLive(roomName: string, reason: string): Promise
   return docs.length;
 }
 
-export type RtmpState = { uid: string; ingressId: string; roomName: string; status: number; publishing: boolean };
+export type RtmpInput = { videoKbps: number; width: number; height: number; framerate: number; audioKbps: number; channels: number; sampleRate: number; videoCodec: string };
+export type RtmpState = { uid: string; ingressId: string; roomName: string; status: number; publishing: boolean; input: RtmpInput | null };
 
 /**
  * Ask LiveKit which eChat ingresses are on air and make Firestore match.
@@ -132,7 +133,20 @@ export async function syncRtmpLives(uid?: string): Promise<RtmpState[]> {
     if (!owner || !roomName.startsWith(RTMP_ROOM_PREFIX)) continue;
     const status = Number(ingress.state?.status ?? 0);
     const publishing = ON_AIR.has(status);
-    states.push({ uid: owner, ingressId: ingress.ingressId, roomName, status, publishing });
+    const video = ingress.state?.video;
+    const audio = ingress.state?.audio;
+    // What OBS is actually sending (for the host's network-health indicator).
+    const input: RtmpInput | null = publishing ? {
+      videoKbps: Math.round(Number(video?.averageBitrate || 0) / 1000),
+      width: Number(video?.width || 0),
+      height: Number(video?.height || 0),
+      framerate: Math.round(Number(video?.framerate || 0) * 10) / 10,
+      audioKbps: Math.round(Number(audio?.averageBitrate || 0) / 1000),
+      channels: Number(audio?.channels || 0),
+      sampleRate: Number(audio?.sampleRate || 0),
+      videoCodec: String(video?.mimeType || '')
+    } : null;
+    states.push({ uid: owner, ingressId: ingress.ingressId, roomName, status, publishing, input });
   }
   // A user may have an old ingress in the same room; on air if ANY of their current ones is.
   const byRoom = new Map<string, RtmpState>();

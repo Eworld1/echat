@@ -1,4 +1,17 @@
-import { IngressClient, IngressInput } from 'livekit-server-sdk';
+import { IngressAudioEncodingPreset, IngressAudioOptions, IngressClient, IngressInput, IngressVideoEncodingPreset, IngressVideoOptions, TrackSource } from 'livekit-server-sdk';
+
+/**
+ * Premium quality for streaming apps (OBS…): LiveKit transcodes the RTMP input into 3 simulcast
+ * layers (1080p / 720p-class / low) at 30 fps so every viewer gets the best layer their internet
+ * and screen allow, plus stereo Opus audio. Bump the version to re-apply to existing keys.
+ */
+const INGRESS_QUALITY_VERSION = 'h264-1080p30-3layers-opus-stereo-v1';
+function ingressQualityOptions() {
+  return {
+    video: new IngressVideoOptions({ source: TrackSource.CAMERA, encodingOptions: { case: 'preset', value: IngressVideoEncodingPreset.H264_1080P_30FPS_3_LAYERS } }),
+    audio: new IngressAudioOptions({ source: TrackSource.MICROPHONE, encodingOptions: { case: 'preset', value: IngressAudioEncodingPreset.OPUS_STEREO_96KBPS } })
+  };
+}
 import type { DocumentData } from 'firebase-admin/firestore';
 import { firestore, hostLiveRef, requireLiveKit } from './live.js';
 
@@ -39,7 +52,8 @@ async function createLiveStreamIngress(uid: string) {
     roomName,
     participantIdentity,
     participantName: 'Echat Streaming Software',
-    enableTranscoding: true
+    enableTranscoding: true,
+    ...ingressQualityOptions()
   });
   if (!ingress.ingressId || !ingress.url || !ingress.streamKey) {
     throw Object.assign(new Error('LiveKit did not return a complete RTMP ingress configuration.'), {
@@ -63,6 +77,7 @@ async function saveIngress(uid: string, ingressId: string, serverUrl: string, st
     streamKey,
     streamServerUrl: serverUrl,
     streamIngressId: ingressId,
+    streamIngressQuality: INGRESS_QUALITY_VERSION,
     streamKeyUpdatedAt: Date.now()
   }, { merge: true });
 }
@@ -75,7 +90,20 @@ export async function getOrCreateLiveStreamIngress(uid: string): Promise<LiveStr
 
   if (saved) {
     const activeIngresses = await ingressClient.listIngress({ ingressId: saved.ingressId });
-    if (activeIngresses.some(ingress => ingress.ingressId === saved.ingressId)) return toResponse(saved);
+    const current = activeIngresses.find(ingress => ingress.ingressId === saved.ingressId);
+    if (current) {
+      // Upgrade older keys to the HD preset in place (same key, same URL). Only while OBS is not
+      // streaming; otherwise it is retried next time the key is loaded.
+      if (profile.data()?.streamIngressQuality !== INGRESS_QUALITY_VERSION && ![1, 2].includes(Number(current.state?.status ?? 0))) {
+        try {
+          await ingressClient.updateIngress(saved.ingressId, { name: current.name, roomName: current.roomName, participantIdentity: current.participantIdentity, participantName: current.participantName, enableTranscoding: true, ...ingressQualityOptions() });
+          await userReference.set({ streamIngressQuality: INGRESS_QUALITY_VERSION }, { merge: true });
+        } catch (error) {
+          console.warn('[Live RTMP] Could not upgrade the stream key to HD yet', error instanceof Error ? error.message : error);
+        }
+      }
+      return toResponse(saved);
+    }
   }
 
   const { ingressClient: client, ingress } = await createLiveStreamIngress(uid);

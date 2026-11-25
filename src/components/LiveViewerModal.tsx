@@ -15,7 +15,7 @@ import { LiveUserActions } from './LiveUserActions';
 import { isLowDataMode } from '../services/lowData';
 import { Ban, MoreVertical, Trash2 } from 'lucide-react';
 // @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
-import { Room, RoomEvent, Track } from 'livekit-client';
+import { Room, RoomEvent, Track, VideoQuality } from 'livekit-client';
 import {
   X,
   Users,
@@ -91,6 +91,128 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   const [connectAttempt, setConnectAttempt] = useState(0);
   const [retryNonce, setRetryNonce] = useState(0);
   const retryNow = () => { setConnectAttempt(0); setConnectState('connecting'); setRetryNonce(value => value + 1); };
+
+  // ---- Premium playback: quality menu, stats, reconnecting, portrait / landscape / fullscreen ----
+  type QualityPref = 'auto' | '1080' | '720' | '480' | '360' | 'audio';
+  const QUALITY_OPTIONS: Array<{ id: QualityPref; label: string }> = [
+    { id: 'auto', label: 'Auto (recommended)' }, { id: '1080', label: '1080p HD' }, { id: '720', label: '720p' },
+    { id: '480', label: '480p' }, { id: '360', label: '360p' }, { id: 'audio', label: 'Audio only' }
+  ];
+  const [qualityPref, setQualityPref] = useState<QualityPref>(() => {
+    try { return (localStorage.getItem('echat:liveQuality') as QualityPref) || 'auto'; } catch { return 'auto'; }
+  });
+  const qualityPrefRef = useRef<QualityPref>(qualityPref);
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+  const [stats, setStats] = useState<{ height: number; kbps: number }>({ height: 0, kbps: 0 });
+  const [reconnecting, setReconnecting] = useState(false);
+  const videoPubRef = useRef<any>(null);
+  const videoTrackRef = useRef<any>(null);
+  const playerRef = useRef<HTMLDivElement | null>(null);
+  const [videoAspect, setVideoAspect] = useState(16 / 9);
+  const [layout, setLayout] = useState<'portrait' | 'landscape' | 'desktop'>('portrait');
+  const [chatOpen, setChatOpen] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const autoFullscreenRef = useRef(false);
+  const layoutRef = useRef<'portrait' | 'landscape' | 'desktop' | ''>('');
+
+  /** Apply the viewer's choice. Auto = LiveKit adaptive stream (screen size + internet) up to 1080p. */
+  const applyQuality = (pref: QualityPref) => {
+    const publication = videoPubRef.current;
+    if (!publication) return;
+    try {
+      publication.setEnabled(pref !== 'audio'); // Audio only: the server stops sending video (saves data)
+      if (pref === 'auto' || pref === 'audio') publication.setVideoQuality(VideoQuality.HIGH);
+      else {
+        const height = Number(pref);
+        publication.setVideoQuality(height >= 1080 ? VideoQuality.HIGH : height >= 720 ? VideoQuality.MEDIUM : VideoQuality.LOW);
+        publication.setVideoDimensions({ width: Math.round(height * 16 / 9), height });
+      }
+    } catch (error) { console.warn('[Live] Could not change quality', error); }
+  };
+  const chooseQuality = (pref: QualityPref) => {
+    qualityPrefRef.current = pref;
+    setQualityPref(pref);
+    setQualityMenuOpen(false);
+    try { localStorage.setItem('echat:liveQuality', pref); } catch { /* private mode */ }
+    applyQuality(pref);
+  };
+
+  // What the viewer is actually getting: resolution + incoming video bitrate (updated every 2 s).
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const video = videoRef.current;
+      const height = video?.videoHeight || 0;
+      if (video?.videoWidth && video.videoHeight) setVideoAspect(video.videoWidth / video.videoHeight);
+      setStats({ height, kbps: Math.round((videoTrackRef.current?.currentBitrate || 0) / 1000) });
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // Portrait (phone): video full width, chat below. Landscape (phone): full-screen video, chat overlay.
+  // Computer: 16:9 video with chat at the side.
+  useEffect(() => {
+    const landscapeQuery = window.matchMedia('(orientation: landscape) and (max-height: 540px)');
+    const wideQuery = window.matchMedia('(min-width: 768px)');
+    const update = () => {
+      const next = landscapeQuery.matches ? 'landscape' : wideQuery.matches ? 'desktop' : 'portrait';
+      const previous = layoutRef.current;
+      if (next === previous) return;
+      layoutRef.current = next;
+      setLayout(next);
+      if (next === 'landscape') {
+        setChatOpen(false);
+        // Like YouTube: rotating the phone sideways goes full screen (when the browser allows it).
+        const element = playerRef.current as (HTMLElement & { webkitRequestFullscreen?: () => void }) | null;
+        if (element && !document.fullscreenElement && element.requestFullscreen) {
+          element.requestFullscreen({ navigationUI: 'hide' }).then(() => { autoFullscreenRef.current = true; }).catch(() => {});
+        }
+      } else {
+        setChatOpen(true);
+        if (previous === 'landscape' && autoFullscreenRef.current && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+        autoFullscreenRef.current = false;
+      }
+    };
+    update();
+    landscapeQuery.addEventListener('change', update);
+    wideQuery.addEventListener('change', update);
+    window.addEventListener('orientationchange', update);
+    // Some browsers skip media-query change events during quick rotations; resize always fires.
+    window.addEventListener('resize', update);
+    const onFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFullscreen);
+    return () => {
+      landscapeQuery.removeEventListener('change', update);
+      wideQuery.removeEventListener('change', update);
+      window.removeEventListener('orientationchange', update);
+      window.removeEventListener('resize', update);
+      document.removeEventListener('fullscreenchange', onFullscreen);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+      const element = playerRef.current;
+      if (element?.requestFullscreen) await element.requestFullscreen({ navigationUI: 'hide' });
+      else (videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null)?.webkitEnterFullscreen?.(); // iPhone
+    } catch (error) { console.warn('[Live] Fullscreen unavailable', error); }
+  };
+
+  /** Rotate button: go full screen and lock landscape (Android); back to portrait on second tap. */
+  const toggleRotate = async () => {
+    const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+    try {
+      if (layout === 'landscape' || (document.fullscreenElement && orientation?.type?.startsWith('landscape'))) {
+        orientation?.unlock?.();
+        if (document.fullscreenElement) await document.exitFullscreen();
+        return;
+      }
+      if (!document.fullscreenElement) await playerRef.current?.requestFullscreen?.({ navigationUI: 'hide' });
+      await orientation?.lock?.('landscape');
+    } catch {
+      await toggleFullscreen(); // iPhone / desktop: no orientation lock → plain full screen
+    }
+  };
   // Socket helpers can change identity on every provider render; keep them in refs so the video
   // connection is NOT torn down and rebuilt each time (that caused reconnect loops / black video).
   const socketRef = useRef(socket);
@@ -187,10 +309,19 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
           // A FRESH viewer token (canSubscribe) for the host's CURRENT room, looked up by host on the server.
           const credentials = await api.getLiveKitViewerToken(connectingId, currentStream.hostId);
           if (cancelled) return;
-          liveKitRoom = new Room({ adaptiveStream: true, dynacast: true });
-          liveKitRoom.on(RoomEvent.TrackSubscribed, (track: any) => {
+          // Adaptive stream: LiveKit picks the simulcast layer for this screen (pixel density aware) and
+          // the server drops to a lower layer the moment the network slows — no freezing.
+          liveKitRoom = new Room({ adaptiveStream: { pixelDensity: 'screen', pauseVideoInBackground: true }, dynacast: true });
+          liveKitRoom.on(RoomEvent.Reconnecting, () => setReconnecting(true));
+          liveKitRoom.on(RoomEvent.Reconnected, () => setReconnecting(false));
+          liveKitRoom.on(RoomEvent.TrackSubscribed, (track: any, publication: any) => {
+            // Small jitter buffer (100 ms) smooths network bumps without noticeable delay.
+            try { track.setPlayoutDelay?.(0.1); } catch { /* older browsers */ }
             if (track.kind === Track.Kind.Video && videoRef.current) {
+              videoPubRef.current = publication;
+              videoTrackRef.current = track;
               track.attach(videoRef.current);
+              applyQuality(qualityPrefRef.current);
               if (videoTimer) window.clearTimeout(videoTimer);
               setConnectState('connected');
               setConnectError('');
@@ -209,7 +340,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
             if (track.kind === Track.Kind.Video) setRemoteVideo(null);
           });
           // Dropped (network, room restart): reconnect instead of ending.
-          liveKitRoom.on(RoomEvent.Disconnected, () => { setRemoteVideo(null); if (!cancelled) fail(new Error('The live video connection dropped.')); });
+          liveKitRoom.on(RoomEvent.Disconnected, () => { setReconnecting(false); setRemoteVideo(null); if (!cancelled) fail(new Error('The live video connection dropped.')); });
           await liveKitRoom.connect(credentials.url, credentials.token);
           if (cancelled) return;
           // Connected: the host's tracks may take a few seconds (OBS keyframe / transcoding). Never "ended".
@@ -369,8 +500,8 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch justify-stretch bg-black animate-in fade-in duration-200">
-      <div className="bg-black w-full h-full min-w-0 min-h-0 shadow-2xl overflow-hidden flex flex-col">
+    <div ref={playerRef} data-layout={layout} className="fixed inset-0 z-50 flex items-stretch justify-stretch bg-black animate-in fade-in duration-200">
+      <div className="relative bg-black w-full h-full min-w-0 min-h-0 shadow-2xl overflow-hidden flex flex-col">
         {liveEnded && (
           <div role="status" className="absolute inset-0 z-[60] grid place-items-center bg-black/90 p-6 text-center text-white">
             <div className="max-w-sm">
@@ -383,7 +514,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
         )}
         
         {/* Stream Header */}
-        <div className="absolute top-0 left-0 right-0 z-40 p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/70 text-white">
+        <div className={`absolute top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-slate-800 text-white ${layout === 'landscape' ? 'bg-gradient-to-b from-black/70 to-transparent border-transparent p-2' : 'bg-slate-900/90 p-3.5'}`}>
           <div className="flex items-center gap-3">
             <div className="relative">
               <img
@@ -433,21 +564,41 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
           </div>
         </div>
 
-        {/* Video Canvas & Live Chat Stream */}
-        <div className="flex-1 min-h-0 w-full h-full relative bg-black overflow-hidden">
-          
+        {/* Video + live chat. Portrait: video on top (original aspect ratio), chat below.
+            Phone landscape: full-screen video, chat as an overlay. Computer: 16:9 video + chat at the side. */}
+        <div className={layout === 'landscape' ? 'relative h-full w-full' : layout === 'desktop' ? 'flex h-full w-full min-h-0 flex-row pt-[68px]' : 'flex h-full w-full min-h-0 flex-col pt-[68px]'}>
+
           {/* Main Video Viewport */}
-            <div className="absolute inset-0 w-full h-full relative bg-black overflow-hidden">
-            <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 w-full h-full object-cover object-center ${remoteVideo ? 'block' : 'hidden'}`} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }} />
+            <div data-testid="live-video-pane" className={layout === 'landscape' ? 'absolute inset-0 overflow-hidden bg-black' : layout === 'desktop' ? 'relative min-w-0 flex-1 overflow-hidden bg-black' : 'relative w-full shrink-0 overflow-hidden bg-black'}
+              style={layout === 'portrait' ? { aspectRatio: String(remoteVideo ? videoAspect : 16 / 9), maxHeight: '58vh', minHeight: 200 } : undefined}>
+            {/* object-contain: never stretched or cropped, in any orientation. */}
+            <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 h-full w-full object-contain ${remoteVideo ? 'block' : 'hidden'}`} />
+            {remoteVideo && qualityPref === 'audio' && <div className="absolute inset-0 z-20 grid place-items-center bg-slate-950 text-center text-white"><div><img src={avatarSrc(hostAvatar, hostName)} alt="" className="mx-auto h-20 w-20 rounded-full object-cover ring-4 ring-rose-500/70" /><p className="mt-3 text-sm font-bold">🎧 Audio only</p><p className="text-xs text-slate-400">Video paused to save data</p></div></div>}
             {showCaptions && liveCaption && <div className={`absolute bottom-20 left-1/2 z-30 line-clamp-2 max-w-[85%] -translate-x-1/2 rounded bg-black/80 px-3 py-1.5 text-center font-semibold text-white ${captionSize === 'sm' ? 'text-sm' : captionSize === 'lg' ? 'text-xl' : 'text-base'}`}>{liveCaption}</div>}
-            <div className="absolute bottom-4 right-4 z-40 flex gap-1 rounded-lg bg-black/75 p-1"><button onClick={() => setShowCaptions(value => !value)} className="px-2 py-1 text-xs font-bold text-white">CC {showCaptions ? 'On' : 'Off'}</button>{showCaptions && <select aria-label="Caption text size" value={captionSize} onChange={event => setCaptionSize(event.target.value as typeof captionSize)} className="bg-transparent text-xs text-white"><option value="sm">Small</option><option value="base">Medium</option><option value="lg">Large</option></select>}</div>
-            {remoteVideo && hostLive.stale && <div role="status" className="absolute left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/75 px-3 py-1.5 text-xs font-bold text-white"><span className="h-3 w-3 animate-spin rounded-full border-2 border-rose-500 border-t-transparent" />Reconnecting to the host…</div>}
-            {!remoteVideo && <div className="flex flex-col items-center justify-center p-8 text-center">
-              <div className="relative mb-4">
+            <div className="absolute bottom-3 right-3 z-40 flex items-center gap-1 rounded-xl bg-black/75 p-1 text-white" style={layout === 'landscape' && chatOpen ? { right: 'calc(min(40%, 20rem) + 0.75rem)' } : undefined}>
+              {/* Quality menu like YouTube: Auto / 1080p / 720p / 480p / 360p / Audio only */}
+              <div className="relative">
+                <button type="button" onClick={() => setQualityMenuOpen(open => !open)} aria-label="Video quality" aria-expanded={qualityMenuOpen} className="flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs font-bold hover:bg-white/10">
+                  ⚙ {qualityPref === 'auto' ? `Auto${stats.height ? ` (${stats.height}p)` : ''}` : qualityPref === 'audio' ? 'Audio' : `${qualityPref}p`}
+                  {stats.height >= 1080 && qualityPref !== 'audio' && <span className="rounded bg-rose-600 px-1 text-[9px] font-black">HD</span>}
+                </button>
+                {qualityMenuOpen && <div role="menu" className="absolute bottom-11 right-0 w-52 rounded-xl border border-slate-700 bg-slate-950 p-1.5 shadow-2xl">
+                  <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Quality · {stats.height ? `${stats.height}p` : '—'}{stats.kbps ? ` · ${(stats.kbps / 1000).toFixed(1)} Mbps` : ''}</p>
+                  {QUALITY_OPTIONS.map(option => <button key={option.id} type="button" role="menuitemradio" aria-checked={qualityPref === option.id} onClick={() => chooseQuality(option.id)} className={`flex min-h-9 w-full items-center justify-between rounded-lg px-2 text-left text-xs font-semibold hover:bg-white/10 ${qualityPref === option.id ? 'text-rose-300' : 'text-white'}`}>{option.label}{qualityPref === option.id && <span>✓</span>}</button>)}
+                </div>}
+              </div>
+              {layout === 'landscape' && <button type="button" onClick={() => setChatOpen(open => !open)} aria-label={chatOpen ? 'Hide chat' : 'Show chat'} className="min-h-9 rounded-lg px-2 text-xs font-bold hover:bg-white/10">💬</button>}
+              {layout !== 'desktop' && <button type="button" onClick={() => void toggleRotate()} aria-label="Rotate" title="Rotate" className="min-h-9 rounded-lg px-2 text-sm hover:bg-white/10">⟳</button>}
+              <button type="button" onClick={() => void toggleFullscreen()} aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'} title="Full screen" className="min-h-9 rounded-lg px-2 text-sm hover:bg-white/10">{isFullscreen ? '🗗' : '⛶'}</button>
+              <button onClick={() => setShowCaptions(value => !value)} className="px-2 py-1 text-xs font-bold text-white">CC {showCaptions ? 'On' : 'Off'}</button>{showCaptions && <select aria-label="Caption text size" value={captionSize} onChange={event => setCaptionSize(event.target.value as typeof captionSize)} className="bg-transparent text-xs text-white"><option value="sm">Small</option><option value="base">Medium</option><option value="lg">Large</option></select>}
+            </div>
+            {remoteVideo && (hostLive.stale || reconnecting) && <div role="status" className="absolute left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/75 px-3 py-1.5 text-xs font-bold text-white"><span className="h-3 w-3 animate-spin rounded-full border-2 border-rose-500 border-t-transparent" />Reconnecting to the host…</div>}
+            {!remoteVideo && <div className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden p-4 text-center">
+              <div className="relative mb-3">
                 <img
-                  src={hostAvatar || '/logo-mark-blue.svg'}
+                  src={avatarSrc(hostAvatar, hostName)}
                   alt={hostName}
-                  className="w-28 h-28 rounded-full object-cover ring-4 ring-rose-500/80 shadow-2xl"
+                  className={`${layout === 'portrait' ? 'h-16 w-16' : 'h-28 w-28'} rounded-full object-cover ring-4 ring-rose-500/80 shadow-2xl`}
                 />
                 <div className="absolute inset-0 rounded-full border-4 border-rose-500 animate-ping opacity-35" />
               </div>
@@ -486,31 +637,31 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
             </div>
 
             {/* Quick Reaction Bar on Bottom Left */}
-            <div className="absolute bottom-4 left-4 z-20 flex items-center gap-2 bg-black/60 backdrop-blur-md p-1.5 rounded-2xl border border-white/10">
+            <div className={`absolute z-20 flex items-center gap-1.5 rounded-2xl border border-white/10 bg-black/60 p-1 backdrop-blur-md ${layout === 'portrait' ? 'left-3 top-3' : layout === 'landscape' && chatOpen ? 'left-3 top-14' : 'bottom-4 left-4'}`}>
               <button
                 onClick={() => handleSendReaction('❤️')}
-                className="w-9 h-9 rounded-xl bg-white/10 hover:bg-rose-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-rose-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
                 title="Send Love"
               >
                 ❤️
               </button>
               <button
                 onClick={() => handleSendReaction('🔥')}
-                className="w-9 h-9 rounded-xl bg-white/10 hover:bg-amber-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-amber-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
                 title="Send Fire"
               >
                 🔥
               </button>
               <button
                 onClick={() => handleSendReaction('👏')}
-                className="w-9 h-9 rounded-xl bg-white/10 hover:bg-emerald-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-emerald-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
                 title="Send Claps"
               >
                 👏
               </button>
               <button
                 onClick={() => handleSendReaction('👍')}
-                className="w-9 h-9 rounded-xl bg-white/10 hover:bg-blue-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-blue-500 hover:scale-110 flex items-center justify-center transition cursor-pointer text-base"
                 title="Send Thumbs Up"
               >
                 👍
@@ -518,8 +669,10 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
             </div>
           </div>
 
-          {/* Right Side: Live Chat Feed */}
-          <div className="absolute right-0 bottom-0 top-auto w-full md:w-80 bg-slate-900/75 backdrop-blur-sm border-l border-slate-800/70 flex flex-col max-h-[45%] md:top-0 md:max-h-none">
+          {/* Live chat: below the video (portrait), at the side (computer), overlay (phone landscape) */}
+          <div data-testid="live-chat-pane" className={layout === 'landscape'
+            ? `absolute bottom-0 right-0 top-12 z-30 w-[40%] max-w-xs flex-col border-l border-white/10 bg-slate-950/55 backdrop-blur-sm ${chatOpen ? 'flex' : 'hidden'}`
+            : layout === 'desktop' ? 'flex w-80 shrink-0 flex-col border-l border-slate-800 bg-slate-900' : 'flex min-h-0 flex-1 flex-col bg-slate-900'}>
             <div className="px-3.5 py-2.5 border-b border-slate-800 text-[11px] font-bold uppercase tracking-wider text-slate-400">
               Live Chat Stream
             </div>

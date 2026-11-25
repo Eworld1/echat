@@ -927,7 +927,7 @@ export const api = {
   },
 
   /** Streaming software: is MY OBS / RTMP app on air right now? (asks LiveKit; starts / ends the live to match) */
-  async getRtmpStatus(): Promise<{ publishing: boolean; ingressStatus: number; hasIngress: boolean; held: boolean; live: LiveStream | null }> {
+  async getRtmpStatus(): Promise<{ publishing: boolean; ingressStatus: number; hasIngress: boolean; held: boolean; live: LiveStream | null; input?: { videoKbps: number; width: number; height: number; framerate: number; audioKbps: number; channels: number; sampleRate: number } | null }> {
     const res = await fetch(apiUrl('/api/live/rtmp-status'), { headers: await getVercelLiveHeaders(), cache: 'no-store' });
     return readResponse(res, 'Could not check your streaming app');
   },

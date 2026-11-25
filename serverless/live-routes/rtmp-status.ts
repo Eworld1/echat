@@ -22,6 +22,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       // 0 waiting · 1 receiving (buffering) · 2 publishing · 3 error · 4 finished
       ingressStatus: status,
       hasIngress: states.length > 0,
+      // What OBS is sending right now: bitrate, resolution, fps, audio (network health).
+      input: states.find(state => state.publishing)?.input || null,
       // You tapped End Live while the app kept streaming: stop it in the app, then start again.
       held: pointer?.holdUntilOffAir === true && states.some(state => state.publishing),
       live

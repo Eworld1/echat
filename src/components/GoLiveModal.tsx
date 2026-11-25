@@ -45,14 +45,31 @@ import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
 import { GO_LIVE, getGoLiveEligibility } from '../config/featureFlags';
 // @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
-import { Room, Track } from 'livekit-client';
+import { AudioPresets, ConnectionQuality, ParticipantEvent, Room, Track, VideoPresets, type LocalTrackPublication } from 'livekit-client';
 
-type VideoQuality = '720p' | '480p' | '360p';
-const QUALITY_DIMENSIONS: Record<VideoQuality, { width: number; height: number }> = {
-  '720p': { width: 1280, height: 720 },
-  '480p': { width: 854, height: 480 },
-  '360p': { width: 640, height: 360 }
+type VideoQuality = 'auto' | '1080p' | '720p' | '480p' | 'saver';
+/**
+ * Camera capture + top-layer encoding per quality. Every quality publishes simulcast (low 360p and
+ * 720p layers under the top one), so each viewer automatically gets what their internet can carry.
+ * Auto = 1080p top layer when the camera supports it.
+ */
+const QUALITY_DIMENSIONS: Record<VideoQuality, { width: number; height: number; fps: number; maxBitrate: number; label: string }> = {
+  auto: { width: 1920, height: 1080, fps: 30, maxBitrate: 3_000_000, label: 'Auto (best)' },
+  '1080p': { width: 1920, height: 1080, fps: 30, maxBitrate: 3_000_000, label: '1080p HD' },
+  '720p': { width: 1280, height: 720, fps: 30, maxBitrate: 1_700_000, label: '720p' },
+  '480p': { width: 854, height: 480, fps: 30, maxBitrate: 900_000, label: '480p' },
+  saver: { width: 640, height: 360, fps: 15, maxBitrate: 350_000, label: 'Data Saver' }
 };
+
+/** Microphone: clean voice by default; Music Mode keeps music intact (no noise suppression / AGC). */
+const micConstraints = (musicMode: boolean, deviceId?: string): MediaTrackConstraints => ({
+  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+  echoCancellation: !musicMode,
+  noiseSuppression: !musicMode,
+  autoGainControl: !musicMode,
+  channelCount: { ideal: 2 },
+  sampleRate: { ideal: 48000 }
+});
 
 interface GoLiveModalProps {
   isOpen: boolean;
@@ -105,8 +122,13 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [isVideoMuted, setIsVideoMuted] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
-  const [videoQuality, setVideoQuality] = useState<VideoQuality>('720p');
-  const videoQualityRef = useRef<VideoQuality>('720p');
+  const [videoQuality, setVideoQuality] = useState<VideoQuality>('auto');
+  const videoQualityRef = useRef<VideoQuality>('auto');
+  // Music Mode (church, concerts): no noise suppression / echo cancellation / auto gain, stereo HQ audio.
+  const [musicMode, setMusicMode] = useState(false);
+  const musicModeRef = useRef(false);
+  // Host network health while live: LiveKit connection quality + the bitrate actually being sent.
+  const [hostNetwork, setHostNetwork] = useState<{ quality: string; kbps: number } | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const facingModeRef = useRef<'user' | 'environment'>('user');
   const [switchingCamera, setSwitchingCamera] = useState(false);
@@ -116,7 +138,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [rtmpDetailsNotice, setRtmpDetailsNotice] = useState('');
   const [rtmpDetailsSaving, setRtmpDetailsSaving] = useState(false);
   const [softwareLive, setSoftwareLive] = useState<LiveStream | null>(null);
-  const [rtmpPoll, setRtmpPoll] = useState<{ publishing: boolean; ingressStatus: number; held: boolean } | null>(null);
+  type RtmpInput = { videoKbps: number; width: number; height: number; framerate: number; audioKbps: number; channels: number; sampleRate: number };
+  const [rtmpPoll, setRtmpPoll] = useState<{ publishing: boolean; ingressStatus: number; held: boolean; input: RtmpInput | null } | null>(null);
   const [softwareNow, setSoftwareNow] = useState(() => Date.now());
   const lastReactionCountRef = useRef<number | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -326,9 +349,9 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
             ...(selectedCameraId ? { deviceId: { exact: selectedCameraId } } : { facingMode: { ideal: facingModeRef.current } }),
             width: { ideal: QUALITY_DIMENSIONS[videoQualityRef.current].width },
             height: { ideal: QUALITY_DIMENSIONS[videoQualityRef.current].height },
-            frameRate: { ideal: 30 }
+            frameRate: { ideal: QUALITY_DIMENSIONS[videoQualityRef.current].fps }
           },
-          audio: { ...(selectedMicrophoneId ? { deviceId: { exact: selectedMicrophoneId } } : {}), echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          audio: micConstraints(musicModeRef.current, selectedMicrophoneId || undefined)
         });
         if (isMounted) {
           mediaStreamRef.current = stream;
@@ -538,7 +561,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     setSourceError('');
     const dims = QUALITY_DIMENSIONS[videoQualityRef.current];
     const getCamera = (facing: 'user' | 'environment') => navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: facing }, width: { ideal: dims.width }, height: { ideal: dims.height }, frameRate: { ideal: 30 } },
+      video: { facingMode: { ideal: facing }, width: { ideal: dims.width }, height: { ideal: dims.height }, frameRate: { ideal: dims.fps } },
       audio: false
     });
     try {
@@ -584,6 +607,69 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     }
   };
 
+  /** H.264 (hardware-encoded on most phones) with 3 simulcast layers: 360p, 720p and the chosen top quality. */
+  const videoPublishOptions = () => {
+    const quality = QUALITY_DIMENSIONS[videoQualityRef.current];
+    return {
+      source: Track.Source.Camera,
+      videoCodec: 'h264' as const,
+      simulcast: true,
+      videoSimulcastLayers: videoQualityRef.current === 'saver' ? [VideoPresets.h180] : [VideoPresets.h360, VideoPresets.h720],
+      videoEncoding: { maxBitrate: quality.maxBitrate, maxFramerate: quality.fps },
+      // Under congestion keep motion smooth and lower resolution first; audio is never sacrificed.
+      degradationPreference: 'maintain-framerate' as const
+    };
+  };
+
+  /** Opus at music quality, RED redundancy (survives packet loss), DTX off so music/silence never cuts out. */
+  const audioPublishOptions = () => ({
+    source: Track.Source.Microphone,
+    audioPreset: musicModeRef.current ? AudioPresets.musicHighQualityStereo : AudioPresets.musicHighQuality,
+    red: true,
+    dtx: false,
+    forceStereo: musicModeRef.current
+  });
+
+  const watchHostNetwork = (room: Room) => {
+    const quality = () => {
+      const value = room.localParticipant.connectionQuality;
+      return value === ConnectionQuality.Excellent ? 'Excellent' : value === ConnectionQuality.Good ? 'Good' : value === ConnectionQuality.Poor || value === ConnectionQuality.Lost ? 'Poor' : 'Checking';
+    };
+    const update = () => {
+      const camera = room.localParticipant.getTrackPublication(Track.Source.Camera)?.track as { currentBitrate?: number } | undefined;
+      setHostNetwork({ quality: quality(), kbps: Math.round((camera?.currentBitrate || 0) / 1000) });
+    };
+    room.localParticipant.on(ParticipantEvent.ConnectionQualityChanged, update);
+    const timer = window.setInterval(update, 2000);
+    room.once('disconnected', () => { window.clearInterval(timer); setHostNetwork(null); });
+    update();
+  };
+
+  /** Music Mode on/off: re-open the microphone with music-friendly processing (also while live). */
+  const toggleMusicMode = async () => {
+    const next = !musicModeRef.current;
+    musicModeRef.current = next;
+    setMusicMode(next);
+    const stream = mediaStreamRef.current;
+    const oldTrack = stream?.getAudioTracks()[0];
+    if (!stream) return;
+    try {
+      const fresh = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(next, selectedMicrophoneId || undefined), video: false });
+      const newTrack = fresh.getAudioTracks()[0];
+      if (!newTrack) return;
+      newTrack.enabled = !isAudioMuted;
+      const publication = liveKitRoomRef.current?.localParticipant.getTrackPublication(Track.Source.Microphone) as LocalTrackPublication | undefined;
+      if (publication?.track) await publication.track.replaceTrack(newTrack, { userProvidedTrack: true });
+      if (oldTrack) { stream.removeTrack(oldTrack); oldTrack.stop(); }
+      stream.addTrack(newTrack);
+    } catch (error) {
+      console.warn('[Go Live] Could not switch Music Mode', error);
+      musicModeRef.current = !next;
+      setMusicMode(!next);
+      setSourceError('Could not change the microphone mode on this device.');
+    }
+  };
+
   const handleStartBroadcast = async () => {
     setLiveStartError('');
     setEndSummary(null);
@@ -603,12 +689,14 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
         const liveKitInfo = res as typeof res & { liveKitUrl?: string; liveKitToken?: string };
         if (!liveKitInfo.liveKitUrl || !liveKitInfo.liveKitToken) throw new Error('The live server did not return a LiveKit connection token.');
         createdLiveId = res.live.id;
+        // Dynacast pauses layers nobody watches; simulcast lets every viewer get the layer their internet allows.
         newRoom = new Room({ adaptiveStream: true, dynacast: true });
         await newRoom.connect(liveKitInfo.liveKitUrl, liveKitInfo.liveKitToken);
         const localTracks = mediaStreamRef.current?.getTracks() || [];
         for (const track of localTracks) {
-          await newRoom.localParticipant.publishTrack(track, { source: track.kind === 'audio' ? Track.Source.Microphone : Track.Source.Camera });
+          await newRoom.localParticipant.publishTrack(track, track.kind === 'audio' ? audioPublishOptions() : videoPublishOptions());
         }
+        watchHostNetwork(newRoom);
         liveKitRoomRef.current = newRoom;
         setCurrentSession(res.live);
         setComments([]);
@@ -783,7 +871,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     let active = true;
     const check = () => api.getRtmpStatus().then(result => {
       if (!active) return;
-      setRtmpPoll({ publishing: result.publishing, ingressStatus: result.ingressStatus, held: result.held });
+      setRtmpPoll({ publishing: result.publishing, ingressStatus: result.ingressStatus, held: result.held, input: (result as { input?: RtmpInput | null }).input || null });
       setSoftwareLive(previous => result.live ? { ...(previous?.id === result.live.id ? previous : {}), ...result.live } : null);
     }).catch(() => {});
     void check();
@@ -886,7 +974,15 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     if (!track) return;
     const dimensions = QUALITY_DIMENSIONS[quality];
     try {
-      await track.applyConstraints({ width: { ideal: dimensions.width }, height: { ideal: dimensions.height }, frameRate: { ideal: 30 } });
+      await track.applyConstraints({ width: { ideal: dimensions.width }, height: { ideal: dimensions.height }, frameRate: { ideal: dimensions.fps } });
+      // While live, cap the published bitrate to the new quality too (Data Saver really saves data).
+      const publication = liveKitRoomRef.current?.localParticipant.getTrackPublication(Track.Source.Camera);
+      const sender = (publication?.track as { sender?: RTCRtpSender } | undefined)?.sender;
+      if (sender) {
+        const parameters = sender.getParameters();
+        const top = parameters.encodings?.[parameters.encodings.length - 1];
+        if (top) { top.maxBitrate = dimensions.maxBitrate; top.maxFramerate = dimensions.fps; await sender.setParameters(parameters).catch(() => {}); }
+      }
     } catch {
       videoQualityRef.current = previous;
       setVideoQuality(previous);
@@ -980,9 +1076,12 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
             <label className="flex items-center gap-2 text-xs text-slate-300">
               Quality
               <select value={videoQuality} onChange={e => void changeVideoQuality(e.target.value as typeof videoQuality)} className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-white">
-                <option value="720p">720p</option><option value="480p">480p</option><option value="360p">360p</option>
+                {(Object.keys(QUALITY_DIMENSIONS) as VideoQuality[]).map(key => <option key={key} value={key}>{QUALITY_DIMENSIONS[key].label}</option>)}
               </select>
             </label>
+            <button type="button" onClick={() => void toggleMusicMode()} aria-pressed={musicMode} title="Music Mode keeps music and singing clear (no noise suppression)" className={`rounded-lg border px-2 py-1.5 text-xs font-bold ${musicMode ? 'border-violet-400 bg-violet-600 text-white' : 'border-slate-700 bg-slate-800 text-slate-300'}`}>🎵 Music Mode {musicMode ? 'On' : 'Off'}</button>
+            {isBroadcasting && hostNetwork && <span role="status" title={`Sending ${hostNetwork.kbps} kbps`} className={`rounded-full px-2 py-1 text-[11px] font-bold ${hostNetwork.quality === 'Excellent' ? 'bg-emerald-600/30 text-emerald-200' : hostNetwork.quality === 'Good' ? 'bg-amber-500/30 text-amber-100' : hostNetwork.quality === 'Poor' ? 'bg-rose-600/40 text-rose-100' : 'bg-slate-700 text-slate-200'}`}>● Network: {hostNetwork.quality}{hostNetwork.kbps ? ` · ${(hostNetwork.kbps / 1000).toFixed(1)} Mbps` : ''}</span>}
+            {isBroadcasting && hostNetwork?.quality === 'Poor' && <span role="alert" className="text-[11px] font-semibold text-rose-200">Weak connection — viewers get a lower quality automatically. Try Wi-Fi or Data Saver.</span>}
 
             <div className="flex items-center gap-3">
               {isBroadcasting && (
@@ -1236,6 +1335,16 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                     </div>
                     <button type="button" onClick={() => void endSoftwareLive()} className="min-h-10 rounded-xl bg-white px-3 text-sm font-extrabold text-rose-700">End Live</button>
                   </div>
+                  {rtmpPoll?.input && (() => {
+                    const input = rtmpPoll.input;
+                    // Health of what OBS is sending (LiveKit ingress input stats).
+                    const health = input.videoKbps >= 2500 && input.framerate >= 25 ? 'Excellent' : input.videoKbps >= 1000 && input.framerate >= 20 ? 'Good' : 'Poor';
+                    return <div role="status" aria-label="Stream health" className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+                      <span className={`rounded-full px-2 py-0.5 ${health === 'Excellent' ? 'bg-emerald-600/30 text-emerald-200' : health === 'Good' ? 'bg-amber-500/30 text-amber-100' : 'bg-rose-600/50 text-white'}`}>● {health}</span>
+                      <span className="text-rose-100">{(input.videoKbps / 1000).toFixed(1)} Mbps · {input.width && input.height ? `${input.height}p` : '—'} · {input.framerate || '—'} fps · audio {input.audioKbps} kbps {input.channels === 2 ? 'stereo' : input.channels === 1 ? 'mono' : ''}</span>
+                      {health === 'Poor' && <span className="w-full text-rose-200">Low bitrate or dropped frames from your app. Check your upload speed, lower the bitrate (e.g. 2500 kbps) or use 720p in OBS.</span>}
+                    </div>;
+                  })()}
                   {firebaseUser?.uid && <SoftwareLivePreview streamId={softwareLive.id} hostId={firebaseUser.uid} />}
                 </div>
               ) : rtmpPoll?.held ? (
@@ -1245,6 +1354,19 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               ) : (
                 <p role="status" className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-400">Status: <strong className="text-slate-200">Waiting for your stream.</strong> Start streaming in your app — you go live automatically (checked every 3 seconds). When it stops, viewers see Live Ended.</p>
               )}
+
+              <details className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-300">
+                <summary className="cursor-pointer text-sm font-bold text-white">Recommended OBS settings (best quality)</summary>
+                <p className="mt-2 text-slate-400">eChat turns your stream into 1080p, 720p and low-quality layers automatically, so viewers on slow internet still get smooth video.</p>
+                <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                  <dt className="font-bold text-slate-200">Output → Encoder</dt><dd>Hardware (NVENC / Apple VT / QuickSync) if available, otherwise x264</dd>
+                  <dt className="font-bold text-slate-200">Rate control</dt><dd>CBR · Bitrate <strong>4500–6000 kbps</strong> (2500 kbps if your upload is under 8 Mbps)</dd>
+                  <dt className="font-bold text-slate-200">Keyframe interval</dt><dd><strong>2 s</strong></dd>
+                  <dt className="font-bold text-slate-200">x264 preset / profile</dt><dd>veryfast · high</dd>
+                  <dt className="font-bold text-slate-200">Video</dt><dd>Output 1920×1080 (or 1280×720) · <strong>30 fps</strong></dd>
+                  <dt className="font-bold text-slate-200">Audio</dt><dd>AAC · <strong>48 kHz</strong> · <strong>Stereo</strong> · 160–192 kbps</dd>
+                </dl>
+              </details>
 
               {liveConfig && !liveConfig.ready && <div role="alert" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-sm leading-5 text-amber-200">
                 <p className="font-bold">Live server setup is incomplete.</p>
