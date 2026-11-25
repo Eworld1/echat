@@ -90,25 +90,64 @@ async function callServer(path: string, body: Record<string, unknown>) {
   if (!res.ok) throw new Error((await res.json().catch(() => ({})) as { error?: string }).error || 'Could not update notifications. Please try again.');
 }
 
+/**
+ * Temporary phone / browser hiccups that go away on a second try:
+ * - "Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing." - the browser
+ *   closed Firebase's IndexedDB connection (app resumed from background, or an older eChat tab is open);
+ *   Firebase reopens it on the next call.
+ * - "no active Service Worker" - the push worker was still starting.
+ */
+const TRANSIENT = /IDBDatabase|database connection is closing|InvalidStateError|AbortError|UnknownError|no active service worker|registration failed|not registered|still starting/i;
+async function withRetry<T>(task: () => Promise<T>): Promise<T> {
+  const delays = [600, 1500, 3000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await task();
+    } catch (error) {
+      const text = `${(error as Error)?.name || ''} ${(error as Error)?.message || error}`;
+      if (!TRANSIENT.test(text) || attempt >= delays.length) {
+        console.warn('Push notifications could not start:', error);
+        // Never show raw browser / database errors to people.
+        throw new Error(TRANSIENT.test(text) ? 'Notifications could not start right now. Please close and reopen eChat, then tap Turn on again.' : friendlyPushError(error));
+      }
+      await new Promise(resolve => window.setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+function friendlyPushError(error: unknown): string {
+  const text = String((error as Error)?.message || error);
+  if (/permission|blocked|denied/i.test(text)) return 'Notifications are blocked. Allow them for eChat in your browser settings, then try again.';
+  if (/network|fetch|offline|Failed to fetch/i.test(text)) return 'No internet connection. Check your network and try again.';
+  if (/log in|sign in|session/i.test(text)) return text;
+  return 'Could not turn on notifications. Please try again.';
+}
+
 /** Ask for permission (if needed), get this device's FCM token and save it for the signed-in user. */
-export async function enablePush(): Promise<PushState> {
+// One push operation at a time: overlapping getToken / deleteToken calls fight over Firebase's database.
+let pushQueue: Promise<unknown> = Promise.resolve();
+let enabling: Promise<PushState> | null = null;
+function queued<T>(task: () => Promise<T>): Promise<T> {
+  const run = pushQueue.then(task, task);
+  pushQueue = run.catch(() => undefined);
+  return run;
+}
+
+export function enablePush(): Promise<PushState> {
+  // Tapping "Turn on" while the login refresh is running joins the same attempt.
+  if (!enabling) enabling = queued(enablePushNow).finally(() => { enabling = null; });
+  return enabling;
+}
+
+async function enablePushNow(): Promise<PushState> {
   if (!(await pushSupported())) return 'unsupported';
   const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
   write(ASKED_KEY, String(Date.now()));
   if (permission !== 'granted') { changed(); return permission === 'denied' ? 'blocked' : 'off'; }
   const { getMessaging, getToken } = await import('firebase/messaging');
   const messaging = getMessaging(app);
-  let token: string;
-  try {
-    token = await getToken(messaging, { serviceWorkerRegistration: await serviceWorker(), vapidKey: VAPID_KEY });
-  } catch (error) {
-    // A phone can still be swapping workers at the moment of the tap: wait for the active one and retry once.
-    if (!/no active service worker|registration failed|not registered/i.test(String((error as Error)?.message))) throw error;
-    await new Promise(resolve => window.setTimeout(resolve, 1500));
-    token = await getToken(messaging, { serviceWorkerRegistration: await serviceWorker(), vapidKey: VAPID_KEY });
-  }
+  const token = await withRetry(async () => getToken(messaging, { serviceWorkerRegistration: await serviceWorker(), vapidKey: VAPID_KEY }));
   if (!token) throw new Error('Could not turn on notifications. Please try again.');
-  await callServer('/api/push/token', { token, platform: isInstalledApp() ? 'pwa' : 'browser' });
+  await withRetry(() => callServer('/api/push/token', { token, platform: isInstalledApp() ? 'pwa' : 'browser' }));
   write(TOKEN_KEY, token);
   write(PREF_KEY, 'on');
   changed();
@@ -119,13 +158,17 @@ export async function enablePush(): Promise<PushState> {
  * Stop pushes to this device. Logging out passes keepChoice so the next person who logs in here
  * gets their own token (and the previous person's notifications never show up on this phone).
  */
-export async function disablePush(options: { keepChoice?: boolean } = {}): Promise<void> {
+export function disablePush(options: { keepChoice?: boolean } = {}): Promise<void> {
+  return queued(() => disablePushNow(options));
+}
+
+async function disablePushNow(options: { keepChoice?: boolean }): Promise<void> {
   const token = read(TOKEN_KEY);
   if (!options.keepChoice) write(PREF_KEY, 'off');
   remove(TOKEN_KEY);
   if (token) await callServer('/api/push/token/remove', { token }).catch(() => {});
   if (await pushSupported()) {
-    try { const { getMessaging, deleteToken } = await import('firebase/messaging'); await deleteToken(getMessaging(app)); } catch { /* nothing to delete */ }
+    try { const { getMessaging, deleteToken } = await import('firebase/messaging'); await withRetry(() => deleteToken(getMessaging(app))); } catch { /* nothing to delete */ }
   }
   setAppBadge(0);
   changed();
