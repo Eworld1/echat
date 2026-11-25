@@ -216,40 +216,71 @@ export function useActiveLives(enabled = true): LiveStream[] | null {
   return streams;
 }
 
-export type HostLiveState = { loaded: boolean; stream: LiveStream | null; ended: boolean };
+export type HostLiveState = {
+  loaded: boolean;
+  /** The host's CURRENT live (id = current streamId, liveKitRoom = current room). */
+  stream: LiveStream | null;
+  /** Only true when the live document says status 'ended' (or the live never existed). */
+  ended: boolean;
+  /** Host's heartbeat is late (phone app in background / network) — show "Reconnecting", not "Ended". */
+  stale: boolean;
+  source: 'firestore' | 'server';
+};
 
 /**
- * Follow one host's live (lives/{hostId}): the CURRENT stream id, title, viewer count and whether it
- * ended (status 'ended' or no heartbeat for 30 s). Lives started before lives/{hostId} existed (or
- * before the read rule is published) are followed through liveStreams/{fallbackStreamId}.
+ * Follow ONE host's live for the player: lives/{hostId} in realtime; when this device can't read it
+ * (rules not published, offline cache…) the server is asked every 4 s instead (Admin read).
+ * "Ended" comes only from status 'ended' — never from a slow video, an empty room or a token error.
  */
 export function listenHostLive(hostId: string, fallbackStreamId: string, onState: (state: HostLiveState) => void): Unsubscribe {
-  let stop: (() => void) | null = null;
-  let latest: RawLive | null = null;
   let closed = false;
+  let stopFirestore: (() => void) | null = null;
+  let poll: number | null = null;
+  let latest: RawLive | null = null;
+  let ended = false;
+  let source: HostLiveState['source'] = 'firestore';
   const emit = () => {
-    if (!latest) { onState({ loaded: true, stream: null, ended: true }); return; }
-    onState({ loaded: true, stream: latest, ended: latest.status !== 'live' || !isLiveFresh(latest) });
+    if (closed) return;
+    onState({ loaded: true, stream: latest, ended, stale: Boolean(latest && !ended && !isLiveFresh(latest)), source });
   };
-  const followLegacy = () => {
-    stop?.();
-    if (!fallbackStreamId) { latest = null; emit(); stop = null; return; }
-    stop = onSnapshot(doc(db, 'liveStreams', fallbackStreamId), snapshot => {
-      latest = snapshot.exists() ? legacyToStream(snapshot.id, snapshot.data()) : null;
-      emit();
-    }, () => { latest = null; emit(); });
+  const useServer = () => {
+    if (poll !== null || closed) return;
+    source = 'server';
+    stopFirestore?.();
+    stopFirestore = null;
+    const check = async () => {
+      try {
+        const res = await fetch(apiUrl(`/api/live/current?id=${encodeURIComponent(hostId || fallbackStreamId)}`), { cache: 'no-store' });
+        if (!res.ok) return; // network / server hiccup: keep the last known state
+        const body = await res.json() as { live: (LiveStream & { updatedAt?: number }) | null; state?: { status: string; stale?: boolean } };
+        const status = body.state?.status;
+        if (status === 'live' && body.live) {
+          latest = { ...body.live, updatedAt: Number(body.live.updatedAt || Date.now()), status: 'live' };
+          // The server already judged the heartbeat; don't re-judge it with this device's clock.
+          if (!body.state?.stale) latest = { ...latest, updatedAt: Date.now() };
+          ended = false;
+        } else if (status === 'ended' || status === 'missing') {
+          ended = true;
+        }
+        emit();
+      } catch { /* offline: keep showing the last known state */ }
+    };
+    void check();
+    poll = window.setInterval(() => { void check(); }, 4000);
   };
-  if (!hostId) followLegacy();
+  if (!hostId) useServer();
   else {
-    stop = onSnapshot(doc(db, 'lives', hostId), snapshot => {
+    stopFirestore = onSnapshot(doc(db, 'lives', hostId), snapshot => {
       if (closed) return;
-      if (!snapshot.exists()) { followLegacy(); return; }
-      latest = hostLiveToStream(hostId, snapshot.data());
+      if (!snapshot.exists()) { useServer(); return; }
+      const data = snapshot.data();
+      latest = hostLiveToStream(hostId, data);
+      ended = data.status === 'ended';
       emit();
-    }, () => { if (!closed) followLegacy(); });
+    }, () => useServer());
   }
   const ticker = window.setInterval(() => { if (latest) emit(); }, 5000);
-  return () => { closed = true; stop?.(); window.clearInterval(ticker); };
+  return () => { closed = true; stopFirestore?.(); if (poll !== null) window.clearInterval(poll); window.clearInterval(ticker); };
 }
 
 export function getLiveDiscoveryUserData(userId: string): Promise<LiveDiscoveryUserData> {

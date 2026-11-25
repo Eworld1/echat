@@ -44,12 +44,13 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   const { onLiveComment, onLiveReaction, onLiveViewersUpdated, onLiveStopped, onLiveSignal, onLiveCaption, socket } = useSocket();
 
   const [liveDataState, setLiveData] = useState<LiveStream | null>(currentStream);
-  // The host's live document (lives/{hostId}) is the source of truth: which stream is CURRENT, and
-  // whether it ended (status 'ended' or no heartbeat for 30 s). Cards may hold an old stream id.
-  const [hostLive, setHostLive] = useState<HostLiveState>({ loaded: false, stream: null, ended: false });
+  // ONE id everywhere: the player follows lives/{hostId} (the same document the feed card and the
+  // notification come from) and joins the room it names. Only status 'ended' there ends the player.
+  const [hostLive, setHostLive] = useState<HostLiveState>({ loaded: false, stream: null, ended: false, stale: false, source: 'firestore' });
   useEffect(() => {
     if (!currentStream?.liveKitRoom) return;
-    setHostLive({ loaded: false, stream: null, ended: false });
+    console.info('[Live] Opening player', { liveId: currentStream.hostId, streamId: currentStream.id, roomName: currentStream.liveKitRoom });
+    setHostLive({ loaded: false, stream: null, ended: false, stale: false, source: 'firestore' });
     return listenHostLive(currentStream.hostId, currentStream.id, setHostLive);
   }, [currentStream?.hostId, currentStream?.id, currentStream?.liveKitRoom]);
   // LiveKit lives wait for the host document, so nothing ever joins an old stream id from a card.
@@ -79,12 +80,17 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
   const queuedCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   const commentsEndRef = useRef<HTMLDivElement | null>(null);
-  // Ended for a specific stream id (join/connect said so), plus the host document's own status.
-  const [endedStreamId, setEndedStreamId] = useState('');
-  const liveEnded = hostLive.ended || (Boolean(streamId) && endedStreamId === streamId);
-  const setLiveEnded = (ended: boolean, id = streamId) => setEndedStreamId(ended ? id : '');
-  // A new heartbeat from the host means it is on air again (e.g. it came back after a network drop).
-  useEffect(() => { if (hostLive.stream?.updatedAt) setEndedStreamId(''); }, [hostLive.stream?.updatedAt]);
+  // LiveKit lives end ONLY when lives/{hostId} says status 'ended' (host tapped End Live, OBS stopped,
+  // or the server timed the host out). Slow video, an empty room or a token error never end it.
+  // Old socket-only lives keep their socket "live stopped" event.
+  const [legacyEnded, setLegacyEnded] = useState(false);
+  const liveEnded = currentStream?.liveKitRoom ? hostLive.ended : legacyEnded;
+  const roomName = hostLive.stream?.liveKitRoom || '';
+  // Video connection: 'connecting' → 'connected'; failures retry automatically 3 times, then "Tap to Retry".
+  const [connectState, setConnectState] = useState<'connecting' | 'retrying' | 'connected' | 'waiting-video' | 'failed'>('connecting');
+  const [connectAttempt, setConnectAttempt] = useState(0);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const retryNow = () => { setConnectAttempt(0); setConnectState('connecting'); setRetryNonce(value => value + 1); };
   // Socket helpers can change identity on every provider render; keep them in refs so the video
   // connection is NOT torn down and rebuilt each time (that caused reconnect loops / black video).
   const socketRef = useRef(socket);
@@ -108,9 +114,8 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     }
     if (!streamId || liveEnded) return;
     const joinedId = streamId;
-    void api.joinLiveStream(joinedId).then(result => setLiveData(prev => prev ? { ...prev, viewersCount: result.viewersCount } : prev)).catch(error => {
-      if ((error as { code?: string })?.code === 'live-ended') setLiveEnded(true, joinedId);
-    });
+    // A failed join only means this view isn't counted yet; it never ends the player.
+    void api.joinLiveStream(joinedId).then(result => setLiveData(prev => prev ? { ...prev, viewersCount: result.viewersCount } : prev)).catch(error => console.warn('[Live] Viewer count join failed:', (error as Error)?.message));
     const leave = () => { void api.leaveLiveStream(joinedId); };
     window.addEventListener('pagehide', leave);
     return () => {
@@ -126,7 +131,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     const watchedId = streamId;
     return onSnapshot(doc(db, 'liveStreams', watchedId), snapshot => {
       const data = snapshot.data();
-      if (!snapshot.exists() || data?.isActive !== true) { setLiveEnded(true, watchedId); return; }
+      if (!snapshot.exists() || !data) return; // "ended" is decided by lives/{hostId} only
       setLiveData(prev => prev ? { ...prev, viewersCount: Number(data.viewersCount || 0), title: String(data.title || prev.title) } : prev);
       const reactions = Number(data.reactionsCount || 0);
       const previous = lastReactionCountRef.current;
@@ -163,17 +168,32 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     const liveKitAudio: HTMLAudioElement[] = [];
     let peer: RTCPeerConnection | null = null;
     if (currentStream.liveKitRoom) {
-      if (liveEnded || !hostLive.loaded || !streamId) return;
+      if (liveEnded || !hostLive.loaded || !streamId || !hostLive.stream) return;
       const connectingId = streamId;
+      let videoTimer: number | null = null;
+      const fail = (error: unknown) => {
+        if (cancelled) return;
+        console.warn('[Live] Could not connect to the live video:', error);
+        setConnectError(error instanceof Error ? error.message : 'Could not connect to the live video.');
+        if (connectAttempt < 3) {
+          setConnectState('retrying');
+          window.setTimeout(() => { if (!cancelled) { setConnectAttempt(value => value + 1); setRetryNonce(value => value + 1); } }, 2000 * (connectAttempt + 1));
+        } else setConnectState('failed');
+      };
       const connectLiveKit = async () => {
         try {
-          // Joined by HOST: the server hands out the host's current room, never a stale one.
+          setConnectState(connectAttempt ? 'retrying' : 'connecting');
+          console.info(`[Live] Joining room: ${roomName}, liveId: ${currentStream.hostId}, streamId: ${connectingId}, status: ${hostLive.stream?.status || 'live'}, attempt: ${connectAttempt + 1}`);
+          // A FRESH viewer token (canSubscribe) for the host's CURRENT room, looked up by host on the server.
           const credentials = await api.getLiveKitViewerToken(connectingId, currentStream.hostId);
           if (cancelled) return;
           liveKitRoom = new Room({ adaptiveStream: true, dynacast: true });
           liveKitRoom.on(RoomEvent.TrackSubscribed, (track: any) => {
             if (track.kind === Track.Kind.Video && videoRef.current) {
               track.attach(videoRef.current);
+              if (videoTimer) window.clearTimeout(videoTimer);
+              setConnectState('connected');
+              setConnectError('');
               setRemoteVideo(new MediaStream());
             } else if (track.kind === Track.Kind.Audio) {
               const audio = track.attach() as HTMLAudioElement;
@@ -188,18 +208,20 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
             track.detach().forEach((element: HTMLElement) => element.remove());
             if (track.kind === Track.Kind.Video) setRemoteVideo(null);
           });
-          liveKitRoom.on(RoomEvent.Disconnected, () => setRemoteVideo(null));
+          // Dropped (network, room restart): reconnect instead of ending.
+          liveKitRoom.on(RoomEvent.Disconnected, () => { setRemoteVideo(null); if (!cancelled) fail(new Error('The live video connection dropped.')); });
           await liveKitRoom.connect(credentials.url, credentials.token);
+          if (cancelled) return;
+          // Connected: the host's tracks may take a few seconds (OBS keyframe / transcoding). Never "ended".
+          videoTimer = window.setTimeout(() => { if (!cancelled) setConnectState(state => state === 'connected' ? state : 'waiting-video'); }, 15_000);
         } catch (error) {
-          console.warn('Could not connect to the LiveKit broadcast:', error);
-          const code = (error as { code?: string })?.code;
-          if (code === 'live-not-found') setLiveEnded(true, connectingId);
-          else if (!cancelled) setConnectError(error instanceof Error ? error.message : 'Could not connect to the live video.');
+          fail(error);
         }
       };
       void connectLiveKit();
       return () => {
         cancelled = true;
+        if (videoTimer) window.clearTimeout(videoTimer);
         liveKitRoom?.disconnect();
         liveKitAudio.forEach(audio => { audio.pause(); audio.remove(); });
         setRemoteVideo(null);
@@ -254,7 +276,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
       queuedCandidatesRef.current = [];
       setRemoteVideo(null);
     };
-  }, [currentStream?.id, currentStream?.hostId, streamId, hostLive.loaded, liveEnded, videoJoined]);
+  }, [currentStream?.id, currentStream?.hostId, streamId, roomName, hostLive.loaded, Boolean(hostLive.stream), liveEnded, videoJoined, retryNonce]);
 
   // Socket listeners for real-time live events
   useEffect(() => {
@@ -281,7 +303,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
 
     // Legacy socket lives end via the socket event; LiveKit lives end via their Firestore document.
     const unsubEnded = onLiveStopped(() => {
-      if (!currentStream.liveKitRoom) setLiveEnded(true, currentStream.id);
+      if (!currentStream.liveKitRoom) setLegacyEnded(true);
     });
 
     return () => {
@@ -419,6 +441,7 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
             <video ref={videoRef} autoPlay playsInline muted={isMuted} className={`absolute inset-0 w-full h-full object-cover object-center ${remoteVideo ? 'block' : 'hidden'}`} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }} />
             {showCaptions && liveCaption && <div className={`absolute bottom-20 left-1/2 z-30 line-clamp-2 max-w-[85%] -translate-x-1/2 rounded bg-black/80 px-3 py-1.5 text-center font-semibold text-white ${captionSize === 'sm' ? 'text-sm' : captionSize === 'lg' ? 'text-xl' : 'text-base'}`}>{liveCaption}</div>}
             <div className="absolute bottom-4 right-4 z-40 flex gap-1 rounded-lg bg-black/75 p-1"><button onClick={() => setShowCaptions(value => !value)} className="px-2 py-1 text-xs font-bold text-white">CC {showCaptions ? 'On' : 'Off'}</button>{showCaptions && <select aria-label="Caption text size" value={captionSize} onChange={event => setCaptionSize(event.target.value as typeof captionSize)} className="bg-transparent text-xs text-white"><option value="sm">Small</option><option value="base">Medium</option><option value="lg">Large</option></select>}</div>
+            {remoteVideo && hostLive.stale && <div role="status" className="absolute left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/75 px-3 py-1.5 text-xs font-bold text-white"><span className="h-3 w-3 animate-spin rounded-full border-2 border-rose-500 border-t-transparent" />Reconnecting to the host…</div>}
             {!remoteVideo && <div className="flex flex-col items-center justify-center p-8 text-center">
               <div className="relative mb-4">
                 <img
@@ -433,10 +456,17 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
                 <VerifiedBadge size={16} />
               </h3>
               <p className="text-xs text-rose-400 font-bold uppercase tracking-wider mt-1">
-                {connectError ? 'Could not load the live video' : videoJoined ? 'Connecting to live video…' : 'Low Data Mode is ON'}
+                {!videoJoined ? 'Low Data Mode is ON'
+                  : hostLive.stale ? 'Reconnecting to the host…'
+                  : connectState === 'retrying' ? `Retrying… (${Math.min(connectAttempt + 1, 3)}/3)`
+                  : connectState === 'failed' ? 'Could not load the live video'
+                  : connectState === 'waiting-video' ? "Waiting for the host's video…"
+                  : 'Connecting to live video…'}
               </p>
+              {videoJoined && connectState !== 'failed' && <span aria-hidden="true" className="mt-3 h-6 w-6 animate-spin rounded-full border-2 border-rose-500 border-t-transparent" />}
+              {videoJoined && (connectState === 'failed' || connectState === 'waiting-video') && <button type="button" onClick={retryNow} className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-full bg-rose-600 px-5 text-sm font-extrabold text-white hover:bg-rose-500">Tap to Retry</button>}
               {!videoJoined && <button type="button" onClick={() => setVideoJoined(true)} className="mt-4 inline-flex min-h-12 items-center gap-2 rounded-full bg-gradient-to-r from-rose-600 to-pink-600 px-6 text-sm font-extrabold text-white shadow-lg shadow-rose-600/30 hover:brightness-110"><Radio size={18} />Tap to Join Live</button>}
-              {connectError && <p role="alert" className="mt-2 max-w-sm text-xs text-rose-200">{connectError}</p>}
+              {connectError && connectState === 'failed' && <p role="alert" className="mt-2 max-w-sm text-xs text-rose-200">{connectError}</p>}
               <p className="text-xs text-slate-400 mt-2 max-w-sm">
                 "{liveData.title}"
               </p>

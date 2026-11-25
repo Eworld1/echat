@@ -13,17 +13,25 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     const { user } = await verifyLiveUser(req);
     const hostId = String(req.query?.hostId || '');
     let streamId = String(req.query?.streamId || '');
+    // lives/{hostId} decides: its CURRENT streamId and room (the same document the feed card shows).
+    let live: Record<string, any> | undefined;
     if (hostId) {
       const pointer = await hostLiveRef(hostId).get();
       const data = pointer.data();
-      if (pointer.exists) {
-        if (data?.status !== 'live' || isHeartbeatStale(data)) return sendJson(res, 404, { error: 'This live stream has ended.', code: 'live-not-found' });
+      if (pointer.exists && data) {
+        if (data.status !== 'live') return sendJson(res, 404, { error: 'This live stream has ended.', code: 'live-not-found' });
+        if (isHeartbeatStale(data)) return sendJson(res, 503, { error: 'The host is reconnecting. Retrying…', code: 'host-reconnecting' });
         streamId = String(data.streamId || '');
+        if (data.liveKitRoom) live = { hostId, liveKitRoom: data.liveKitRoom };
       }
     }
-    const doc = streamId ? await lives.doc(streamId).get() : null;
-    const live = doc?.data();
-    if (!doc?.exists || !live?.isActive || !live.liveKitRoom || isHeartbeatStale(live)) return sendJson(res, 404, { error: 'This live stream has ended.', code: 'live-not-found' });
+    if (!live) {
+      const doc = streamId ? await lives.doc(streamId).get() : null;
+      const data = doc?.data();
+      if (!doc?.exists || !data?.isActive || !data.liveKitRoom || isHeartbeatStale(data)) return sendJson(res, 404, { error: 'This live stream has ended.', code: 'live-not-found' });
+      live = data;
+    }
+    console.info('[Vercel Live API] watch', { hostId: live.hostId, streamId, roomName: live.liveKitRoom });
     if (live.hostId !== user.uid) {
       const [hostBlockedViewer, viewerBlockedHost, viewerProfile] = await Promise.all([
         firestore.collection('blocks').doc(`${live.hostId}_${user.uid}`).get(),
@@ -35,7 +43,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       }
     }
     const token = await createRoomToken(user, String(live.liveKitRoom), false);
-    return sendJson(res, 200, { url: liveKitUrl, token, streamId: doc.id });
+    return sendJson(res, 200, { url: liveKitUrl, token, streamId, roomName: live.liveKitRoom });
   } catch (error) {
     return handleError(res, error, 'watch');
   }

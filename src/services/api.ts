@@ -937,6 +937,12 @@ export const api = {
     await fetch(apiUrl('/api/live/current'), { cache: 'no-store' }).catch(() => undefined);
   },
 
+  /** One host's live right now, never cached (player). status: 'live' | 'ended' | 'missing'. */
+  async getLiveState(id: string): Promise<{ live: LiveStream | null; state?: { status: 'live' | 'ended' | 'missing'; endedAt: number | null; stale: boolean; hostId?: string } }> {
+    const res = await fetch(apiUrl(`/api/live/current?id=${encodeURIComponent(id)}`), { cache: 'no-store' });
+    return readResponse(res, 'Could not check this live');
+  },
+
   /** Host heartbeat (every 10 s while live). Throws an error with code 'live-ended' (410) when the live is over. */
   async sendLiveHeartbeat(streamId: string): Promise<void> {
     const res = await fetch(apiUrl('/api/live/heartbeat'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify({ streamId }), cache: 'no-store' });
