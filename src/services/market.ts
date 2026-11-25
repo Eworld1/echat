@@ -2,6 +2,7 @@ import { collection, deleteDoc, doc, onSnapshot, query, setDoc, where, type Unsu
 import { db } from './firebase';
 import { uploadToCloudinary } from './upload';
 import { createV2Listing, deleteV2Listing, reportV2Listing, updateV2Listing, type V2MarketListing } from './v2Market';
+import { api } from './api';
 
 /**
  * EChat Marketplace helpers. Listings stay in the existing Firestore collection
@@ -185,8 +186,10 @@ export function listenFavorites(uid: string, onIds: (ids: Set<string>) => void):
 }
 
 export async function setFavorite(uid: string, listingId: string, on: boolean): Promise<void> {
-  if (on) await setDoc(favRef(uid, listingId), { uid, listingId, createdAt: Date.now() });
-  else await deleteDoc(favRef(uid, listingId));
+  if (on) {
+    await setDoc(favRef(uid, listingId), { uid, listingId, createdAt: Date.now() });
+    void api.notifyActivity('market_like', listingId); // seller sees "X liked your Marketplace item"
+  } else await deleteDoc(favRef(uid, listingId));
 }
 
 /** One-time move of favorites saved on this device by the old Marketplace into Firestore. */

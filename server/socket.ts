@@ -16,6 +16,12 @@ export class SocketManager {
   private pendingCalls = new Map<string, { callerId: string; receiverId: string; callType: 'audio' | 'video'; timer: ReturnType<typeof setTimeout> }>();
   private static readonly RING_TIMEOUT_MS = 45_000;
 
+  /**
+   * Checks that the Firebase ID token sent with "auth" belongs to this user. Without it anyone could
+   * claim another person's id and receive their private messages live.
+   */
+  public authVerifier?: (userId: string, idToken: string) => Promise<boolean>;
+
   private userIdOf(ws: WebSocket): string | undefined {
     for (const [uid, set] of this.userSockets) if (set.has(ws)) return uid;
     return undefined;
@@ -110,32 +116,28 @@ export class SocketManager {
     });
   }
 
+  /** Only called after the "auth" message was verified. */
+  private registerSocket(ws: WebSocket, userId: string, setCurrentUser: (uid: string) => void) {
+    if (this.userIdOf(ws) === userId) return;
+    setCurrentUser(userId);
+    if (!this.userSockets.has(userId)) this.userSockets.set(userId, new Set());
+    this.userSockets.get(userId)!.add(ws);
+    db.setUserOnline(userId, true);
+    this.broadcast({ type: 'user_status', userId, isOnline: true, lastSeen: Date.now() });
+    // Send current online user IDs
+    ws.send(JSON.stringify({ type: 'online_users_list', userIds: Array.from(this.userSockets.keys()) }));
+  }
+
   private handleMessage(ws: WebSocket, payload: any, setCurrentUser: (uid: string) => void) {
     switch (payload.type) {
       case 'auth': {
-        const { userId } = payload;
-        if (!userId) return;
-        setCurrentUser(userId);
-
-        if (!this.userSockets.has(userId)) {
-          this.userSockets.set(userId, new Set());
-        }
-        this.userSockets.get(userId)!.add(ws);
-
-        db.setUserOnline(userId, true);
-        this.broadcast({
-          type: 'user_status',
-          userId,
-          isOnline: true,
-          lastSeen: Date.now()
-        });
-
-        // Send current online user IDs
-        const onlineUsers = Array.from(this.userSockets.keys());
-        ws.send(JSON.stringify({
-          type: 'online_users_list',
-          userIds: onlineUsers
-        }));
+        const { userId, idToken } = payload;
+        if (!userId || typeof userId !== 'string') return;
+        if (!this.authVerifier) { this.registerSocket(ws, userId, setCurrentUser); break; }
+        const fail = () => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'auth_failed' })); };
+        void this.authVerifier(userId, typeof idToken === 'string' ? idToken : '')
+          .then(ok => { if (!ok) fail(); else if (ws.readyState === WebSocket.OPEN) this.registerSocket(ws, userId, setCurrentUser); })
+          .catch(fail);
         break;
       }
 

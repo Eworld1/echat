@@ -1006,6 +1006,11 @@ class Database {
     return msg;
   }
 
+  /** Unread messages in the older chat store (the newer /api/dm store is counted separately). */
+  countUnreadLegacyMessages(userId: string): number {
+    return this.data.messages.filter(m => m.receiverId === userId && m.status !== 'seen' && !m.deletedFor?.includes(userId)).length;
+  }
+
   markConversationSeen(viewerId: string, partnerId: string): void {
     let changed = false;
     for (const msg of this.data.messages) {

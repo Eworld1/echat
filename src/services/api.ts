@@ -167,6 +167,15 @@ function getHeaders(customHeaders: Record<string, string> = {}) {
   };
 }
 
+/**
+ * Headers for private data (DMs, notifications, unread counts): the server also checks this Firebase
+ * ID token, so nobody can read someone else's messages by typing their user id.
+ */
+async function privateHeaders(customHeaders: Record<string, string> = {}) {
+  const token = await auth.currentUser?.getIdToken().catch(() => '') || '';
+  return getHeaders({ ...(token ? { 'x-firebase-id-token': token } : {}), ...customHeaders });
+}
+
 /** Same auth headers, but without Content-Type so the browser sets the multipart boundary. */
 function getMultipartHeaders() {
   const { 'Content-Type': _json, ...rest } = getHeaders();
@@ -364,12 +373,12 @@ export const api = {
     }
   },
   async getConversationPartners(): Promise<string[]> {
-    const res = await fetch(apiUrl('/api/conversations'), { headers: getHeaders() });
+    const res = await fetch(apiUrl('/api/conversations'), { headers: await privateHeaders() });
     return readResponse<string[]>(res, 'Could not load conversations');
   },
   async getDmConversations(authUserId?: string): Promise<DirectConversation[]> {
     return cachedApiRead('dm:conversations', async () => {
-      const headers = authUserId ? getHeaders({ 'x-user-id': authUserId }) : getHeaders();
+      const headers = authUserId ? await privateHeaders({ 'x-user-id': authUserId }) : await privateHeaders();
       const res = await fetchDmRequest('/api/dm/conversations', { headers, cache: 'no-store' });
       const data = await readResponse<{ conversations: DirectConversation[] }>(res, 'Could not load direct messages');
       return Array.isArray(data.conversations) ? data.conversations : [];
@@ -377,13 +386,13 @@ export const api = {
   },
   async getDmConversation(userId: string, authUserId?: string): Promise<DirectMessage[]> {
     return cachedApiRead(`dm:conversation:${userId}`, async () => {
-      const headers = authUserId ? getHeaders({ 'x-user-id': authUserId }) : getHeaders();
+      const headers = authUserId ? await privateHeaders({ 'x-user-id': authUserId }) : await privateHeaders();
       const res = await fetchDmRequest(`/api/dm/${encodeURIComponent(userId)}`, { headers, cache: 'no-store' });
       return readResponse<DirectMessage[]>(res, 'Could not load this conversation');
     }, authUserId);
   },
   async sendDm(userId: string, text: string, attachments?: MessageAttachment[], authUserId?: string): Promise<DirectMessage> {
-    const headers = authUserId ? getHeaders({ 'x-user-id': authUserId }) : getHeaders();
+    const headers = authUserId ? await privateHeaders({ 'x-user-id': authUserId }) : await privateHeaders();
     const res = await fetchDmRequest(`/api/dm/${encodeURIComponent(userId)}`, {
       method: 'POST',
       headers,
@@ -395,7 +404,7 @@ export const api = {
     return message;
   },
   async markDmRead(userId: string, authUserId?: string): Promise<void> {
-    const headers = authUserId ? getHeaders({ 'x-user-id': authUserId }) : getHeaders();
+    const headers = authUserId ? await privateHeaders({ 'x-user-id': authUserId }) : await privateHeaders();
     const res = await fetchDmRequest(`/api/dm/${encodeURIComponent(userId)}/read`, { method: 'POST', headers });
     await readResponse<{ success: boolean }>(res, 'Could not mark messages as read');
     invalidateApiReadCache('dm:conversations', authUserId);
@@ -655,7 +664,7 @@ export const api = {
   async getMessages(partnerId: string): Promise<Message[]> {
     return cachedApiRead(`messages:${partnerId}`, async () => {
       try {
-        const res = await fetch(apiUrl(`/api/messages/${partnerId}`), { headers: getHeaders() });
+        const res = await fetch(apiUrl(`/api/messages/${partnerId}`), { headers: await privateHeaders() });
         if (!res.ok) return [];
         const data = await readResponse<Message[]>(res);
         return Array.isArray(data) ? data : [];
@@ -676,7 +685,7 @@ export const api = {
   }): Promise<Message> {
     const res = await fetch(apiUrl('/api/messages'), {
       method: 'POST',
-      headers: getHeaders(),
+      headers: await privateHeaders(),
       body: JSON.stringify(data)
     });
     const message = await readResponse<Message>(res);
@@ -685,19 +694,19 @@ export const api = {
   },
 
   async editMessage(messageId: string, text: string): Promise<Message> {
-    const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'PUT', headers: getHeaders(), body: JSON.stringify({ text }) });
+    const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'PUT', headers: await privateHeaders(), body: JSON.stringify({ text }) });
     return readResponse<Message>(res, 'Could not edit this message');
   },
 
   async deleteMessage(messageId: string): Promise<void> {
-    const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'DELETE', headers: getHeaders() });
+    const res = await fetch(apiUrl(`/api/messages/${messageId}`), { method: 'DELETE', headers: await privateHeaders() });
     await readResponse<{ success: boolean }>(res, 'Could not delete this message');
   },
 
   async markMessagesSeen(partnerId: string) {
     const res = await fetch(apiUrl('/api/messages/seen'), {
       method: 'POST',
-      headers: getHeaders(),
+      headers: await privateHeaders(),
       body: JSON.stringify({ partnerId })
     });
     const result = await readResponse(res);
@@ -708,6 +717,16 @@ export const api = {
   },
 
   // Notifications
+  /** Unread messages + unread notifications (the same numbers the live badges show). */
+  async getUnreadCounts(): Promise<{ messages: number; notifications: number }> {
+    const res = await fetch(apiUrl('/api/unread'), { headers: await privateHeaders(), cache: 'no-store' });
+    return readResponse<{ messages: number; notifications: number }>(res, 'Could not load unread counts');
+  },
+  /** Tell the owner about a like / comment stored in Firestore (Marketplace item, profile picture). */
+  async notifyActivity(kind: 'market_like' | 'photo_like' | 'photo_comment', targetId: string): Promise<void> {
+    await fetch(apiUrl('/api/notifications/notify'), { method: 'POST', headers: await privateHeaders(), body: JSON.stringify({ kind, targetId }) }).catch(() => {});
+    invalidateApiReadCache('notifications');
+  },
   async getBirthdays(): Promise<{ user: User; daysUntil: number; turns?: number }[]> {
     const res = await fetch(apiUrl('/api/birthdays'), { headers: getHeaders() });
     return readResponse<{ user: User; daysUntil: number; turns?: number }[]>(res, 'Failed to load birthdays');
@@ -716,7 +735,7 @@ export const api = {
   async getNotifications(): Promise<Notification[]> {
     return cachedApiRead('notifications', async () => {
       try {
-        const res = await fetch(apiUrl('/api/notifications'), { headers: getHeaders() });
+        const res = await fetch(apiUrl('/api/notifications'), { headers: await privateHeaders() });
         if (!res.ok) {
           return [];
         }
@@ -731,7 +750,7 @@ export const api = {
   async markNotificationsRead(options: { exceptMessages?: boolean } = {}) {
     const res = await fetch(apiUrl('/api/notifications/read'), {
       method: 'POST',
-      headers: getHeaders(),
+      headers: await privateHeaders(),
       body: JSON.stringify(options)
     });
     if (res.status === 401) {

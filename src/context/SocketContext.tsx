@@ -3,7 +3,7 @@ import { api, type DirectMessage } from '../services/api';
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import { Message, Post, Story, LiveStream, LiveComment, Notification as AppNotification, User } from '../types';
-import { firestore } from '../services/firebase';
+import { auth, firestore } from '../services/firebase';
 import { playSound } from '../utils/sounds';
 import {
   collection,
@@ -454,7 +454,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     ws.onopen = () => {
       retry = 0;
       setIsConnected(true);
-      ws.send(JSON.stringify({ type: 'auth', userId: user.id }));
+      // The server checks this Firebase ID token, so only this account receives its private messages.
+      void (auth.currentUser?.getIdToken().catch(() => '') ?? Promise.resolve('')).then(idToken => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'auth', userId: user.id, idToken }));
+      });
       heartbeat = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
       }, 25000);
@@ -531,6 +534,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (data.user?.id) window.dispatchEvent(new CustomEvent('echat:profile-updated', { detail: data.user }));
             break;
 
+          case 'unread_counts':
+            window.dispatchEvent(new CustomEvent('echat:unread', { detail: { messages: Number(data.messages) || 0, notifications: Number(data.notifications) || 0 } }));
+            break;
           case 'new_notification':
             if (data.notification) notificationListeners.current.forEach(cb => cb(data.notification));
             break;

@@ -760,6 +760,98 @@ const pushRoute = (handler: (uid: string, token: string, req: Request) => Promis
   }
 };
 app.get('/api/push/status', (_req: Request, res: Response) => res.json({ ready: pushReady() }));
+
+// ----------------- VERIFIED SESSIONS (private data) -----------------
+// x-user-id alone can be typed by anyone, so private routes (DMs, notifications, unread counts) and the
+// live socket also need the Firebase ID token of that same account. DMs stay between the 2 people.
+const verifiedTokens = new Map<string, { uid: string; email?: string; emailVerified: boolean; exp: number }>();
+async function verifyIdTokenCached(token: string) {
+  const hit = verifiedTokens.get(token);
+  if (hit && hit.exp > Date.now()) return hit;
+  const decoded = await verifyFirebaseIdToken(token, firebaseProjectId);
+  const value = { uid: String(decoded.uid), email: typeof decoded.email === 'string' ? decoded.email : undefined, emailVerified: decoded.email_verified === true, exp: Math.min(Number(decoded.exp || 0) * 1000, Date.now() + 30 * 60 * 1000) };
+  if (verifiedTokens.size > 5000) verifiedTokens.clear();
+  verifiedTokens.set(token, value);
+  return value;
+}
+/** True when the token's Firebase account is this eChat user (links older accounts by verified email once). */
+async function tokenOwnsUser(userId: string, token: string): Promise<boolean> {
+  if (!token) return false;
+  const user = db.getUserById(userId);
+  if (!user) return false;
+  let decoded;
+  try { decoded = await verifyIdTokenCached(token); } catch { return false; }
+  if (user.id === decoded.uid || user.firebaseUid === decoded.uid) return true;
+  if (!user.firebaseUid && decoded.emailVerified && decoded.email && user.email?.toLowerCase() === decoded.email.toLowerCase() && !db.getUserByFirebaseUid(decoded.uid)) {
+    db.updateUser(user.id, { firebaseUid: decoded.uid });
+    return true;
+  }
+  return false;
+}
+const PRIVATE_PREFIXES = ['/api/dm', '/api/messages', '/api/conversations', '/api/notifications', '/api/unread'];
+app.use(PRIVATE_PREFIXES, async (req: Request, res: Response, next: express.NextFunction) => {
+  if (req.method === 'OPTIONS') return next();
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  if (await tokenOwnsUser(authUser.id, String(req.get('x-firebase-id-token') || ''))) return next();
+  return res.status(401).json({ error: 'Your session expired. Please log in again.', code: 'session-expired' });
+});
+socketManager.authVerifier = tokenOwnsUser;
+
+// ----------------- UNREAD COUNTS (live badges) -----------------
+// Kept on the user's own Firestore profile (users/{uid}.unread) so the app's Firestore listener updates
+// the red badges instantly, and also sent over the socket. Recomputed (debounced) whenever messages or
+// notifications change.
+async function computeUnread(userId: string) {
+  const dms = await db.listDirectMessagesForUser(userId).catch(() => []);
+  const dmUnread = dms.filter(m => m.senderId !== userId && !(m as { readAt?: number | null }).readAt).length;
+  return {
+    messages: dmUnread + db.countUnreadLegacyMessages(userId),
+    notifications: db.getNotifications(userId).filter(n => !n.read && n.type !== 'message').length
+  };
+}
+const unreadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const lastUnread = new Map<string, string>();
+function syncUnread(userId: string | undefined) {
+  if (!userId) return;
+  clearTimeout(unreadTimers.get(userId));
+  unreadTimers.set(userId, setTimeout(async () => {
+    unreadTimers.delete(userId);
+    try {
+      const counts = await computeUnread(userId);
+      socketManager.sendToUser(userId, { type: 'unread_counts', ...counts });
+      const key = `${counts.messages}/${counts.notifications}`;
+      if (lastUnread.get(userId) === key || !firestore) return;
+      lastUnread.set(userId, key);
+      await firestore.collection('users').doc(pushUidOf(userId)).update({ unread: { ...counts, updatedAt: Date.now() } }).catch(() => {});
+    } catch (error) {
+      console.warn('[Unread] Could not update counts for', userId, error instanceof Error ? error.message : error);
+    }
+  }, 400));
+}
+// Every place that changes messages or notifications goes through these db methods.
+{
+  const addNotification = db.addNotification.bind(db);
+  db.addNotification = notif => { const created = addNotification(notif); syncUnread(notif.userId); return created; };
+  const upsertMessageNotification = db.upsertMessageNotification.bind(db);
+  db.upsertMessageNotification = (userId, actorId, message) => { const created = upsertMessageNotification(userId, actorId, message); syncUnread(userId); return created; };
+  const markNotificationsRead = db.markNotificationsRead.bind(db);
+  db.markNotificationsRead = (userId, exceptTypes) => { markNotificationsRead(userId, exceptTypes); syncUnread(userId); };
+  const markMessageNotificationsRead = db.markMessageNotificationsRead.bind(db);
+  db.markMessageNotificationsRead = (userId, actorId) => { markMessageNotificationsRead(userId, actorId); syncUnread(userId); };
+  const markConversationSeen = db.markConversationSeen.bind(db);
+  db.markConversationSeen = (viewerId, partnerId) => { markConversationSeen(viewerId, partnerId); syncUnread(viewerId); };
+  const addMessage = db.addMessage.bind(db);
+  db.addMessage = msg => { const created = addMessage(msg); syncUnread(msg.receiverId); return created; };
+  const insertDirectMessage = db.insertDirectMessage.bind(db);
+  db.insertDirectMessage = async message => { await insertDirectMessage(message); syncUnread((message as { receiverId?: string }).receiverId); };
+  const markDirectMessagesRead = db.markDirectMessagesRead.bind(db);
+  db.markDirectMessagesRead = async (senderId, receiverId, readAt) => { await markDirectMessagesRead(senderId, receiverId, readAt); syncUnread(receiverId); };
+}
+app.get('/api/unread', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req)!;
+  res.json(await computeUnread(authUser.id));
+});
 app.post('/api/push/token', pushRoute((uid, token, req) => savePushToken(uid, token, { platform: req.body?.platform, userAgent: req.get('user-agent') })));
 app.post('/api/push/token/remove', pushRoute((uid, token) => removePushToken(uid, token)));
 
@@ -1651,6 +1743,7 @@ app.post('/api/dm/:userId/read', async (req: Request, res: Response) => {
   try {
     const readAt = Date.now();
     await db.markDirectMessagesRead(senderId, authUser.id, readAt);
+    db.markMessageNotificationsRead(authUser.id, senderId);
     socketManager.sendToUser(senderId, {
       type: 'direct_messages_read',
       readerId: authUser.id,
@@ -1739,6 +1832,10 @@ app.post('/api/dm/:userId', async (req: Request, res: Response) => {
         message,
         partner: db.sanitizeUser(authUser, receiverId)
       });
+      const preview = text && !text.startsWith('data:') ? text.slice(0, 80) : mediaType === 'audio' ? 'sent you a voice message' : mediaType === 'video' ? 'sent you a video' : attachments.length || mediaUrl ? 'sent you a photo or file' : 'sent you a message';
+      const notif = db.upsertMessageNotification(receiverId, authUser.id, text && !text.startsWith('data:') ? `${authUser.name}: ${preview}` : `${authUser.name} ${preview}`);
+      socketManager.sendToUser(receiverId, { type: 'new_notification', notification: populateNotification(notif) });
+      pushTo([receiverId], { kind: 'message', title: authUser.name, body: text && !text.startsWith('data:') ? preview : preview.charAt(0).toUpperCase() + preview.slice(1), url: `/messages?chat=${encodeURIComponent(authUser.id)}`, tag: `chat-${authUser.id}`, icon: pushIcon(authUser.avatar) });
     }
     return res.status(201).json(message);
   } catch (error) {
@@ -1949,6 +2046,68 @@ app.post('/api/notifications/read', (req: Request, res: Response) => {
   const except = req.body?.exceptMessages === true ? ['message'] : [];
   db.markNotificationsRead(authUser.id, except);
   res.json({ success: true });
+});
+
+/**
+ * Likes / comments that live in Firestore (Marketplace items, profile pictures) report here so the owner
+ * gets a notification. The server checks in Firestore that the like or comment really exists.
+ */
+const notifyRate = new Map<string, number[]>();
+app.post('/api/notifications/notify', async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req)!;
+  const kind = String(req.body?.kind || '');
+  const targetId = String(req.body?.targetId || '');
+  if (!['market_like', 'photo_like', 'photo_comment'].includes(kind) || !/^[\w-]{1,200}$/.test(targetId)) return res.status(400).json({ error: 'Invalid notification.' });
+  if (!firestore) return res.json({ success: false });
+  const recent = (notifyRate.get(authUser.id) || []).filter(at => Date.now() - at < 60_000);
+  if (recent.length >= 30) return res.status(429).json({ error: 'Too many actions. Slow down a little.' });
+  notifyRate.set(authUser.id, [...recent, Date.now()]);
+  try {
+    const actorUid = (await verifyIdTokenCached(String(req.get('x-firebase-id-token')))).uid;
+    let ownerId = '';
+    let type: 'market_like' | 'post_reaction' | 'post_comment';
+    let message: string;
+    let link: string;
+    if (kind === 'market_like') {
+      const [favorite, listing] = await Promise.all([
+        firestore.collection('marketFavorites').doc(`${actorUid}_${targetId}`).get(),
+        firestore.collection('echat_v2_market_listings').doc(targetId).get()
+      ]);
+      if (!favorite.exists || !listing.exists) return res.json({ success: false });
+      ownerId = String(listing.get('sellerId') || '');
+      type = 'market_like';
+      message = `${authUser.name} liked your Marketplace item "${String(listing.get('title') || 'item').slice(0, 60)}"`;
+      link = `/marketplace/listing/${encodeURIComponent(targetId)}`;
+    } else {
+      const post = await firestore.collection('posts').doc(targetId).get();
+      if (!post.exists) return res.json({ success: false });
+      ownerId = String(post.get('userId') || '');
+      link = `/post/${encodeURIComponent(targetId)}`;
+      if (kind === 'photo_like') {
+        if (!(post.get('likes') || []).includes(actorUid)) return res.json({ success: false });
+        type = 'post_reaction';
+        message = `${authUser.name} liked your profile picture`;
+      } else {
+        const comment = await firestore.collection('posts').doc(targetId).collection('comments').where('userId', '==', actorUid).orderBy('createdAt', 'desc').limit(1).get()
+          .catch(() => firestore!.collection('posts').doc(targetId).collection('comments').where('userId', '==', actorUid).limit(1).get());
+        if (comment.empty) return res.json({ success: false });
+        type = 'post_comment';
+        const text = String(comment.docs[0].get('text') || '').slice(0, 80);
+        message = `${authUser.name} commented on your profile picture${text ? `: "${text}"` : ''}`;
+      }
+    }
+    const owner = db.getUserById(ownerId) || db.getUserByFirebaseUid(ownerId);
+    if (!owner || owner.id === authUser.id || db.isBlockedBetween(owner.id, authUser.id)) return res.json({ success: false });
+    // One "liked" notification per person per item (unliking and liking again doesn't spam).
+    if (type !== 'post_comment' && db.getNotifications(owner.id).some(n => n.actorId === authUser.id && n.type === type && n.targetId === targetId)) return res.json({ success: true });
+    const notification = db.addNotification({ userId: owner.id, actorId: authUser.id, type, targetId, link, message, read: false });
+    socketManager.sendToUser(owner.id, { type: 'new_notification', notification: populateNotification(notification) });
+    pushTo([owner.id], { kind: 'activity', title: 'eChat', body: message, url: link, tag: `${type}-${targetId}`, icon: pushIcon(authUser.avatar) });
+    res.json({ success: true });
+  } catch (error) {
+    console.warn('[Notify] Could not create notification:', error instanceof Error ? error.message : error);
+    res.status(503).json({ error: 'Could not send the notification.' });
+  }
 });
 
 // ----------------- ADMIN / DEVELOPER ROUTES (100% GATED TO DEVELOPER) -----------------

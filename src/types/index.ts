@@ -65,8 +65,10 @@ export interface Message {
 
 export interface Notification {
   id: string; userId: string; actorId: string; actor?: User | null;
-  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement' | 'birthday' | 'birthday_reminder' | 'birthday_today'; // FIX: Added
+  type: 'friend_request' | 'friend_accept' | 'post_reaction' | 'post_comment' | 'message' | 'missed_call' | 'call' | 'post_tag' | 'post_share' | 'post_new' | 'live_stream' | 'page_follow' | 'announcement' | 'birthday' | 'birthday_reminder' | 'birthday_today' | 'market_like'; // FIX: Added
   targetId?: string; message: string; read: boolean; createdAt: number;
+  /** Where tapping it goes, when not derivable from type (Marketplace item, profile picture post). */
+  link?: string;
   callType?: 'audio' | 'video';
 }
 

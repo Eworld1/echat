@@ -8,6 +8,7 @@ import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
 import { getNotifications as getFirestoreNotifications, markNotificationsRead as markFirestoreNotificationsRead } from '../services/db';
 import { setAppBadge } from '../services/push';
+import { badgeLabel, setUnreadCounts, useUnreadCounts } from '../services/unread';
 import { User, Notification, Post } from '../types';
 import {
   MessageSquare,
@@ -49,7 +50,7 @@ import {
 import { VerifiedBadge } from './VerifiedBadge';
 import { useBackButton } from '../hooks/useBackButton';
 
-export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'wallet' | 'adminWallet' | 'games' | 'myTickets' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search';
+export type AppView = 'feed' | 'live' | 'reels' | 'friends' | 'messages' | 'admin' | 'profile' | 'pages' | 'groups' | 'jobs' | 'events' | 'wallet' | 'adminWallet' | 'games' | 'myTickets' | 'settings' | 'saved' | 'dashboard' | 'marketplace' | 'orders' | 'search' | 'notifications';
 
 interface NavbarProps {
   currentView: AppView;
@@ -83,6 +84,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const liveUnread = useUnreadCounts(user?.id);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [toast, setToast] = useState<Notification | null>(null);
 
@@ -327,6 +329,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     // Message notifications stay unread until the chat is opened (the server clears them then).
     await api.markNotificationsRead({ exceptMessages: true }).catch(() => {});
     setNotifications(prev => prev.map(n => (n.type === 'message' ? n : { ...n, read: true })));
+    setUnreadCounts({ notifications: 0 });
   };
 
   // Perform debounced search
@@ -460,8 +463,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   const matchingPosts = searchResults.posts.filter(post => post.type !== 'reel');
   const matchingReels = searchResults.posts.filter(post => post.type === 'reel');
 
-  const unreadNotificationsCount = notifications.filter(n => !n.read && n.type !== 'message').length;
-  const unreadMessageCount = notifications.filter(n => !n.read && n.type === 'message').length;
+  // Live counts from the server (Firestore listener + socket): exact, and they clear when a chat is opened.
+  const unreadNotificationsCount = liveUnread.notifications;
+  const unreadMessageCount = liveUnread.messages;
   // Same count on the installed app's icon (cleared when everything is read).
   useEffect(() => { setAppBadge(unreadNotificationsCount + unreadMessageCount); }, [unreadNotificationsCount, unreadMessageCount]);
 
@@ -969,12 +973,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div className="absolute right-0 top-12 w-80 sm:w-96 bg-white rounded-3xl shadow-2xl border border-slate-100 py-3 z-40 max-h-96 overflow-y-auto animate-in fade-in">
                 <div className="px-4 pb-2 border-b border-slate-100 flex items-center justify-between">
                   <h3 className="font-bold text-slate-900 text-sm">{t('notifications')}</h3>
-                  <button
-                    onClick={handleMarkNotificationsRead}
-                    className="text-xs text-blue-600 hover:underline font-semibold"
-                  >
-                    {t('mark_all_read')}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleMarkNotificationsRead}
+                      className="text-xs text-blue-600 hover:underline font-semibold"
+                    >
+                      {t('mark_all_read')}
+                    </button>
+                    <button onClick={() => { setShowNotifications(false); onNavigate('notifications'); }} className="text-xs font-semibold text-blue-600 hover:underline">See all</button>
+                  </div>
                 </div>
 
                 <div className="divide-y divide-slate-50">
@@ -1078,6 +1085,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button onClick={() => setToast(null)} className="text-slate-400 hover:text-slate-600 text-lg leading-none" aria-label="Dismiss">×</button>
             </div>
           )}
+
+          {/* Phone: bell with red badge -> Notifications tab (the desktop bell above is hidden on phones) */}
+          <button
+            type="button"
+            onClick={() => onNavigate('notifications')}
+            aria-label={unreadNotificationsCount ? `Notifications, ${unreadNotificationsCount} unread` : 'Notifications'}
+            className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition min-[769px]:hidden ${currentView === 'notifications' ? 'bg-blue-100 text-blue-700' : 'bg-violet-50 text-violet-800 hover:bg-violet-100'}`}
+          >
+            <Bell size={19} />
+            {unreadNotificationsCount > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-extrabold leading-none text-white ring-2 ring-white">{badgeLabel(unreadNotificationsCount)}</span>
+            )}
+          </button>
 
           {/* User Profile Menu */}
           <div className="relative">

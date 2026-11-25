@@ -27,7 +27,7 @@ if (firebaseAdminApp) {
 
 export const pushReady = () => Boolean(messaging && firestore);
 
-export type PushKind = 'message' | 'friend_request' | 'friend_accept' | 'group_post';
+export type PushKind = 'message' | 'friend_request' | 'friend_accept' | 'group_post' | 'activity';
 
 export interface PushPayload {
   kind: PushKind;

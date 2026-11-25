@@ -1,5 +1,7 @@
 import { AvatarViewerHost } from './components/AvatarViewer';
 import { PushPermissionPrompt } from './components/PushNotifications';
+import { NotificationsPage } from './pages/NotificationsPage';
+import { badgeLabel, useUnreadCounts } from './services/unread';
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider, useSocket } from './context/SocketContext';
@@ -48,10 +50,11 @@ const Dashboard = lazy(() => import('./pages/Dashboard').then(module => ({ defau
 const V2Market = lazy(() => import('./pages/v2/V2Market').then(module => ({ default: module.V2Market })));
 const V2MarketOrders = lazy(() => import('./pages/v2/V2MarketOrders').then(module => ({ default: module.V2MarketOrders })));
 
-const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'messages','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/jobs':'jobs','/events':'events','/my-tickets':'myTickets','/wallet':'wallet','/games':'games','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders','/search':'search' };
+const classicRoutes: Record<string, AppView> = { '/home':'feed','/feed':'feed','/reels':'reels','/friends':'friends','/messages':'messages','/profile':'profile','/admin':'admin','/live':'live','/go-live':'live','/pages':'pages','/groups':'groups','/jobs':'jobs','/events':'events','/my-tickets':'myTickets','/wallet':'wallet','/games':'games','/saved':'saved','/settings':'settings','/dashboard':'dashboard','/market':'marketplace','/marketplace':'marketplace','/orders':'orders','/my-orders':'orders','/search':'search','/notifications':'notifications' };
 
 export function MainApp() {
   const { user, isDeveloper, isLoading, activePage, switchIdentity } = useAuth();
+  const unread = useUnreadCounts(user?.id);
   const canAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin' || isDeveloper || (user as User & {isAdmin?:boolean}).isAdmin));
   const { onLiveStarted, onLiveStopped, onLiveStreamUpdated } = useSocket();
   const [splashElapsed, setSplashElapsed] = useState(false);
@@ -214,7 +217,7 @@ export function MainApp() {
   ) => {
     if (view === 'admin' && !canAdmin) return;
     if (view !== currentView) previousViewRef.current = currentView;
-    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',messages:'/messages',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',jobs:'/jobs',events:'/events',wallet:'/wallet',games:'/games',adminWallet:'/admin/wallet',myTickets:'/my-tickets',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search'};
+    const routeByView:Record<AppView,string>={feed:'/home',live:'/live',reels:'/reels',friends:'/friends',messages:'/messages',admin:'/admin',profile:'/profile',pages:'/pages',groups:'/groups',jobs:'/jobs',events:'/events',wallet:'/wallet',games:'/games',adminWallet:'/admin/wallet',myTickets:'/my-tickets',settings:'/settings',saved:'/saved',dashboard:'/dashboard',marketplace:'/marketplace',orders:'/orders',search:'/search',notifications:'/notifications'};
     const routePath=view==='marketplace' ? (targetRoute?.startsWith('/marketplace/') ? targetRoute : '/marketplace') : routeByView[view];
     if(view==='marketplace')setMarketRoute(routePath);
     // Profiles get a shareable address (/profile?user=<id>); other pages drop it.
@@ -437,6 +440,23 @@ export function MainApp() {
             <Settings onNavigateHome={() => handleNavigate('feed')} />
           )}
 
+          {currentView === 'notifications' && (
+            <NotificationsPage
+              onOpenChat={id => handleOpenDm({ id } as User)}
+              onViewProfile={id => handleNavigate('profile', id)}
+              onOpenFriends={() => handleNavigate('friends')}
+              onOpenPost={id => handleNavigate('feed', undefined, id)}
+              onOpenLive={() => handleNavigate('live')}
+              onOpenPath={path => {
+                if (path.startsWith('/marketplace/')) { navigateMarket(path); return; }
+                const post = path.match(/^\/post\/([^/?#]+)/);
+                if (post) { handleNavigate('feed', undefined, decodeURIComponent(post[1])); return; }
+                window.history.pushState({ echatApp: true }, '', path);
+                window.dispatchEvent(new Event('echat:navigate'));
+              }}
+            />
+          )}
+
           {currentView === 'saved' && (
             <SavedPosts onViewProfile={(uid) => handleNavigate('profile', uid)} />
           )}
@@ -459,7 +479,7 @@ export function MainApp() {
         <button type="button" onClick={() => handleNavigate('feed')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'feed' ? 'text-blue-700' : 'text-slate-600'}`}><Home size={21}/><span>Home</span></button>
         <button type="button" onClick={() => handleNavigate('reels')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'reels' ? 'text-blue-700' : 'text-slate-600'}`}><Film size={21}/><span>Reels</span></button>
         <button type="button" onClick={() => navigateMarket('/marketplace')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'marketplace' ? 'text-blue-700' : 'text-slate-600'}`}><ShoppingBag size={21}/><span>Marketplace</span></button>
-        <button type="button" onClick={() => handleNavigate('messages')} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'messages' ? 'text-blue-700' : 'text-slate-600'}`}><MessageSquare size={21}/><span>Messages</span></button>
+        <button type="button" onClick={() => handleNavigate('messages')} aria-label={unread.messages ? `Messages, ${unread.messages} unread` : 'Messages'} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${currentView === 'messages' ? 'text-blue-700' : 'text-slate-600'}`}><span className="relative"><MessageSquare size={21}/>{unread.messages > 0 && <span className="absolute -right-2.5 -top-2 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">{badgeLabel(unread.messages)}</span>}</span><span>Messages</span></button>
         <button type="button" onClick={() => setMobileMenuOpen(true)} aria-expanded={mobileMenuOpen} className={`flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-semibold ${mobileMenuOpen ? 'text-blue-700' : 'text-slate-600'}`}><Menu size={21}/><span>Menu</span></button>
       </nav>
 

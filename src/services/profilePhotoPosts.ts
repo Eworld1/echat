@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { firestore } from './firebase';
 import { assetUrl } from './apiBase';
+import { api } from './api';
 
 export const PROFILE_PICTURE_UPDATE = 'profile_picture_update';
 
@@ -131,6 +132,7 @@ export async function findProfilePhotoPostId(userId: string, photoURL: string): 
 
 export async function setProfilePhotoLike(postId: string, uid: string, liked: boolean): Promise<void> {
   await updateDoc(doc(posts(), postId), { likes: liked ? arrayUnion(uid) : arrayRemove(uid) });
+  if (liked) void api.notifyActivity('photo_like', postId);
 }
 
 export function listenProfilePhotoComments(postId: string, onChange: (items: ProfilePhotoComment[]) => void): Unsubscribe {
@@ -154,6 +156,7 @@ export async function addProfilePhotoComment(postId: string, user: { id: string;
   });
   batch.update(doc(posts(), postId), { comments: increment(1) });
   await batch.commit();
+  void api.notifyActivity('photo_comment', postId);
 }
 
 export async function deleteProfilePhotoComment(postId: string, commentId: string): Promise<void> {
