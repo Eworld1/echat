@@ -943,6 +943,14 @@ export const api = {
     return readResponse(res, 'Could not check this live');
   },
 
+  /** Like (1) / dislike (-1) / clear (0) a live; returns my vote + live counts. value omitted = just read. */
+  async voteLive(streamId: string, value?: 1 | -1 | 0): Promise<{ myVote: number; likesCount: number; dislikesCount: number }> {
+    const res = value === undefined
+      ? await fetch(apiUrl(`/api/live/like?streamId=${encodeURIComponent(streamId)}`), { headers: await getVercelLiveHeaders(), cache: 'no-store' })
+      : await fetch(apiUrl('/api/live/like'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify({ streamId, value }) });
+    return readResponse(res, 'Could not update your like');
+  },
+
   /** Host heartbeat (every 10 s while live). Throws an error with code 'live-ended' (410) when the live is over. */
   async sendLiveHeartbeat(streamId: string): Promise<void> {
     const res = await fetch(apiUrl('/api/live/heartbeat'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify({ streamId }), cache: 'no-store' });
