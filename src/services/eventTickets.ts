@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   increment,
+  limit,
   onSnapshot,
   query,
   runTransaction,
@@ -138,7 +139,7 @@ export const isPastEvent = (event: Pick<EchatEvent, 'dateTime'>, now = Date.now(
 // ---------------- Events ----------------
 
 export function listenEvents(onEvents: (events: EchatEvent[]) => void, onError: (error: Error) => void): Unsubscribe {
-  return onSnapshot(collection(db, 'events'), snapshot => {
+  return onSnapshot(query(collection(db, 'events'), limit(100)), snapshot => {
     onEvents(snapshot.docs.map(item => toEvent(item.id, item.data())));
   }, onError);
 }

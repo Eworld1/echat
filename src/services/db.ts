@@ -12,6 +12,9 @@ import {
   where, 
   orderBy, 
   limit,
+  startAfter,
+  getCountFromServer,
+  type QueryConstraint,
   arrayUnion,
   arrayRemove
 } from 'firebase/firestore';
@@ -34,7 +37,10 @@ import type {
   AdminStats 
 } from '../types';
 
-const NOTIFICATION_CACHE_TTL_MS = 30_000;
+const NOTIFICATION_CACHE_TTL_MS = 60_000;
+/** Firestore reads cost quota: lists are loaded 20 at a time (pass the last item's createdAt for the next page). */
+export const PAGE_SIZE = 20;
+const isMissingIndex = (error: unknown) => /index|failed-precondition/i.test(`${(error as { code?: string })?.code} ${(error as Error)?.message}`);
 const notificationCache = new Map<string, { expiresAt: number; value?: Notification[]; promise?: Promise<Notification[]> }>();
 
 export function hashPassword(password: string): string {
@@ -102,9 +108,10 @@ export async function getUserById(id: string): Promise<User | null> {
   return null;
 }
 
-export async function getAllUsers(): Promise<User[]> {
+/** At most `max` users (never the whole collection). */
+export async function getAllUsers(max = 50): Promise<User[]> {
   try {
-    const querySnapshot = await getDocs(collection(db, 'users'));
+    const querySnapshot = await getDocs(query(collection(db, 'users'), limit(max)));
     if (!querySnapshot.empty) {
       const users: User[] = [];
       querySnapshot.forEach((doc) => {
@@ -251,15 +258,13 @@ export async function updateUser(id: string, updates: Partial<User>): Promise<Us
 
 // ----------------- POSTS -----------------
 
-export async function getPosts(): Promise<Post[]> {
+export async function getPosts(max = PAGE_SIZE, beforeCreatedAt?: number): Promise<Post[]> {
   try {
-    const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'));
-    const snapshot = await getDocs(q);
-    const posts: Post[] = [];
-    snapshot.forEach(d => {
-      posts.push({ id: d.id, ...d.data() } as Post);
-    });
-    return posts;
+    const parts: QueryConstraint[] = [orderBy('createdAt', 'desc')];
+    if (beforeCreatedAt) parts.push(startAfter(beforeCreatedAt));
+    parts.push(limit(max));
+    const snapshot = await getDocs(query(collection(db, 'posts'), ...parts));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Post));
   } catch (err) {
     console.error('getPosts error:', err);
     return [];
@@ -372,19 +377,11 @@ export async function deletePost(postId: string): Promise<boolean> {
 
 // ----------------- STORIES -----------------
 
-export async function getStories(): Promise<Story[]> {
+export async function getStories(max = PAGE_SIZE): Promise<Story[]> {
   try {
-    const q = query(collection(db, 'stories'), orderBy('createdAt', 'desc'));
-    const snapshot = await getDocs(q);
-    const stories: Story[] = [];
     const now = Date.now();
-    snapshot.forEach(d => {
-      const story = { id: d.id, ...d.data() } as Story;
-      if (story.expiresAt > now) {
-        stories.push(story);
-      }
-    });
-    return stories;
+    const snapshot = await getDocs(query(collection(db, 'stories'), where('expiresAt', '>', now), orderBy('expiresAt', 'desc'), limit(max)));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Story)).sort((a, b) => b.createdAt - a.createdAt);
   } catch (err) {
     console.error('getStories error:', err);
     return [];
@@ -419,20 +416,27 @@ export async function createStory(storyData: {
 
 // ----------------- MESSAGES -----------------
 
-export async function getMessages(userId1: string, userId2: string): Promise<Message[]> {
+/** Last `max` messages between two people, oldest first. Older ones: pass the first message's createdAt. */
+export async function getMessages(userId1: string, userId2: string, max = PAGE_SIZE, beforeCreatedAt?: number): Promise<Message[]> {
+  const between = async (from: string, to: string) => {
+    const base = [where('senderId', '==', from), where('receiverId', '==', to)];
+    try {
+      const parts: QueryConstraint[] = [...base, orderBy('createdAt', 'desc')];
+      if (beforeCreatedAt) parts.push(startAfter(beforeCreatedAt));
+      return (await getDocs(query(collection(db, 'messages'), ...parts, limit(max)))).docs;
+    } catch (error) {
+      if (!isMissingIndex(error)) throw error;
+      return (await getDocs(query(collection(db, 'messages'), ...base, limit(max * 2)))).docs; // index not deployed yet
+    }
+  };
   try {
-    const snapshot = await getDocs(collection(db, 'messages'));
-    const messages: Message[] = [];
-    snapshot.forEach(d => {
-      const msg = { id: d.id, ...d.data() } as Message;
-      if (
-        (msg.senderId === userId1 && msg.receiverId === userId2) ||
-        (msg.senderId === userId2 && msg.receiverId === userId1)
-      ) {
-        messages.push(msg);
-      }
-    });
-    return messages.sort((a, b) => a.createdAt - b.createdAt);
+    const [sent, received] = await Promise.all([between(userId1, userId2), between(userId2, userId1)]);
+    return [...sent, ...received]
+      .map(d => ({ id: d.id, ...d.data() } as Message))
+      .filter(m => !beforeCreatedAt || m.createdAt < beforeCreatedAt)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, max)
+      .reverse();
   } catch (err) {
     console.error('getMessages error:', err);
     return [];
@@ -471,11 +475,13 @@ export async function getNotifications(userId: string): Promise<Notification[]> 
   if (cached && cached.expiresAt > Date.now() && cached.value) return cached.value;
   const promise = (async () => {
     try {
-      const q = query(
-        collection(db, 'notifications'),
-        where('userId', '==', userId)
-      );
-      const snapshot = await getDocs(q);
+      let snapshot;
+      try {
+        snapshot = await getDocs(query(collection(db, 'notifications'), where('userId', '==', userId), orderBy('createdAt', 'desc'), limit(30)));
+      } catch (error) {
+        if (!isMissingIndex(error)) throw error;
+        snapshot = await getDocs(query(collection(db, 'notifications'), where('userId', '==', userId), limit(30)));
+      }
       const notifs: Notification[] = [];
       snapshot.forEach(d => {
         notifs.push({ id: d.id, ...d.data() } as Notification);
@@ -526,7 +532,8 @@ export async function markNotificationsRead(userId: string): Promise<boolean> {
     const q = query(
       collection(db, 'notifications'),
       where('userId', '==', userId),
-      where('read', '==', false)
+      where('read', '==', false),
+      limit(100)
     );
     const snapshot = await getDocs(q);
     const updates = snapshot.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { read: true }));
@@ -612,22 +619,22 @@ export async function unfriend(userId: string, friendId: string): Promise<boolea
 
 // ----------------- ADMIN STATS -----------------
 
+/**
+ * Counts with Firestore aggregation queries: 1 read per 1,000 documents counted, instead of
+ * downloading every user, post, story and message.
+ */
 export async function getAdminStats(): Promise<AdminStats> {
-  const [users, posts, stories, messages] = await Promise.all([
-    getAllUsers(),
-    getPosts(),
-    getStories(),
-    getDocs(collection(db, 'messages')).then(s => s.size).catch(() => 0)
+  const count = (...parts: QueryConstraint[]) => (collectionName: string) =>
+    getCountFromServer(query(collection(db, collectionName), ...parts)).then(result => result.data().count).catch(() => 0);
+  const [totalUsers, onlineUsers, blockedUsers, totalPosts, totalStories, totalMessages, pendingReports] = await Promise.all([
+    count()('users'),
+    count(where('isOnline', '==', true))('users'),
+    count(where('isBlocked', '==', true))('users'),
+    count()('posts'),
+    count(where('expiresAt', '>', Date.now()))('stories'),
+    count()('messages'),
+    count(where('isReported', '==', true))('posts')
   ]);
-
-  const totalUsers = users.length;
-  const onlineUsers = users.filter(u => u.isOnline).length;
-  const blockedUsers = users.filter(u => u.isBlocked).length;
-  const totalPosts = posts.length;
-  const totalStories = stories.length;
-  const totalMessages = typeof messages === 'number' ? messages : 0;
-  const pendingReports = posts.filter(p => p.isReported).length;
-
   return {
     totalUsers,
     onlineUsers,

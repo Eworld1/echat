@@ -3,6 +3,7 @@ import { Activity, Cpu, Database, MessageSquare, RefreshCw, Users, FileText, Ima
 import { api } from '../../services/api';
 import type { AdminAnalytics, AdminSystemInfo } from '../../types/admin';
 import { BarChart, Donut, LineChart, Sparkline } from './charts';
+import { readAdminCache, writeAdminCache } from './adminCache';
 
 const COLORS = ['#7c3aed', '#2563eb', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
 
@@ -24,18 +25,23 @@ export const AdminOverview: React.FC<Props> = ({ onlineUsers, pendingReports, on
   const [analytics, setAnalytics] = useState<AdminAnalytics | null>(null);
   const [system, setSystem] = useState<AdminSystemInfo | null>(null);
   const [error, setError] = useState('');
-  const [auto, setAuto] = useState(true);
   const [loading, setLoading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
+  // No auto-refresh: stats load once (or come from the 10-minute cache) and the Refresh button reloads them.
+  const load = useCallback(async (force: boolean) => {
+    const cached = force ? null : readAdminCache<{ a: AdminAnalytics; s: AdminSystemInfo }>(`overview_${days}`);
+    if (cached) {
+      setAnalytics(cached.value.a); setSystem(cached.value.s); setUpdatedAt(cached.at); setError('');
+      return;
+    }
     setLoading(true);
     try {
       const [a, s] = await Promise.all([api.getAdminAnalytics(days), api.getAdminSystem()]);
       setAnalytics(a);
       setSystem(s);
       setError('');
-      setUpdatedAt(Date.now());
+      setUpdatedAt(writeAdminCache(`overview_${days}`, { a, s }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load the overview');
     } finally {
@@ -43,12 +49,7 @@ export const AdminOverview: React.FC<Props> = ({ onlineUsers, pendingReports, on
     }
   }, [days]);
 
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    if (!auto) return;
-    const id = setInterval(load, 15000);
-    return () => clearInterval(id);
-  }, [auto, load]);
+  useEffect(() => { void load(false); }, [load]);
 
   if (error && !analytics) return <div className="p-5 bg-red-50 border border-red-200 text-red-700 text-sm font-bold rounded-2xl">{error}</div>;
   if (!analytics || !system) return <div className="p-10 text-center text-slate-400 text-sm">Loading overview...</div>;
@@ -87,10 +88,7 @@ export const AdminOverview: React.FC<Props> = ({ onlineUsers, pendingReports, on
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-500">
           {updatedAt && <span>Updated {new Date(updatedAt).toLocaleTimeString()}</span>}
-          <label className="flex items-center gap-1.5 cursor-pointer font-semibold">
-            <input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} /> Live (15s)
-          </label>
-          <button onClick={load} className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50" aria-label="Refresh">
+          <button onClick={() => void load(true)} disabled={loading} className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50" aria-label="Refresh" title="Refresh stats">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>

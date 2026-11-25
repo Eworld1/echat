@@ -101,7 +101,7 @@ export async function onProfilePictureChanged(user: { id: string; name: string }
 }
 
 /** Newest profile-picture posts, live. */
-export function listenProfilePhotoPosts(onChange: (items: ProfilePhotoPost[]) => void, max = 30): Unsubscribe {
+export function listenProfilePhotoPosts(onChange: (items: ProfilePhotoPost[]) => void, max = 20): Unsubscribe {
   const map = (docs: { id: string; data: () => Record<string, unknown> }[]) =>
     docs.map(item => toPost(item.id, item.data())).filter(item => item.newPhotoURL).sort((a, b) => b.createdAt - a.createdAt);
   let fallback: Unsubscribe | null = null;
@@ -111,7 +111,7 @@ export function listenProfilePhotoPosts(onChange: (items: ProfilePhotoPost[]) =>
     error => {
       // Composite index not deployed yet: same data without server-side ordering.
       console.warn('Profile photo posts: falling back to unordered query.', error);
-      fallback = onSnapshot(query(posts(), where('type', '==', PROFILE_PICTURE_UPDATE), limit(200)), snapshot => onChange(map(snapshot.docs).slice(0, max)), () => onChange([]));
+      fallback = onSnapshot(query(posts(), where('type', '==', PROFILE_PICTURE_UPDATE), limit(60)), snapshot => onChange(map(snapshot.docs).slice(0, max)), () => onChange([]));
     }
   );
   return () => { primary(); fallback?.(); };

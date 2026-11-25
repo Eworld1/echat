@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, updateDoc, where, writeBatch, type Unsubscribe } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, limit, onSnapshot, query, setDoc, updateDoc, where, writeBatch, type Unsubscribe } from 'firebase/firestore';
 import { db } from './firebase';
 
 export interface V2MarketListing { id:string; title:string; description:string; price:number; currency:string; category:string; condition:string; location:string; photos:string[]; sellerId:string; sellerName:string; sellerAvatar:string; sellerVerified:boolean; whatsappEnabled?:boolean; whatsappDisplay?:boolean; createdAt:number; status:'active'|'sold'; }
@@ -7,8 +7,8 @@ export interface MarketSellerProfile { shopName:string; category:string; bio:str
 export const emptyMarketSellerProfile:MarketSellerProfile={shopName:'',category:'Other',bio:'',location:'',whatsappNumber:'',phoneNumber:'',facebook:'',instagram:'',tiktok:'',businessHours:'',deliveryOptions:[],showContactInfo:true};
 const listingsCollection='echat_v2_market_listings'; const ordersCollection='echat_v2_market_orders';
 
-export async function getV2Listings():Promise<V2MarketListing[]>{const snapshot=await getDocs(collection(db,listingsCollection));return snapshot.docs.map(item=>({id:item.id,...item.data()} as V2MarketListing)).filter(item=>item.status!=='sold').sort((a,b)=>b.createdAt-a.createdAt);}
-export function listenV2Listings(onListings:(items:V2MarketListing[])=>void,onError:(error:Error)=>void):Unsubscribe{return onSnapshot(collection(db,listingsCollection),snapshot=>{onListings(snapshot.docs.map(item=>({id:item.id,...item.data()} as V2MarketListing)).sort((a,b)=>b.createdAt-a.createdAt));},onError);}
+export async function getV2Listings():Promise<V2MarketListing[]>{const snapshot=await getDocs(query(collection(db,listingsCollection),limit(100)));return snapshot.docs.map(item=>({id:item.id,...item.data()} as V2MarketListing)).filter(item=>item.status!=='sold').sort((a,b)=>b.createdAt-a.createdAt);}
+export function listenV2Listings(onListings:(items:V2MarketListing[])=>void,onError:(error:Error)=>void):Unsubscribe{return onSnapshot(query(collection(db,listingsCollection),limit(100)),snapshot=>{onListings(snapshot.docs.map(item=>({id:item.id,...item.data()} as V2MarketListing)).sort((a,b)=>b.createdAt-a.createdAt));},onError);}
 export async function getV2Listing(id:string):Promise<V2MarketListing|null>{const item=await getDoc(doc(db,listingsCollection,id));return item.exists()?({id:item.id,...item.data()} as V2MarketListing):null;}
 export async function createV2Listing(value:Omit<V2MarketListing,'id'|'createdAt'|'status'>):Promise<V2MarketListing>{const data={...value,createdAt:Date.now(),status:'active' as const};const saved=await addDoc(collection(db,listingsCollection),data);return{id:saved.id,...data};}
 export async function updateV2Listing(id:string,updates:Partial<V2MarketListing>):Promise<void>{await updateDoc(doc(db,listingsCollection,id),{...updates,updatedAt:Date.now()});}

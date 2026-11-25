@@ -1,10 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { MessageCircle, Radio, ShoppingBag, Users } from 'lucide-react';
-import { collection, getCountFromServer, getDocs, query, where } from 'firebase/firestore';
+import { collection, getCountFromServer, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { api } from '../services/api';
 import { listenFollowerCount } from '../services/liveDiscovery';
 import { useAuth } from '../context/AuthContext';
+
+const HEADER_COUNTS_TTL_MS = 5 * 60 * 1000;
+const headerCountsCache = new Map<string, { at: number; value: Promise<{ streams: number; listings: number; sold: number }> }>();
+/** My Lives / listings / sold counts (aggregation queries: 1 read per 1,000 docs), cached 5 minutes. */
+function headerCounts(uid: string) {
+  const cached = headerCountsCache.get(uid);
+  if (cached && Date.now() - cached.at < HEADER_COUNTS_TTL_MS) return cached.value;
+  const count = (...parts: Parameters<typeof where>[]) => (name: string) =>
+    getCountFromServer(query(collection(db, name), ...parts.map(part => where(...part)))).then(result => result.data().count).catch(() => 0);
+  const value = Promise.all([
+    count(['hostId', '==', uid])('liveStreams'),
+    count(['sellerId', '==', uid])('echat_v2_market_listings'),
+    count(['sellerId', '==', uid], ['status', '==', 'sold'])('echat_v2_market_listings')
+  ]).then(([streams, listings, sold]) => ({ streams, listings, sold }));
+  headerCountsCache.set(uid, { at: Date.now(), value });
+  return value;
+}
 
 type Target = 'profile' | 'live' | 'messages' | 'marketplace';
 
@@ -41,19 +58,15 @@ export const DashboardHeader: React.FC<Props> = ({ onGoLive, onOpen }) => {
   useEffect(() => {
     if (!uid) return;
     let active = true;
-    getCountFromServer(query(collection(db, 'liveStreams'), where('hostId', '==', uid)))
-      .then(snapshot => { if (active) setStreams(snapshot.data().count); })
-      .catch(() => { if (active) setStreams(0); });
+    // Firestore stats: cheap count queries, cached for 5 minutes so reopening the feed costs nothing.
+    void headerCounts(uid).then(counts => {
+      if (!active) return;
+      setStreams(counts.streams);
+      setSales({ sold: counts.sold, active: Math.max(0, counts.listings - counts.sold) });
+    });
     api.getDmConversations(uid)
       .then(list => { if (active) setMessages({ unread: list.reduce((sum, item) => sum + (item.unreadCount || 0), 0), chats: list.length }); })
       .catch(() => { if (active) setMessages({ unread: 0, chats: 0 }); });
-    getDocs(query(collection(db, 'echat_v2_market_listings'), where('sellerId', '==', uid)))
-      .then(snapshot => {
-        if (!active) return;
-        const statuses = snapshot.docs.map(item => String(item.data().status || 'active'));
-        setSales({ sold: statuses.filter(status => status === 'sold').length, active: statuses.filter(status => status !== 'sold').length });
-      })
-      .catch(() => { if (active) setSales({ sold: 0, active: 0 }); });
     return () => { active = false; };
   }, [uid]);
 

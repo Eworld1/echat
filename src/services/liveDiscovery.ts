@@ -4,6 +4,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getCountFromServer,
   getDocs,
   limit,
   onSnapshot,
@@ -53,13 +54,13 @@ export function getLiveDiscoveryUserData(userId: string): Promise<LiveDiscoveryU
     getDocs(query(collection(db, 'followers'), where('followerId', '==', userId))),
     getDocs(query(collection(db, 'blocks'), where('blockerId', '==', userId))),
     getDocs(query(collection(db, 'blocks'), where('blockedId', '==', userId))),
-    getDocs(query(collection(db, 'notifications'), where('userId', '==', userId)))
+    getDocs(query(collection(db, 'notifications'), where('userId', '==', userId), where('type', '==', 'live_stream'), where('read', '==', false), limit(99)))
   ]).then(([following, blocks, blockedBy, notifications]) => {
     const value = {
       followingIds: following.docs.map(item => String(item.data().followingId || '')).filter(Boolean),
       blockedIds: blocks.docs.map(item => String(item.data().blockedId || '')).filter(Boolean),
       blockedByIds: blockedBy.docs.map(item => String(item.data().blockerId || '')).filter(Boolean),
-      notificationCount: notifications.docs.filter(item => item.data().type === 'live_stream' && item.data().read !== true).length
+      notificationCount: notifications.size
     };
     liveDiscoveryUserDataCache.set(userId, { expiresAt: Date.now() + LIVE_DISCOVERY_CACHE_TTL_MS, value });
     return value;
@@ -103,8 +104,39 @@ export function listenFollowerIds(userId: string, onIds: (ids: string[]) => void
   }, error => onError?.(error));
 }
 
+/**
+ * Follower count with an aggregation query (1 read per 1,000 followers) instead of a listener that
+ * downloads every follower document. Cached for 5 minutes; follow / unfollow in this app refreshes it.
+ */
+const FOLLOWER_COUNT_TTL_MS = 5 * 60 * 1000;
+const followerCounts = new Map<string, { at: number; count: number; pending?: Promise<number> }>();
+const followerCountListeners = new Map<string, Set<(count: number) => void>>();
+
+function loadFollowerCount(userId: string, force = false): Promise<number> {
+  const cached = followerCounts.get(userId);
+  if (cached?.pending) return cached.pending;
+  if (!force && cached && Date.now() - cached.at < FOLLOWER_COUNT_TTL_MS) return Promise.resolve(cached.count);
+  const pending = getCountFromServer(query(collection(db, 'followers'), where('followingId', '==', userId)))
+    .then(result => result.data().count)
+    .catch(() => cached?.count ?? 0)
+    .then(count => {
+      followerCounts.set(userId, { at: Date.now(), count });
+      followerCountListeners.get(userId)?.forEach(listener => listener(count));
+      return count;
+    });
+  followerCounts.set(userId, { at: cached?.at ?? 0, count: cached?.count ?? 0, pending });
+  return pending;
+}
+
 export function listenFollowerCount(userId: string, onCount: (count: number) => void): Unsubscribe {
-  return onSnapshot(query(collection(db, 'followers'), where('followingId', '==', userId)), snapshot => onCount(snapshot.size));
+  if (!userId) { onCount(0); return () => {}; }
+  const listeners = followerCountListeners.get(userId) ?? new Set();
+  listeners.add(onCount);
+  followerCountListeners.set(userId, listeners);
+  const cached = followerCounts.get(userId);
+  if (cached && !cached.pending && Date.now() - cached.at < FOLLOWER_COUNT_TTL_MS) onCount(cached.count);
+  else void loadFollowerCount(userId);
+  return () => { listeners.delete(onCount); };
 }
 
 export async function followCreator(followerId: string, followingId: string): Promise<void> {
@@ -115,10 +147,12 @@ export async function followCreator(followerId: string, followingId: string): Pr
   ]);
   if (blockedByMe.exists() || blockedMe.exists()) throw new Error('Following is unavailable for this account.');
   await setDoc(doc(db, 'followers', pairId(followerId, followingId)), { followerId, followingId, createdAt: Date.now() });
+  void loadFollowerCount(followingId, true);
 }
 
 export async function unfollowCreator(followerId: string, followingId: string): Promise<void> {
   await deleteDoc(doc(db, 'followers', pairId(followerId, followingId)));
+  void loadFollowerCount(followingId, true);
 }
 
 export async function blockLiveUser(blockerId: string, blockedId: string): Promise<void> {
@@ -177,14 +211,14 @@ export async function timeoutLiveUser(streamId: string, hostId: string, userId: 
 
 export function listenLiveNotifications(userId: string, onCount: (count: number) => void): Unsubscribe {
   if (!userId) { onCount(0); return () => {}; }
-  return onSnapshot(query(collection(db, 'notifications'), where('userId', '==', userId)), snapshot => {
-    onCount(snapshot.docs.filter(item => item.data().type === 'live_stream' && item.data().read !== true).length);
+  return onSnapshot(query(collection(db, 'notifications'), where('userId', '==', userId), where('type', '==', 'live_stream'), where('read', '==', false), limit(99)), snapshot => {
+    onCount(snapshot.size);
   });
 }
 
 export async function markLiveNotificationsRead(userId: string): Promise<void> {
-  const snapshot = await getDocs(query(collection(db, 'notifications'), where('userId', '==', userId)));
-  const unread = snapshot.docs.filter(item => item.data().type === 'live_stream' && item.data().read !== true);
+  const snapshot = await getDocs(query(collection(db, 'notifications'), where('userId', '==', userId), where('type', '==', 'live_stream'), where('read', '==', false), limit(450)));
+  const unread = snapshot.docs;
   if (!unread.length) return;
   const batch = writeBatch(db);
   unread.slice(0, 450).forEach(item => batch.update(item.ref, { read: true }));

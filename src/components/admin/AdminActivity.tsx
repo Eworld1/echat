@@ -31,7 +31,6 @@ export const AdminActivity: React.FC = () => {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { const id = setInterval(load, 20000); return () => clearInterval(id); }, [load]);
 
   const shown = useMemo(() => (filter === 'all' ? logs : logs.filter(l => l.action.startsWith(filter))), [logs, filter]);
   const pages = Math.max(1, Math.ceil(shown.length / PAGE));

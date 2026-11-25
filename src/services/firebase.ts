@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { initializeFirestore, getFirestore } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import firebaseAppletConfig from "../../firebase-applet-config.json";
@@ -22,8 +22,14 @@ const databaseId = import.meta.env.VITE_FIREBASE_DATABASE_ID || firebaseAppletCo
 
 let firestoreInstance: ReturnType<typeof getFirestore>;
 try {
+  // Device cache (IndexedDB): reopening eChat reuses data already downloaded, and listeners that
+  // reconnect only pay for documents that changed. This cuts Firestore reads a lot.
+  let localCache;
+  try { localCache = persistentLocalCache({ tabManager: persistentMultipleTabManager() }); }
+  catch { localCache = memoryLocalCache(); }
   firestoreInstance = initializeFirestore(app, {
     experimentalAutoDetectLongPolling: true,
+    localCache,
   }, databaseId !== "(default)" ? databaseId : undefined);
 } catch {
   firestoreInstance = (databaseId && databaseId !== "(default)") 

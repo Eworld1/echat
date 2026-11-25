@@ -1,4 +1,5 @@
 import { AdminOverview } from './admin/AdminOverview';
+import { readAdminCache, writeAdminCache } from './admin/adminCache';
 import { AdminUsers } from './admin/AdminUsers';
 import { AdminAnnouncements } from './admin/AdminAnnouncements';
 import { AdminActivity } from './admin/AdminActivity';
@@ -107,7 +108,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
     }
   };
 
-  const loadAdminData = async () => {
+  const [statsSyncedAt, setStatsSyncedAt] = useState<number | null>(null);
+
+  /** Sync Stats is manual: opening the console uses the cached copy (up to 10 minutes old). */
+  const loadAdminData = async (force = true) => {
+    type Snapshot = { s: AdminStats; u: User[]; r: Post[]; live: number };
+    const cached = force ? null : readAdminCache<Snapshot>('dashboard');
+    if (cached) {
+      setStats(cached.value.s); setUsersList(cached.value.u); setReportedPosts(cached.value.r); setPendingLiveRequests(cached.value.live);
+      setStatsSyncedAt(cached.at);
+      return;
+    }
     setIsRefreshing(true);
     setErrorMsg('');
     try {
@@ -119,7 +130,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
       setStats(s);
       setUsersList(u);
       setReportedPosts(r);
-      try { setPendingLiveRequests((await api.getAdminLiveAccess()).requests.length); } catch { setPendingLiveRequests(0); }
+      let live = 0;
+      try { live = (await api.getAdminLiveAccess()).requests.length; } catch { live = 0; }
+      setPendingLiveRequests(live);
+      setStatsSyncedAt(writeAdminCache<Snapshot>('dashboard', { s, u, r, live }));
     } catch (err: any) {
       setErrorMsg(err.message || 'Access denied');
     } finally {
@@ -129,7 +143,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
 
   useEffect(() => {
     if (canAdmin) {
-      loadAdminData();
+      void loadAdminData(false);
     }
   }, [canAdmin]);
 
@@ -293,9 +307,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onViewProfile, o
           </div>
 
           <div className="flex items-center gap-3">
+            {statsSyncedAt && <span className="hidden text-[11px] text-purple-200/80 sm:inline">Synced {new Date(statsSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
             <button
-              onClick={loadAdminData}
+              onClick={() => void loadAdminData(true)}
               disabled={isRefreshing}
+              title="Load the latest stats (manual only, no auto-refresh)"
               className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 border border-white/10 transition cursor-pointer"
             >
               <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />

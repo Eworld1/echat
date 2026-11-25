@@ -305,14 +305,14 @@ export function listenReels(uid: string, onReels: (reels: Reel[]) => void, onErr
   const buckets: { publicReels: Reel[]; mine: Reel[] } = { publicReels: [], mine: [] };
   const emit = () => onReels([...new Map([...buckets.publicReels, ...buckets.mine].map(reel => [reel.id, reel])).values()].sort((a, b) => b.createdAt - a.createdAt));
   const stopPublic = listenWithFallback(
-    query(reels, where('audience', '==', 'public'), orderBy('createdAt', 'desc'), limit(150)),
-    query(reels, where('audience', '==', 'public'), limit(300)),
+    query(reels, where('audience', '==', 'public'), orderBy('createdAt', 'desc'), limit(30)),
+    query(reels, where('audience', '==', 'public'), limit(60)),
     docs => { buckets.publicReels = docs.map(item => toReel(item.id, item.data)); emit(); },
     onError
   );
   const stopShared = uid ? listenWithFallback(
-    query(reels, where('allowedViewers', 'array-contains', uid), orderBy('createdAt', 'desc'), limit(150)),
-    query(reels, where('allowedViewers', 'array-contains', uid), limit(300)),
+    query(reels, where('allowedViewers', 'array-contains', uid), orderBy('createdAt', 'desc'), limit(30)),
+    query(reels, where('allowedViewers', 'array-contains', uid), limit(60)),
     docs => { buckets.mine = docs.map(item => toReel(item.id, item.data)); emit(); },
     () => { /* private reels are optional */ }
   ) : () => {};
