@@ -17,6 +17,7 @@ import {
   writeBatch,
   type Unsubscribe
 } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 import { db } from './firebase';
 import type { LiveComment, LiveStream } from '../types';
 
@@ -35,14 +36,175 @@ export function invalidateLiveDiscoveryUserData(userId: string): void {
   liveDiscoveryUserDataCache.delete(userId);
 }
 
+/**
+ * Facebook-style live discovery. ONE document per host: lives/{hostUserId} with status 'live' | 'ended',
+ * the CURRENT streamId and a heartbeat (updatedAt, every 10 s from the host's app).
+ * - Only status == 'live' is listened to, so an ended live disappears for everyone instantly.
+ * - A camera live whose heartbeat is older than 30 s counts as ended (host's app closed / offline).
+ * - One shared realtime listener for the whole app (feed banner, Live tab, sidebar…).
+ * Until the lives/{hostId} read rule is published, it falls back to liveStreams with the same checks.
+ */
+export const LIVE_STALE_MS = 30_000;
+const hostLivesRef = collection(db, 'lives');
+
+type RawLive = LiveStream & { updatedAt: number };
+
+function hostLiveToStream(hostId: string, data: Record<string, any>): RawLive {
+  return {
+    id: String(data.streamId || ''),
+    hostId,
+    hostName: String(data.hostName || ''),
+    hostAvatar: String(data.hostAvatar || ''),
+    hostEmail: '',
+    isHostVerified: data.isHostVerified === true,
+    title: String(data.title || ''),
+    category: data.category,
+    location: data.location,
+    viewersCount: Number(data.viewerCount || 0),
+    reactionsCount: 0,
+    startedAt: Number(data.startedAt || 0),
+    updatedAt: Number(data.updatedAt || 0),
+    isActive: data.status === 'live',
+    status: data.status === 'live' ? 'live' : 'ended',
+    source: data.source,
+    comments: [],
+    liveKitRoom: String(data.liveKitRoom || '')
+  };
+}
+
+function legacyToStream(id: string, data: Record<string, any>): RawLive {
+  return { ...(data as LiveStream), id, updatedAt: Number(data.heartbeatAt || data.startedAt || 0), status: data.isActive === true ? 'live' : 'ended' };
+}
+
+/**
+ * Heartbeat freshness measured on THIS device: a heartbeat counts from the moment we saw it change,
+ * so a phone with a wrong clock can't hide (or keep showing) lives for long.
+ */
+const heartbeatSeen = new Map<string, { updatedAt: number; seenAt: number }>();
+export function isLiveFresh(stream: Pick<LiveStream, 'id' | 'hostId' | 'source'> & { updatedAt?: number }, now = Date.now()): boolean {
+  if (stream.source === 'rtmp') return true; // streaming software: ended by LiveKit's webhook instead
+  const updatedAt = Number(stream.updatedAt || 0);
+  const key = `${stream.hostId}:${stream.id}`;
+  const seen = heartbeatSeen.get(key);
+  if (!seen || seen.updatedAt !== updatedAt) heartbeatSeen.set(key, { updatedAt, seenAt: seen ? now : Math.min(now, updatedAt) });
+  return now - heartbeatSeen.get(key)!.seenAt <= LIVE_STALE_MS;
+}
+
+type LivesListener = { onStreams: (streams: LiveStream[]) => void; onError: (error: Error) => void };
+const livesListeners = new Set<LivesListener>();
+let rawLives: RawLive[] = [];
+let visibleLives: LiveStream[] | null = null;
+let livesError: Error | null = null;
+let stopLivesSource: (() => void) | null = null;
+let livesTicker: number | null = null;
+
+function publishLives() {
+  const now = Date.now();
+  const next = rawLives
+    .filter(stream => stream.id && stream.status === 'live' && isLiveFresh(stream, now))
+    .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  const changed = !visibleLives || next.length !== visibleLives.length || next.some((item, index) => {
+    const before = visibleLives![index];
+    return item.id !== before.id || item.viewersCount !== before.viewersCount || item.title !== before.title || item.hostName !== before.hostName || item.hostAvatar !== before.hostAvatar;
+  });
+  if (!changed) return;
+  visibleLives = next;
+  livesError = null;
+  livesListeners.forEach(listener => listener.onStreams(next));
+}
+
+function startLivesSource() {
+  const fail = (error: Error) => {
+    livesError = error;
+    livesListeners.forEach(listener => listener.onError(error));
+  };
+  const useLegacy = () => {
+    stopLivesSource = onSnapshot(query(collection(db, 'liveStreams'), where('isActive', '==', true)), snapshot => {
+      const newestPerHost = new Map<string, RawLive>();
+      for (const item of snapshot.docs) {
+        const stream = legacyToStream(item.id, item.data());
+        const existing = newestPerHost.get(stream.hostId);
+        if (!existing || (stream.startedAt || 0) > (existing.startedAt || 0)) newestPerHost.set(stream.hostId, stream);
+      }
+      rawLives = [...newestPerHost.values()];
+      publishLives();
+    }, fail);
+  };
+  stopLivesSource = onSnapshot(query(hostLivesRef, where('status', '==', 'live')), snapshot => {
+    rawLives = snapshot.docs.map(item => hostLiveToStream(item.id, item.data()));
+    publishLives();
+  }, error => {
+    // lives/{hostId} rule not published yet: same behaviour from the per-stream documents.
+    if ((error as { code?: string }).code === 'permission-denied') { stopLivesSource?.(); useLegacy(); }
+    else fail(error);
+  });
+  // Re-check heartbeats so a host who went silent drops off within ~30 s without any new snapshot.
+  livesTicker = window.setInterval(publishLives, 5000);
+}
+
+/** Realtime list of lives that are on air now (newest first). Shared by every caller. */
 export function listenLiveStreams(onStreams: (streams: LiveStream[]) => void, onError: (error: Error) => void): Unsubscribe {
-  return onSnapshot(query(livesRef, where('isActive', '==', true)), snapshot => {
-    const streams = snapshot.docs
-      .map(item => ({ ...item.data(), id: item.id } as LiveStream))
-      .filter(stream => stream.isActive)
-      .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
-    onStreams(streams);
-  }, onError);
+  const listener: LivesListener = { onStreams, onError };
+  livesListeners.add(listener);
+  if (!stopLivesSource) startLivesSource();
+  else if (visibleLives) onStreams(visibleLives);
+  else if (livesError) onError(livesError);
+  return () => {
+    livesListeners.delete(listener);
+    if (livesListeners.size) return;
+    stopLivesSource?.();
+    stopLivesSource = null;
+    if (livesTicker) window.clearInterval(livesTicker);
+    livesTicker = null;
+    visibleLives = null;
+    rawLives = [];
+  };
+}
+
+/** React hook: lives on air now (null while loading). */
+export function useActiveLives(enabled = true): LiveStream[] | null {
+  const [streams, setStreams] = useState<LiveStream[] | null>(null);
+  useEffect(() => {
+    if (!enabled) { setStreams(null); return; }
+    return listenLiveStreams(setStreams, () => setStreams([]));
+  }, [enabled]);
+  return streams;
+}
+
+export type HostLiveState = { loaded: boolean; stream: LiveStream | null; ended: boolean };
+
+/**
+ * Follow one host's live (lives/{hostId}): the CURRENT stream id, title, viewer count and whether it
+ * ended (status 'ended' or no heartbeat for 30 s). Lives started before lives/{hostId} existed (or
+ * before the read rule is published) are followed through liveStreams/{fallbackStreamId}.
+ */
+export function listenHostLive(hostId: string, fallbackStreamId: string, onState: (state: HostLiveState) => void): Unsubscribe {
+  let stop: (() => void) | null = null;
+  let latest: RawLive | null = null;
+  let closed = false;
+  const emit = () => {
+    if (!latest) { onState({ loaded: true, stream: null, ended: true }); return; }
+    onState({ loaded: true, stream: latest, ended: latest.status !== 'live' || !isLiveFresh(latest) });
+  };
+  const followLegacy = () => {
+    stop?.();
+    if (!fallbackStreamId) { latest = null; emit(); stop = null; return; }
+    stop = onSnapshot(doc(db, 'liveStreams', fallbackStreamId), snapshot => {
+      latest = snapshot.exists() ? legacyToStream(snapshot.id, snapshot.data()) : null;
+      emit();
+    }, () => { latest = null; emit(); });
+  };
+  if (!hostId) followLegacy();
+  else {
+    stop = onSnapshot(doc(db, 'lives', hostId), snapshot => {
+      if (closed) return;
+      if (!snapshot.exists()) { followLegacy(); return; }
+      latest = hostLiveToStream(hostId, snapshot.data());
+      emit();
+    }, () => { if (!closed) followLegacy(); });
+  }
+  const ticker = window.setInterval(() => { if (latest) emit(); }, 5000);
+  return () => { closed = true; stop?.(); window.clearInterval(ticker); };
 }
 
 export function getLiveDiscoveryUserData(userId: string): Promise<LiveDiscoveryUserData> {

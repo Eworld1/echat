@@ -82,6 +82,63 @@ export function liveConfigStatus() {
 export const LIVE_CATEGORY_VALUES = ['Just Chatting', 'Music', 'Gaming', 'News', 'Sports', 'Church', 'Education', 'Market / Selling'];
 export const LIVE_LOCATION_VALUES = ['Freetown', 'Bo', 'Kenema', 'Makeni', 'Other'];
 
+/**
+ * Facebook-style single source of truth: ONE document per host, lives/{hostUserId}
+ *   { status: 'live' | 'ended', streamId, hostId, hostName, hostAvatar, title, category, location,
+ *     startedAt, viewerCount, updatedAt (heartbeat), endedAt, liveKitRoom, source }
+ * Viewers discover lives from it (status == 'live') and join the host's CURRENT stream through it.
+ * Each broadcast still has its own liveStreams/{streamId} record (comments, viewers, reports), so a
+ * new live never mixes with an old one. Only the server (Admin SDK) writes either collection.
+ */
+/** Viewers treat a camera live whose heartbeat is older than this as ended. */
+export const LIVE_HEARTBEAT_STALE_MS = 30_000;
+/** The server permanently ends a camera live with no heartbeat for this long (grace for a quick app switch). */
+export const LIVE_HEARTBEAT_EXPIRE_MS = 120_000;
+
+export function hostLiveRef(hostId: string) {
+  return requireFirestore().collection('lives').doc(hostId);
+}
+
+/** Streaming-software (RTMP) lives have no app heartbeat; LiveKit's ingress webhooks end them. */
+export function isHeartbeatStale(data: Record<string, any> | undefined, maxAgeMs = LIVE_HEARTBEAT_STALE_MS): boolean {
+  if (!data || data.source === 'rtmp') return false;
+  const last = Number(data.updatedAt ?? data.heartbeatAt ?? data.startedAt ?? 0);
+  return !last || Date.now() - last > maxAgeMs;
+}
+
+/** Write lives/{hostId} for a stream that just went live. */
+export async function publishHostLive(live: Record<string, any>): Promise<void> {
+  const now = Date.now();
+  await hostLiveRef(String(live.hostId)).set({
+    status: 'live',
+    streamId: live.id,
+    hostId: live.hostId,
+    hostName: live.hostName || '',
+    hostAvatar: live.hostAvatar || '',
+    isHostVerified: live.isHostVerified === true,
+    title: live.title || '',
+    category: live.category || 'Just Chatting',
+    location: live.location || '',
+    source: live.source || 'camera',
+    liveKitRoom: live.liveKitRoom || '',
+    startedAt: live.startedAt || now,
+    updatedAt: now,
+    viewerCount: 0,
+    endedAt: null,
+    endedReason: null
+  });
+}
+
+/** Set lives/{hostId} to ended, but only while it still points at this stream (or any stream when omitted). */
+export async function endHostLive(hostId: string, streamId: string | null, reason: string): Promise<void> {
+  if (!hostId) return;
+  const ref = hostLiveRef(hostId);
+  const snapshot = await ref.get();
+  const data = snapshot.data();
+  if (!snapshot.exists || data?.status !== 'live' || (streamId && data.streamId !== streamId)) return;
+  await ref.update({ status: 'ended', endedAt: Date.now(), endedReason: reason });
+}
+
 /** Recount unique viewers (presence docs) and store the result on the live document. */
 export async function recountLiveViewers(streamId: string): Promise<number> {
   const ref = requireFirestore().collection('liveStreams').doc(streamId);
@@ -89,16 +146,101 @@ export async function recountLiveViewers(streamId: string): Promise<number> {
   const count = aggregate.data().count;
   const snapshot = await ref.get();
   const peak = Math.max(Number(snapshot.data()?.peakViewers || 0), count);
-  if (snapshot.exists) await ref.update({ viewersCount: count, peakViewers: peak });
+  if (snapshot.exists) {
+    await ref.update({ viewersCount: count, peakViewers: peak });
+    const hostId = String(snapshot.data()?.hostId || '');
+    if (hostId) {
+      const pointer = hostLiveRef(hostId);
+      const current = await pointer.get();
+      if (current.exists && current.data()?.streamId === streamId && current.data()?.status === 'live') await pointer.update({ viewerCount: count });
+    }
+  }
   return count;
 }
 
-/** Mark a live stream as ended (idempotent). */
+/** Mark a live stream as ended (idempotent), and its host's lives/{hostId} entry too. */
 export async function markLiveEnded(streamId: string, reason: string): Promise<void> {
   const ref = requireFirestore().collection('liveStreams').doc(streamId);
   const snapshot = await ref.get();
-  if (!snapshot.exists || snapshot.data()?.isActive !== true) return;
-  await ref.update({ isActive: false, endedAt: Date.now(), endedReason: reason });
+  if (!snapshot.exists) return;
+  const data = snapshot.data() || {};
+  if (data.isActive === true) await ref.update({ isActive: false, endedAt: Date.now(), endedReason: reason });
+  await endHostLive(String(data.hostId || ''), streamId, reason);
+}
+
+/** End one broadcast everywhere: LiveKit room closed (viewers disconnect), liveStreams + lives/{hostId} ended. */
+export async function endBroadcast(streamId: string, liveKitRoom: string, reason: string): Promise<void> {
+  if (liveKitRoom && liveKitUrl && liveKitApiKey && liveKitApiSecret) {
+    await requireLiveKit().rooms.deleteRoom(liveKitRoom).catch(error => {
+      console.warn('[Vercel Live API] LiveKit room cleanup failed', error instanceof Error ? error.message : error);
+    });
+  }
+  await markLiveEnded(streamId, reason);
+}
+
+/** A host has ONE live at a time: end every other active broadcast of this host. */
+export async function endOtherLivesOfHost(hostId: string, keepStreamId: string | null, reason: string): Promise<number> {
+  const active = await requireFirestore().collection('liveStreams').where('hostId', '==', hostId).where('isActive', '==', true).get();
+  let ended = 0;
+  for (const item of active.docs) {
+    if (item.id === keepStreamId) continue;
+    await endBroadcast(item.id, String(item.data().liveKitRoom || ''), reason);
+    ended++;
+  }
+  return ended;
+}
+
+let lastSweepAt = 0;
+/**
+ * End camera lives whose host stopped sending heartbeats (app closed, phone died, network lost),
+ * including old lives from before heartbeats existed. Throttled per server instance.
+ */
+export async function sweepStaleLives(): Promise<number> {
+  if (!firestoreInstance || Date.now() - lastSweepAt < 15_000) return 0;
+  lastSweepAt = Date.now();
+  let ended = 0;
+  const [active, pointers] = await Promise.all([
+    firestoreInstance.collection('liveStreams').where('isActive', '==', true).get(),
+    firestoreInstance.collection('lives').where('status', '==', 'live').get()
+  ]);
+  for (const item of active.docs) {
+    const data = item.data();
+    if (!isHeartbeatStale(data, LIVE_HEARTBEAT_EXPIRE_MS)) continue;
+    await endBroadcast(item.id, String(data.liveKitRoom || ''), 'heartbeat-timeout');
+    ended++;
+  }
+  for (const item of pointers.docs) {
+    const data = item.data();
+    if (!isHeartbeatStale(data, LIVE_HEARTBEAT_EXPIRE_MS)) continue;
+    await item.ref.update({ status: 'ended', endedAt: Date.now(), endedReason: 'heartbeat-timeout' });
+    ended++;
+  }
+  if (ended) console.info('[Vercel Live API] Ended stale lives', { ended });
+  return ended;
+}
+
+/** lives/{hostId} → the LiveStream shape the app uses (id = the current streamId). */
+export function hostLiveToStream(hostId: string, data: Record<string, any>) {
+  return {
+    id: String(data.streamId || ''),
+    hostId,
+    hostName: String(data.hostName || ''),
+    hostAvatar: String(data.hostAvatar || ''),
+    hostEmail: '',
+    isHostVerified: data.isHostVerified === true,
+    title: String(data.title || ''),
+    category: data.category,
+    location: data.location,
+    viewersCount: Number(data.viewerCount || 0),
+    reactionsCount: 0,
+    startedAt: Number(data.startedAt || 0),
+    updatedAt: Number(data.updatedAt || 0),
+    isActive: data.status === 'live',
+    status: data.status,
+    source: data.source,
+    comments: [],
+    liveKitRoom: String(data.liveKitRoom || '')
+  };
 }
 
 function requireFirestore(): Firestore {
@@ -285,6 +427,19 @@ async function verifyFirebaseIdToken(token: string): Promise<FirebaseIdToken & {
     throw Object.assign(new Error('The Firebase sign-in token has no valid user.'), { status: 401, code: 'invalid-token-subject' });
   }
   return { ...payload, uid: payload.sub } as FirebaseIdToken & { uid: string };
+}
+
+/** Firebase sign-in check only (no profile lookups): for frequent calls such as the host heartbeat. */
+export async function verifyLiveUid(req: ApiRequest): Promise<string> {
+  const authorization = getHeader(req, 'authorization').replace(/^Bearer\s+/i, '');
+  const token = getHeader(req, 'x-firebase-id-token') || getHeader(req, 'x-live-auth-token') || authorization;
+  if (!token) throw Object.assign(new Error('Sign in to use Go Live.'), { status: 401, code: 'missing-token' });
+  try {
+    return (await verifyFirebaseIdToken(token)).uid;
+  } catch (error) {
+    if (error && typeof error === 'object' && 'status' in error) throw error;
+    throw Object.assign(new Error('The Firebase sign-in token is invalid or expired. Please sign in again.'), { status: 401, code: 'invalid-token' });
+  }
 }
 
 export function sendJson(res: ApiResponse, status: number, data: unknown): void {

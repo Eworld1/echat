@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Eye, Flame, Phone, Radio, TrendingUp, UserPlus, Video } from 'lucide-react';
 import { api } from '../services/api';
 import { followCreator, listenFollowingIds, listenLiveStreams, unfollowCreator } from '../services/liveDiscovery';
+import { useLiveProfiles } from '../services/liveProfiles';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { avatarSrc } from './UserAvatar';
@@ -44,6 +45,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ onOpenChat, onViewPr
 
   useEffect(() => { api.getTrending().then(list => setTrending(Array.isArray(list) ? list.slice(0, 6) : [])).catch(() => setTrending([])); }, [user?.id]);
   useEffect(() => listenLiveStreams(items => setLives(items.slice(0, 5)), () => setLives([])), []);
+  const liveHosts = useLiveProfiles(lives.map(stream => stream.hostId));
   useEffect(() => (user?.id ? listenFollowingIds(user.id, ids => setFollowing(new Set(ids)), () => {}) : undefined), [user?.id]);
   useEffect(() => {
     api.getUsers()
@@ -95,11 +97,11 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ onOpenChat, onViewPr
             {lives.map(stream => (
               <button key={stream.id} type="button" onClick={() => (onWatchLive ? onWatchLive(stream) : onOpenLive?.())} className="flex w-full items-center gap-3 rounded-2xl p-1.5 text-left transition hover:bg-violet-50 dark:hover:bg-white/5">
                 <span className="relative shrink-0 rounded-full bg-gradient-to-br from-pink-500 to-rose-500 p-[2px]">
-                  <img src={avatarSrc(stream.hostAvatar, stream.hostName)} alt="" className="h-10 w-10 rounded-full border-2 border-white object-cover dark:border-[#161033]" />
+                  <img src={avatarSrc(liveHosts[stream.hostId]?.avatar || stream.hostAvatar, liveHosts[stream.hostId]?.name || stream.hostName)} alt="" className="h-10 w-10 rounded-full border-2 border-white object-cover dark:border-[#161033]" />
                   <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded bg-rose-600 px-1 text-[8px] font-black leading-3 tracking-wider text-white">LIVE</span>
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-bold text-slate-900 dark:text-white">{stream.hostName}</span>
+                  <span className="block truncate text-sm font-bold text-slate-900 dark:text-white">{liveHosts[stream.hostId]?.name || stream.hostName}</span>
                   <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{stream.title || stream.category || 'Live now'}</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-slate-500"><Eye size={12} />{stream.viewersCount || 0}</span>

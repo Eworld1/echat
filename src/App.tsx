@@ -114,9 +114,10 @@ export function MainApp() {
         setCurrentView(route);
         if (route === 'profile') setProfileUserId(new URLSearchParams(window.location.search).get('user') || user?.id || null);
         if (path.startsWith('/live/')) {
-          const streamId = decodeURIComponent(path.slice('/live/'.length));
-          void api.getCurrentLive().then(result => {
-            if (result.live?.id === streamId) setActiveViewerStream(result.live);
+          // /live/<hostId or streamId>: open that host's CURRENT live (the viewer shows Live Ended if it's over).
+          const liveId = decodeURIComponent(path.slice('/live/'.length));
+          void api.getCurrentLive(liveId).then(result => {
+            if (result.live) setActiveViewerStream(result.live);
           }).catch(() => {});
         }
       }
@@ -165,7 +166,7 @@ export function MainApp() {
   }, [isLoading, user?.id]);
 
   // Live streaming states
-  const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream | null>(null);
+  const [, setCurrentLiveStream] = useState<LiveStream | null>(null);
   const [isGoLiveOpen, setIsGoLiveOpen] = useState(false);
   const [activeViewerStream, setActiveViewerStream] = useState<LiveStream | null>(null);
 
@@ -389,6 +390,7 @@ export function MainApp() {
               onOpenChat={handleOpenChat}
               onViewProfile={(uid) => handleNavigate('profile', uid)}
               onOpenGoLive={() => setIsGoLiveOpen(true)}
+              onWatchLive={stream => setActiveViewerStream(stream)}
               onOpenSection={target => target === 'marketplace' ? navigateMarket('/marketplace/mine') : handleNavigate(target === 'live' ? 'live' : target === 'messages' ? 'messages' : 'feed')}
             />
           )}
@@ -397,7 +399,7 @@ export function MainApp() {
 
           {currentView === 'messages' && <MessagesPage initialUserId={activeDmUserId} onViewProfile={uid => handleNavigate('profile', uid)} />}
 
-          {currentView === 'live' && <LiveDiscoveryFeed onBack={() => handleNavigate('feed')} onOpenGoLive={() => setIsGoLiveOpen(true)} onWatchLive={stream => setActiveViewerStream(stream)} legacyStream={currentLiveStream} />}
+          {currentView === 'live' && <LiveDiscoveryFeed onBack={() => handleNavigate('feed')} onOpenGoLive={() => setIsGoLiveOpen(true)} onWatchLive={stream => setActiveViewerStream(stream)} />}
 
           {currentView === 'reels' && <Reels onViewProfile={uid => handleNavigate('profile', uid)} onBack={() => handleNavigate('feed')} />}
 

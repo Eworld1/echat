@@ -78,7 +78,7 @@ export interface GlobalSearchResults { users: User[]; posts: Post[]; }
 export interface LiveComment { id: string; userId: string; userName: string; userAvatar: string; text: string; createdAt: number; }
 export type LiveCategory = 'Just Chatting' | 'Music' | 'Gaming' | 'News' | 'Sports' | 'Church' | 'Education' | 'Market / Selling';
 export type LiveLocation = 'Freetown' | 'Bo' | 'Kenema' | 'Makeni' | 'Other';
-export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; category?: LiveCategory; location?: LiveLocation; reportCount?: number; underReview?: boolean; taggedPageIds?: string[]; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; liveKitRoom?: string; }
+export interface LiveStream { id: string; hostId: string; hostName: string; hostAvatar: string; hostEmail: string; isHostVerified?: boolean; title: string; category?: LiveCategory; location?: LiveLocation; reportCount?: number; underReview?: boolean; taggedPageIds?: string[]; viewersCount: number; reactionsCount: number; startedAt: number; isActive: boolean; comments: LiveComment[]; liveKitRoom?: string; /** Last host heartbeat (ms). */ updatedAt?: number; heartbeatAt?: number; status?: 'live' | 'ended'; source?: 'camera' | 'rtmp' | string; }
 export interface LiveAccessRequest { id: string; userId: string; name: string; avatar: string; reason: string; status: 'pending' | 'approved' | 'rejected' | 'blocked' | 'cancelled'; createdAt: number; reviewedBy?: string; }
 export type LiveAccessMode = 'everyone' | 'approved_only' | 'sixty_days_plus' | 'admins_creators_only';
 

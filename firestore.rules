@@ -818,6 +818,13 @@ service cloud.firestore {
       allow update, delete: if isSuperAdmin();
     }
 
+    // ONE document per live host (lives/{hostUserId}): status 'live' | 'ended', current streamId,
+    // heartbeat (updatedAt) and viewer count. Public to read (discovery); only the server writes it.
+    match /lives/{hostId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /liveStreams/{streamId} {
       allow read: if true;
       allow create: if request.auth != null &&

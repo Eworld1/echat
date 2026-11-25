@@ -916,12 +916,27 @@ export const api = {
   },
 
   // Live broadcast system
-  async getCurrentLive(): Promise<{ live: LiveStream | null }> {
-    return cachedApiRead('live:current', async () => {
-      const res = await fetch(apiUrl('/api/live/current'), { headers: getHeaders(), cache: 'no-store' });
+  /** The newest live that is on air now, or a specific one by host id / stream id (share links). */
+  async getCurrentLive(id?: string): Promise<{ live: LiveStream | null }> {
+    const path = id ? `/api/live/current?id=${encodeURIComponent(id)}` : '/api/live/current';
+    return cachedApiRead(id ? `live:current:${id}` : 'live:current', async () => {
+      const res = await fetch(apiUrl(path), { headers: getHeaders(), cache: 'no-store' });
       if (!res.ok) return { live: null };
       return readResponse<{ live: LiveStream | null }>(res);
     });
+  },
+
+  /** Host heartbeat (every 10 s while live). Throws an error with code 'live-ended' (410) when the live is over. */
+  async sendLiveHeartbeat(streamId: string): Promise<void> {
+    const res = await fetch(apiUrl('/api/live/heartbeat'), { method: 'POST', headers: await getVercelLiveHeaders(), body: JSON.stringify({ streamId }), cache: 'no-store' });
+    await readResponse(res, 'Live heartbeat failed');
+  },
+
+  /** End my live while the page is closing (keepalive, cached sign-in token). */
+  async endLiveOnPageClose(streamId: string): Promise<void> {
+    const idToken = await auth.currentUser?.getIdToken().catch(() => '') || '';
+    if (!idToken) return;
+    await fetch(apiUrl('/api/live/end'), { method: 'POST', headers: getHeaders({ 'x-firebase-id-token': idToken }), body: JSON.stringify({ streamId }), keepalive: true }).catch(() => undefined);
   },
 
   async startLive(title?: string, taggedPageIds: string[] = [], options: { category?: string; location?: string } = {}): Promise<{ success: boolean; live: LiveStream; liveKitUrl?: string; liveKitToken?: string }> {
@@ -964,8 +979,10 @@ export const api = {
     return readResponse(res, 'Could not reset your stream key');
   },
 
-  async getLiveKitViewerToken(streamId: string): Promise<{ url: string; token: string }> {
-    const res = await fetch(apiUrl(`/api/live/watch?streamId=${encodeURIComponent(streamId)}`), { headers: await getVercelLiveHeaders(), cache: 'no-store' });
+  /** Viewer token for the host's CURRENT live room (looked up by host on the server). */
+  async getLiveKitViewerToken(streamId: string, hostId?: string): Promise<{ url: string; token: string; streamId?: string }> {
+    const params = new URLSearchParams({ streamId, ...(hostId ? { hostId } : {}) });
+    const res = await fetch(apiUrl(`/api/live/watch?${params}`), { headers: await getVercelLiveHeaders(), cache: 'no-store' });
     return readResponse(res, 'Could not join this live stream');
   },
 

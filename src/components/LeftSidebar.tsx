@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePreferences } from '../context/PreferencesContext';
 import { avatarSrc } from './UserAvatar';
+import { useActiveLives } from '../services/liveDiscovery';
 import {
   BarChart3, Bookmark, Briefcase, Calendar, ChevronDown, Film, Flag, Gamepad2, Home, MessageCircle, Package, Radio,
   Settings, ShoppingBag, Ticket, User as UserIcon, Users, Users2, Wallet, X
@@ -18,7 +19,7 @@ interface LeftSidebarProps {
   onClose?: () => void;
 }
 
-interface NavItem { id: string; label: string; icon: React.ReactNode; action: () => void; active: boolean; badge?: number; tint: string }
+interface NavItem { id: string; label: string; icon: React.ReactNode; action: () => void; active: boolean; badge?: number; tint: string; liveDot?: number }
 
 const MORE_KEY = 'echat_sidebar_more_open';
 
@@ -26,6 +27,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
   const { user } = useAuth();
   const { t } = usePreferences();
   const [moreOpen, setMoreOpen] = useState(() => { try { return localStorage.getItem(MORE_KEY) === '1'; } catch { return false; } });
+  // Red LIVE dot on "Live Streams" as soon as anyone is live (shared realtime listener, starts at login).
+  const liveNow = useActiveLives(Boolean(user));
   if (!user) return null;
 
   const toggleMore = () => setMoreOpen(open => {
@@ -35,7 +38,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
 
   const primary: NavItem[] = [
     { id: 'feed', label: 'Home', icon: <Home size={20} />, action: () => onNavigate('feed'), active: currentView === 'feed', tint: 'from-violet-600 to-indigo-500' },
-    { id: 'live', label: 'Live Streams', icon: <Radio size={20} />, action: () => onNavigate('live'), active: currentView === 'live', tint: 'from-pink-500 to-rose-500' },
+    { id: 'live', label: 'Live Streams', icon: <Radio size={20} />, action: () => onNavigate('live'), active: currentView === 'live', tint: 'from-pink-500 to-rose-500', liveDot: liveNow?.length || 0 },
     { id: 'marketplace', label: 'Marketplace', icon: <ShoppingBag size={20} />, action: () => onNavigate('marketplace'), active: currentView === 'marketplace', tint: 'from-amber-500 to-orange-500' },
     { id: 'messages', label: 'Messages', icon: <MessageCircle size={20} />, action: onOpenMessenger, active: currentView === 'messages', tint: 'from-blue-600 to-cyan-500' },
     { id: 'friends', label: 'Friends', icon: <Users size={20} />, action: () => onNavigate('friends'), active: currentView === 'friends', badge: user.friendRequestsReceived?.length || 0, tint: 'from-emerald-500 to-teal-500' },
@@ -66,6 +69,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ currentView, onNavigat
       <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl transition group-hover:scale-105 ${item.active ? `bg-gradient-to-br ${item.tint} text-white shadow-md` : 'bg-violet-50 text-violet-700 dark:bg-white/5 dark:text-violet-300'}`}>{item.icon}</span>
       <span className="flex-1 truncate">{item.label}</span>
       {Boolean(item.badge) && <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-bold text-white">{item.badge}</span>}
+      {Boolean(item.liveDot) && <span className="flex items-center gap-1 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-black uppercase text-white" aria-label={`${item.liveDot} live now`}><span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-white" /></span>{item.liveDot}</span>}
     </button>
   );
 

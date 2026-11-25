@@ -3,6 +3,7 @@ import { applyLiveCors, handleError, handleLiveOptions, sendJson, verifyLiveUser
 import auth from '../../serverless/live-routes/auth.js';
 import current from '../../serverless/live-routes/current.js';
 import end from '../../serverless/live-routes/end.js';
+import heartbeat from '../../serverless/live-routes/heartbeat.js';
 import publish from '../../serverless/live-routes/publish.js';
 import react from '../../serverless/live-routes/react.js';
 import rtmpDetails from '../../serverless/live-routes/rtmp-details.js';
@@ -36,6 +37,7 @@ const handlers: Record<string, (req: ApiRequest, res: ApiResponse) => Promise<vo
   auth,
   current,
   end,
+  heartbeat,
   publish,
   react,
   'rtmp-details': rtmpDetails,

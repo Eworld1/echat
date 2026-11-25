@@ -4,13 +4,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { api, invalidateApiReadCache } from '../services/api';
-import { Post, User } from '../types';
+import { LiveStream, Post, User } from '../types';
 import { StoriesBar } from './StoriesBar';
 import { PostCard } from './PostCard';
 import { ProfilePhotoPostCard } from './ProfilePhotoPostCard';
 import { listenProfilePhotoPosts, type ProfilePhotoPost } from '../services/profilePhotoPosts';
 import { CreatePostModal } from './CreatePostModal';
 import { DashboardHeader } from './DashboardHeader';
+import { LiveFeedBanner } from './LiveFeedBanner';
 import { useLowDataMode } from '../services/lowData';
 import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown } from 'lucide-react';
 
@@ -18,6 +19,8 @@ interface FeedProps {
   onOpenChat: (user: User) => void;
   onViewProfile: (userId: string) => void;
   onOpenGoLive: () => void;
+  /** Open a live from the LIVE NOW banner. */
+  onWatchLive?: (stream: LiveStream) => void;
   /** Stat cards on the dashboard header open these sections. */
   onOpenSection?: (target: 'profile' | 'live' | 'messages' | 'marketplace') => void;
 }
@@ -26,6 +29,7 @@ export const Feed: React.FC<FeedProps> = ({
   onOpenChat,
   onViewProfile,
   onOpenGoLive,
+  onWatchLive,
   onOpenSection,
 }) => {
   const { user } = useAuth();
@@ -152,6 +156,9 @@ export const Feed: React.FC<FeedProps> = ({
 
       {/* Welcome, today's date, Go Live and my stats */}
       <DashboardHeader onGoLive={onOpenGoLive} onOpen={target => (target === 'profile' && user ? onViewProfile(user.id) : onOpenSection?.(target))} />
+
+      {/* LIVE NOW: everyone who is live right now (realtime) */}
+      {onWatchLive && <LiveFeedBanner onWatch={onWatchLive} onSeeAll={() => onOpenSection?.('live')} />}
 
       {/* 24-Hour Stories (circles) */}
       <div className="ec-card bg-white px-3 pt-3 dark:bg-[#161033]">

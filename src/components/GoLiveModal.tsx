@@ -733,6 +733,33 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     return () => { stopDoc(); stopComments(); };
   }, [isBroadcasting, currentSession?.id]);
 
+  // Facebook-style presence: tell the server every 10 s that this live is still on air (lives/{hostId}
+  // updatedAt). Viewers drop a live whose heartbeat is 30 s old, so a closed app never leaves a ghost live.
+  const endBroadcastRef = useRef<() => void>(() => {});
+  endBroadcastRef.current = () => { void confirmEndBroadcast(); };
+  useEffect(() => {
+    if (!isBroadcasting || !currentSession?.id || !currentSession.liveKitRoom) return;
+    const streamId = currentSession.id;
+    let stopped = false;
+    const beat = () => api.sendLiveHeartbeat(streamId).catch(error => {
+      // Ended somewhere else (admin, another device started a new live, timed out): stop here too.
+      if (!stopped && (error as { code?: string })?.code === 'live-ended') endBroadcastRef.current();
+    });
+    void beat();
+    const timer = window.setInterval(beat, 10_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') void beat(); };
+    // Closing / reloading the page ends the live right away for every viewer.
+    const onPageHide = () => { void api.endLiveOnPageClose(streamId); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [isBroadcasting, currentSession?.id, currentSession?.liveKitRoom]);
+
   // Streaming-software tab: show when this user's RTMP broadcast is live (created by the LiveKit webhook).
   useEffect(() => {
     const hostId = firebaseUser?.uid || '';

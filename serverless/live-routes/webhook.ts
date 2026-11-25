@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { WebhookReceiver } from 'livekit-server-sdk';
 import type { ApiRequest, ApiResponse } from '../live.js';
-import { canStartLive, firestore, handleError, lives, markLiveEnded, recountLiveViewers, requireLiveKit, sendJson, type LiveUser } from '../live.js';
+import { canStartLive, endOtherLivesOfHost, firestore, handleError, lives, markLiveEnded, publishHostLive, recountLiveViewers, requireLiveKit, sendJson, type LiveUser } from '../live.js';
 
 /**
  * POST /api/live/webhook — LiveKit Cloud webhook (Settings → Webhooks → this URL).
@@ -71,7 +71,8 @@ async function startSoftwareLive(ingressId: string, roomName: string, identity: 
 
   const details = profile.rtmpStreamDetails || {};
   const id = `live_${randomUUID()}`;
-  await lives.doc(id).create({
+  await endOtherLivesOfHost(uid, null, 'replaced');
+  const live = {
     id,
     hostId: uid,
     hostName: liveUser.name,
@@ -93,7 +94,9 @@ async function startSoftwareLive(ingressId: string, roomName: string, identity: 
     liveKitRoom: roomName,
     source: 'rtmp',
     ingressId
-  });
+  };
+  await lives.doc(id).create(live);
+  await publishHostLive(live);
   return `ok: created ${id}`;
 }
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { GO_LIVE, getGoLiveEligibility } from '../../src/config/featureFlags.js';
 import type { ApiRequest, ApiResponse } from '../live.js';
-import { applyLiveCors, canStartLive, createRoomToken, firestore, handleError, handleLiveOptions, liveKitUrl, lives, requireLiveKit, sendJson, verifyLiveUser, LIVE_CATEGORY_VALUES, LIVE_LOCATION_VALUES } from '../live.js';
+import { applyLiveCors, canStartLive, createRoomToken, endOtherLivesOfHost, firestore, handleError, handleLiveOptions, liveKitUrl, lives, publishHostLive, requireLiveKit, sendJson, verifyLiveUser, LIVE_CATEGORY_VALUES, LIVE_LOCATION_VALUES } from '../live.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   console.info('[Vercel Live API] invocation', { route: '/api/live/start', method: req.method, origin: req.headers.origin || null });
@@ -22,6 +22,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     const category = LIVE_CATEGORY_VALUES.includes(req.body?.category) ? req.body.category : 'Just Chatting';
     const location = LIVE_LOCATION_VALUES.includes(req.body?.location) ? req.body.location : '';
     if (!location) return sendJson(res, 400, { error: 'Choose a location before starting your live broadcast.', code: 'live-location-required' });
+    // One live per host: starting a new live ends any previous one (old tab, crashed phone…).
+    await endOtherLivesOfHost(user.uid, null, 'replaced');
     const roomName = `echat-${user.uid}-${randomUUID().slice(0, 8)}`;
     await liveKit.rooms.createRoom({ name: roomName, emptyTimeout: 60, maxParticipants: 10000 });
     const liveKitToken = await createRoomToken(user, roomName, true);
@@ -43,13 +45,16 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       reactionsCount: 0,
       source: 'camera',
       startedAt: Date.now(),
+      heartbeatAt: Date.now(),
       isActive: true,
       comments: [],
       liveKitRoom: roomName
     };
     try {
       await lives.doc(id).create(live);
+      await publishHostLive(live);
     } catch (error) {
+      await lives.doc(id).update({ isActive: false, endedAt: Date.now(), endedReason: 'start-failed' }).catch(() => {});
       await liveKit.rooms.deleteRoom(roomName).catch(() => {});
       throw error;
     }
