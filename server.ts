@@ -15,6 +15,7 @@ import type { DirectMessageRecord } from './server/persistence.js';
 import type { Message } from './server/types.js';
 import { isValidPushToken, pushReady, removePushToken, savePushToken, sendPush, type PushPayload } from './server/push.js';
 import { RESPONSE_TIMING, VerificationError, completeReset, completeSignup, completeVerify, normalizeEmail, sendResetCode, sendSignupCode, sendVerifyCode, verificationStatus } from './server/verification.js';
+import { startLiveNotifier } from './server/liveNotifier.js';
 import { migrateEmbeddedProfilesOnce, publicProfile, refreshEmbeddedProfile } from './server/profileSync.js';
 import { resolveLiveCreatedAt } from './serverless/live-age.js';
 import { describeLiveKitError, getOrCreateLiveStreamIngress, resetLiveStreamIngress } from './serverless/live-stream-key.js';
@@ -3770,6 +3771,16 @@ async function startServer() {
   void Promise.resolve(db.init()).then(() => {
     // One-time: refresh names/photos copied into older Firestore posts, comments, stories and reels.
     setTimeout(() => { void migrateEmbeddedProfilesOnce(firestore, lookupProfileOwner); }, 20_000);
+    // Bell notifications when someone goes live (camera or OBS), with a deep link to the player.
+    startLiveNotifier({
+      firestore,
+      lookupUser: lookupProfileOwner,
+      isBlockedBetween: (a, b) => db.isBlockedBetween(a, b),
+      getAllNotifications: () => db.getAllNotificationsRef(),
+      addNotification: n => db.addNotification(n),
+      save: () => db.saveNotifications(),
+      push: (userId, notification) => socketManager.sendToUser(userId, { type: 'new_notification', notification: populateNotification(notification) })
+    });
   }).catch(() => {});
 
   // Dev only: also answer on :5173 so http://localhost:5173 works like a Vite dev server.

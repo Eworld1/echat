@@ -1079,6 +1079,16 @@ class Database {
     if (changed) this.save();
   }
 
+  /** The live notifications array (for in-place updates such as "Live ended"). */
+  getAllNotificationsRef(): Notification[] {
+    return this.data.notifications;
+  }
+
+  /** Persist after in-place notification edits. */
+  saveNotifications(): void {
+    this.save();
+  }
+
   getNotifications(userId: string): Notification[] {
     return this.data.notifications
       .filter(n => n.userId === userId)

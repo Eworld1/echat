@@ -117,7 +117,8 @@ export function MainApp() {
           // /live/<hostId or streamId>: open that host's CURRENT live (the viewer shows Live Ended if it's over).
           const liveId = decodeURIComponent(path.slice('/live/'.length));
           void api.getCurrentLive(liveId).then(result => {
-            if (result.live) setActiveViewerStream(result.live);
+            // Not on air any more → open the player anyway: it follows lives/{hostId} and shows "Live Ended".
+            setActiveViewerStream(result.live || { id: liveId, hostId: liveId, hostName: '', hostAvatar: '', hostEmail: '', title: '', viewersCount: 0, reactionsCount: 0, startedAt: 0, isActive: false, comments: [], liveKitRoom: 'ended' });
           }).catch(() => {});
         }
       }
@@ -450,6 +451,14 @@ export function MainApp() {
               onOpenPost={id => handleNavigate('feed', undefined, id)}
               onOpenLive={() => handleNavigate('live')}
               onOpenPath={path => {
+                // Live notification: open the player for THAT live straight away (Live Ended if it's over).
+                const live = path.match(/^\/live\/([^/?#]+)/);
+                if (live) {
+                  const liveId = decodeURIComponent(live[1]);
+                  invalidateApiReadCache(`live:current:${liveId}`);
+                  void api.getCurrentLive(liveId).then(result => setActiveViewerStream(result.live || { id: liveId, hostId: liveId, hostName: '', hostAvatar: '', hostEmail: '', title: '', viewersCount: 0, reactionsCount: 0, startedAt: 0, isActive: false, comments: [], liveKitRoom: 'ended' })).catch(() => {});
+                  return;
+                }
                 if (path.startsWith('/marketplace/')) { navigateMarket(path); return; }
                 const post = path.match(/^\/post\/([^/?#]+)/);
                 if (post) { handleNavigate('feed', undefined, decodeURIComponent(post[1])); return; }

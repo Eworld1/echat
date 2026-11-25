@@ -154,11 +154,11 @@ export const Feed: React.FC<FeedProps> = ({
         </div>
       )}
 
+      {/* LIVE NOW at the very top: everyone who is live right now (realtime, no refresh) */}
+      {onWatchLive && <LiveFeedBanner onWatch={onWatchLive} onSeeAll={() => onOpenSection?.('live')} />}
+
       {/* Welcome, today's date, Go Live and my stats */}
       <DashboardHeader onGoLive={onOpenGoLive} onOpen={target => (target === 'profile' && user ? onViewProfile(user.id) : onOpenSection?.(target))} />
-
-      {/* LIVE NOW: everyone who is live right now (realtime) */}
-      {onWatchLive && <LiveFeedBanner onWatch={onWatchLive} onSeeAll={() => onOpenSection?.('live')} />}
 
       {/* 24-Hour Stories (circles) */}
       <div className="ec-card bg-white px-3 pt-3 dark:bg-[#161033]">

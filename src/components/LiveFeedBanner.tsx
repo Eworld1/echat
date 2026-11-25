@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Radio, Users } from 'lucide-react';
+import { Eye, Radio } from 'lucide-react';
 import type { LiveStream } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import { avatarSrc } from './UserAvatar';
@@ -12,11 +12,9 @@ interface LiveFeedBannerProps {
   onSeeAll?: () => void;
 }
 
-const MAX_BANNERS = 3;
-
 /**
- * "LIVE NOW" banners on the feed, one per host who is live right now. Realtime (shared lives
- * listener), so a live appears within seconds of the host starting and disappears the moment they end.
+ * LIVE NOW row at the very top of the feed: one horizontally scrolling card per host who is live
+ * right now (realtime). Appears within seconds of a host going live, disappears the moment they end.
  */
 export const LiveFeedBanner: React.FC<LiveFeedBannerProps> = ({ onWatch, onSeeAll }) => {
   const { user } = useAuth();
@@ -37,46 +35,39 @@ export const LiveFeedBanner: React.FC<LiveFeedBannerProps> = ({ onWatch, onSeeAl
   if (!visible.length) return null;
 
   return (
-    <section aria-label="Live now" className="space-y-2">
-      {visible.slice(0, MAX_BANNERS).map(stream => {
-        const profile = profiles[stream.hostId];
-        const name = profile?.name || stream.hostName;
-        const avatar = avatarSrc(profile?.avatar || stream.hostAvatar, name);
-        const verified = profile?.isVerified ?? stream.isHostVerified;
-        const mine = stream.hostId === user?.id;
-        return (
-          <div key={stream.hostId} className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-rose-600 via-red-600 to-amber-600 p-0.5 shadow-lg shadow-rose-600/20">
-            <div className="flex items-center justify-between gap-3 rounded-[14px] bg-slate-900/90 p-3 text-white sm:p-3.5">
-              <button type="button" onClick={() => onWatch(stream)} className="flex min-w-0 items-center gap-3 text-left">
-                <span className="relative shrink-0">
-                  <img src={avatar} alt="" className="h-11 w-11 rounded-full object-cover ring-2 ring-rose-500" />
-                  <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
-                    <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-rose-500 ring-2 ring-slate-900" />
-                  </span>
-                </span>
-                <span className="min-w-0">
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="flex items-center gap-1 rounded-full bg-rose-600 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider"><Radio size={10} />Live now</span>
-                    <span className="truncate text-sm font-bold">{mine ? 'You' : name}</span>
-                    {verified && <VerifiedBadge size={14} />}
-                  </span>
-                  <span className="mt-0.5 block truncate text-xs text-slate-300">{stream.title || `${name} is live`}</span>
-                  <span className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-rose-300"><Users size={11} />{stream.viewersCount || 0} watching</span>
-                </span>
-              </button>
-              <button type="button" onClick={() => onWatch(stream)} className="flex shrink-0 items-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-3.5 py-2 text-xs font-extrabold text-white shadow-md transition hover:from-rose-500 hover:to-red-500 sm:text-sm">
-                <Play size={14} fill="white" />Watch
-              </button>
-            </div>
-          </div>
-        );
-      })}
-      {visible.length > MAX_BANNERS && onSeeAll && (
-        <button type="button" onClick={onSeeAll} className="w-full rounded-xl bg-rose-50 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100">
-          See all {visible.length} live videos
-        </button>
-      )}
+    <section aria-label="Live now" className="ec-card bg-white p-3 dark:bg-[#161033]">
+      <div className="mb-2 flex items-center justify-between px-1">
+        <h2 className="flex items-center gap-2 text-sm font-extrabold text-slate-900 dark:text-white">
+          <span className="relative flex h-2.5 w-2.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" /></span>
+          LIVE NOW
+        </h2>
+        {onSeeAll && <button type="button" onClick={onSeeAll} className="text-xs font-bold text-rose-600 hover:underline dark:text-rose-300">See all</button>}
+      </div>
+      <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
+        {visible.map(stream => {
+          const profile = profiles[stream.hostId];
+          const name = profile?.name || stream.hostName || 'Live';
+          const avatar = avatarSrc(profile?.avatar || stream.hostAvatar, name);
+          const verified = profile?.isVerified ?? stream.isHostVerified;
+          const mine = stream.hostId === user?.id;
+          return (
+            <button key={stream.hostId} type="button" onClick={() => onWatch(stream)} aria-label={`Watch ${name} live`}
+              className="group relative flex aspect-[3/4] w-36 shrink-0 snap-start flex-col justify-between overflow-hidden rounded-2xl bg-slate-900 p-2.5 text-left text-white shadow-md sm:w-40">
+              <span aria-hidden="true" className="absolute inset-0 bg-cover bg-center opacity-50 transition group-hover:scale-105" style={{ backgroundImage: `url("${avatar}")` }} />
+              <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-black/40" />
+              <span className="relative flex items-center justify-between">
+                <span className="flex items-center gap-1 rounded-md bg-rose-600 px-1.5 py-0.5 text-[10px] font-black uppercase"><Radio size={10} />Live</span>
+                <span className="flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold"><Eye size={11} />{stream.viewersCount || 0}</span>
+              </span>
+              <span className="relative">
+                <img src={avatar} alt="" className="mb-1.5 h-9 w-9 rounded-full border-2 border-rose-500 object-cover" />
+                <span className="flex items-center gap-1 text-xs font-extrabold"><span className="truncate">{mine ? 'You' : name}</span>{verified && <VerifiedBadge size={12} />}</span>
+                <span className="mt-0.5 line-clamp-2 text-[11px] leading-tight text-slate-200">{stream.title || `${name} is live`}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </section>
   );
 };

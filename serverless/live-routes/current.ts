@@ -20,7 +20,9 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       .filter(item => !isHeartbeatStale(item.data))
       .sort((a, b) => Number(b.data.startedAt || 0) - Number(a.data.startedAt || 0));
     const match = id ? onAir.find(item => item.hostId === id || item.data.streamId === id) : onAir[0];
-    return sendJson(res, 200, { live: match ? hostLiveToStream(match.hostId, match.data) : null });
+    // ?all=1: every live on air (server-confirmed list the app merges with its realtime listener).
+    const all = req.query?.all ? onAir.map(item => hostLiveToStream(item.hostId, item.data)) : undefined;
+    return sendJson(res, 200, { live: match ? hostLiveToStream(match.hostId, match.data) : null, ...(all ? { lives: all } : {}) });
   } catch (error) {
     return handleError(res, error, 'current');
   }

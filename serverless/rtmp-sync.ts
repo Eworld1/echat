@@ -150,10 +150,16 @@ export async function syncRtmpLives(uid?: string): Promise<RtmpState[]> {
     if (!state.publishing && held.has(state.uid)) await hostLiveRef(state.uid).update({ holdUntilOffAir: false });
     if (state.publishing) await startSoftwareLive(state.ingressId, state.roomName, `${RTMP_IDENTITY_PREFIX}${state.uid}`);
   }
-  // OBS stopped (or its ingress was deleted by Reset Key): end the live.
+  // OBS stopped (or its ingress was deleted by Reset Key): end the live — but only after asking LiveKit
+  // again for that one room, so a partial project-wide listing can never end a live by mistake.
   for (const doc of active) {
     const room = String(doc.data().liveKitRoom || '');
-    if (!byRoom.get(room)?.publishing && activeRooms.has(room)) await endBroadcast(doc.id, '', 'software-stopped');
+    if (byRoom.get(room)?.publishing || !activeRooms.has(room)) continue;
+    if (!uid) {
+      const recheck = await client.listIngress({ roomName: room }).catch(() => null);
+      if (!recheck || recheck.some(ingress => ON_AIR.has(Number(ingress.state?.status ?? 0)))) continue;
+    }
+    await endBroadcast(doc.id, '', 'software-stopped');
   }
   return [...byRoom.values()];
 }

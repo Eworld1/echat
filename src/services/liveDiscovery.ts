@@ -19,6 +19,7 @@ import {
 } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
 import { db } from './firebase';
+import { apiUrl } from './apiBase';
 import type { LiveComment, LiveStream } from '../types';
 
 export const LIVE_CATEGORIES = ['Just Chatting', 'Music', 'Gaming', 'News', 'Sports', 'Church', 'Education', 'Market / Selling'] as const;
@@ -93,16 +94,26 @@ export function isLiveFresh(stream: Pick<LiveStream, 'id' | 'hostId' | 'source'>
 type LivesListener = { onStreams: (streams: LiveStream[]) => void; onError: (error: Error) => void };
 const livesListeners = new Set<LivesListener>();
 let rawLives: RawLive[] = [];
+/** Lives the server confirmed on air (its Admin read never depends on this device's Firestore rules). */
+let serverLives: RawLive[] = [];
+/** Stream ids seen ending here: a slightly older server list can never bring them back. */
+const endedStreamIds = new Set<string>();
 let visibleLives: LiveStream[] | null = null;
 let livesError: Error | null = null;
 let stopLivesSource: (() => void) | null = null;
 let livesTicker: number | null = null;
+let serverPoll: number | null = null;
 
 function publishLives() {
   const now = Date.now();
-  const next = rawLives
-    .filter(stream => stream.id && stream.status === 'live' && isLiveFresh(stream, now))
-    .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  const perHost = new Map<string, RawLive>();
+  // Realtime documents first; the server list fills in anything this device could not read.
+  for (const stream of [...rawLives, ...serverLives]) {
+    if (!stream.id || stream.status !== 'live' || endedStreamIds.has(stream.id) || !isLiveFresh(stream, now)) continue;
+    const existing = perHost.get(stream.hostId);
+    if (!existing || (existing.startedAt || 0) < (stream.startedAt || 0)) perHost.set(stream.hostId, existing && existing.id === stream.id ? { ...stream, ...existing } : stream);
+  }
+  const next = [...perHost.values()].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
   const changed = !visibleLives || next.length !== visibleLives.length || next.some((item, index) => {
     const before = visibleLives![index];
     return item.id !== before.id || item.viewersCount !== before.viewersCount || item.title !== before.title || item.hostName !== before.hostName || item.hostAvatar !== before.hostAvatar;
@@ -113,8 +124,28 @@ function publishLives() {
   livesListeners.forEach(listener => listener.onStreams(next));
 }
 
+function rememberEnded(previous: RawLive[], current: RawLive[]) {
+  const stillLive = new Set(current.filter(item => item.status === 'live').map(item => item.id));
+  for (const item of previous) if (!stillLive.has(item.id)) endedStreamIds.add(item.id);
+  for (const item of current) if (item.status !== 'live') endedStreamIds.add(item.id);
+}
+
+async function pollServerLives() {
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+  try {
+    const res = await fetch(apiUrl('/api/live/current?all=1'), { cache: 'no-store' });
+    if (!res.ok) return;
+    const body = await res.json() as { lives?: Array<LiveStream & { updatedAt?: number }> };
+    if (!Array.isArray(body.lives)) return;
+    serverLives = body.lives.map(item => ({ ...item, updatedAt: Number(item.updatedAt || 0), status: 'live' as const }));
+    publishLives();
+  } catch { /* offline: realtime listener still works */ }
+}
+
 function startLivesSource() {
   const fail = (error: Error) => {
+    // The server list keeps lives visible; only report an error when there is nothing to show.
+    if (visibleLives?.length) return;
     livesError = error;
     livesListeners.forEach(listener => listener.onError(error));
   };
@@ -126,12 +157,16 @@ function startLivesSource() {
         const existing = newestPerHost.get(stream.hostId);
         if (!existing || (stream.startedAt || 0) > (existing.startedAt || 0)) newestPerHost.set(stream.hostId, stream);
       }
-      rawLives = [...newestPerHost.values()];
+      const next = [...newestPerHost.values()];
+      rememberEnded(rawLives, next);
+      rawLives = next;
       publishLives();
     }, fail);
   };
   stopLivesSource = onSnapshot(query(hostLivesRef, where('status', '==', 'live')), snapshot => {
-    rawLives = snapshot.docs.map(item => hostLiveToStream(item.id, item.data()));
+    const next = snapshot.docs.map(item => hostLiveToStream(item.id, item.data()));
+    rememberEnded(rawLives, next);
+    rawLives = next;
     publishLives();
   }, error => {
     // lives/{hostId} rule not published yet: same behaviour from the per-stream documents.
@@ -140,7 +175,13 @@ function startLivesSource() {
   });
   // Re-check heartbeats so a host who went silent drops off within ~30 s without any new snapshot.
   livesTicker = window.setInterval(publishLives, 5000);
+  // Server-confirmed list every 10 s (and when the app comes back to the foreground).
+  void pollServerLives();
+  serverPoll = window.setInterval(() => { void pollServerLives(); }, 10_000);
+  document.addEventListener('visibilitychange', onLivesVisible);
 }
+
+function onLivesVisible() { if (document.visibilityState === 'visible') void pollServerLives(); }
 
 /** Realtime list of lives that are on air now (newest first). Shared by every caller. */
 export function listenLiveStreams(onStreams: (streams: LiveStream[]) => void, onError: (error: Error) => void): Unsubscribe {
@@ -156,8 +197,12 @@ export function listenLiveStreams(onStreams: (streams: LiveStream[]) => void, on
     stopLivesSource = null;
     if (livesTicker) window.clearInterval(livesTicker);
     livesTicker = null;
+    if (serverPoll) window.clearInterval(serverPoll);
+    serverPoll = null;
+    document.removeEventListener('visibilitychange', onLivesVisible);
     visibleLives = null;
     rawLives = [];
+    serverLives = [];
   };
 }
 

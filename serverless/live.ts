@@ -121,6 +121,11 @@ export async function publishHostLive(live: Record<string, any>): Promise<void> 
     location: live.location || '',
     source: live.source || 'camera',
     liveKitRoom: live.liveKitRoom || '',
+    roomName: live.liveKitRoom || '',
+    ingressId: live.ingressId || null,
+    // Viewers play the LiveKit room (WebRTC) through /api/live/watch?hostId=…; this is the server to connect to.
+    playbackUrl: liveKitUrl || '',
+    isLive: true,
     startedAt: live.startedAt || now,
     updatedAt: now,
     viewerCount: 0,
@@ -137,7 +142,7 @@ export async function endHostLive(hostId: string, streamId: string | null, reaso
   const snapshot = await ref.get();
   const data = snapshot.data();
   if (!snapshot.exists || data?.status !== 'live' || (streamId && data.streamId !== streamId)) return;
-  await ref.update({ status: 'ended', endedAt: Date.now(), endedReason: reason });
+  await ref.update({ status: 'ended', isLive: false, endedAt: Date.now(), endedReason: reason });
 }
 
 /** Recount unique viewers (presence docs) and store the result on the live document. */
@@ -213,7 +218,7 @@ export async function sweepStaleLives(): Promise<number> {
   for (const item of pointers.docs) {
     const data = item.data();
     if (!isHeartbeatStale(data, LIVE_HEARTBEAT_EXPIRE_MS)) continue;
-    await item.ref.update({ status: 'ended', endedAt: Date.now(), endedReason: 'heartbeat-timeout' });
+    await item.ref.update({ status: 'ended', isLive: false, endedAt: Date.now(), endedReason: 'heartbeat-timeout' });
     ended++;
   }
   if (ended) console.info('[Vercel Live API] Ended stale lives', { ended });
