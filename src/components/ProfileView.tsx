@@ -13,6 +13,8 @@ import { LiveUserActions } from './LiveUserActions';
 import { ConnectionsModal, type ConnectionsTab } from './ConnectionsModal';
 import { listenFollowerCount } from '../services/liveDiscovery';
 import { VerifiedBadge } from './VerifiedBadge';
+import { useProfilePhotoUpload } from './ProfilePhotoEditor';
+import { isGeneratedImage } from '../utils/avatar';
 import {
   Camera,
   MapPin,
@@ -78,8 +80,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [editEducation, setEditEducation] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
   const [editCover, setEditCover] = useState('');
-  const [uploading, setUploading] = useState<'avatar' | 'cover' | null>(null);
-  const [uploadError, setUploadError] = useState('');
+  // Choose -> crop -> upload -> saved on the profile right away (shown everywhere instantly).
+  const photoUpload = useProfilePhotoUpload((kind, url) => { if (kind === 'avatar') setEditAvatar(url); else setEditCover(url); });
   const [profileNotice, setProfileNotice] = useState('');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [selectedReel, setSelectedReel] = useState<Post | null>(null);
@@ -216,38 +218,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, kind: 'avatar' | 'cover') => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setUploadError('Please choose an image file (JPG, PNG, WebP or GIF).');
-      return;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      setUploadError('Image is too large. Maximum size is 8 MB.');
-      return;
-    }
-    setUploadError('');
-    setUploading(kind);
-    const previewUrl = URL.createObjectURL(file);
-    const previousImage = kind === 'avatar' ? editAvatar : editCover;
-    if (kind === 'avatar') setEditAvatar(previewUrl);
-    else setEditCover(previewUrl);
-    try {
-      const url = await api.uploadFile(file);
-      if (kind === 'avatar') setEditAvatar(url);
-      else setEditCover(url);
-    } catch (err) {
-      if (kind === 'avatar') setEditAvatar(previousImage);
-      else setEditCover(previousImage);
-      setUploadError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      URL.revokeObjectURL(previewUrl);
-      setUploading(null);
-    }
-  };
-
   if (isLoading || !profileData) {
     return (
       <div className="max-w-4xl mx-auto py-12 text-center text-slate-400">
@@ -288,11 +258,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           />}
           {isOwnProfile && (
             <button
-              onClick={() => setIsEditModalOpen(true)}
-              className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-xs hover:bg-white text-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 transition"
+              type="button"
+              onClick={() => photoUpload.choose('cover')}
+              disabled={photoUpload.uploading !== null}
+              className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-xs hover:bg-white text-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 transition disabled:opacity-70"
             >
-              <Camera size={15} />
-              Edit Cover
+              {photoUpload.uploading === 'cover' ? <span className="h-[15px] w-[15px] animate-spin rounded-full border-2 border-slate-400 border-t-slate-800" /> : <Camera size={15} />}
+              {photoUpload.uploading === 'cover' ? 'Uploading…' : 'Edit Cover Photo'}
             </button>
           )}
         </div>
@@ -320,11 +292,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 )}
                 {isOwnProfile && (
                   <button
-                    onClick={() => setIsEditModalOpen(true)}
+                    type="button"
+                    onClick={() => photoUpload.choose('avatar')}
+                    disabled={photoUpload.uploading !== null}
                     className="absolute bottom-1 right-1 p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full border border-white shadow transition"
-                    title="Change Avatar"
+                    title="Change profile picture"
+                    aria-label="Change profile picture"
                   >
-                    <Camera size={16} />
+                    {photoUpload.uploading === 'avatar' ? <span className="block h-4 w-4 animate-spin rounded-full border-2 border-slate-400 border-t-slate-800" /> : <Camera size={16} />}
                   </button>
                 )}
               </div>
@@ -679,6 +654,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
       {selectedReel && <ReelsViewer posts={reels} initialPostId={selectedReel.id} onClose={() => setSelectedReel(null)} onPostUpdated={() => { void loadProfile(); }} onPostDeleted={() => { setSelectedReel(null); void loadProfile(); }} onViewProfile={onViewProfile} />}
 
+      {isOwnProfile && photoUpload.elements}
+      {isOwnProfile && photoUpload.error && !isEditModalOpen && <div role="alert" className="fixed inset-x-4 bottom-24 z-50 mx-auto max-w-md rounded-xl bg-[#b91c1c] px-4 py-3 text-sm font-semibold text-[#ffffff] shadow-lg">{photoUpload.error}</div>}
+
       {/* Edit Profile (Facebook-style: pictures with Upload buttons, no image links shown) */}
       {isEditModalOpen && (
         <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-[#000000]/60 sm:items-center sm:p-6" onClick={() => setIsEditModalOpen(false)} role="presentation">
@@ -693,44 +671,43 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
                 {/* Profile picture */}
                 <section>
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="mb-3 flex items-center justify-between gap-2">
                     <h4 className="text-[16px] font-extrabold">Profile picture</h4>
-                    <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#1f4d1f] hover:bg-[#f6efd9] ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
-                      Upload photo
-                      <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'avatar')} />
-                    </label>
+                    <div className="flex items-center gap-1">
+                      {!isGeneratedImage(editAvatar) && <button type="button" disabled={photoUpload.uploading !== null} onClick={() => void photoUpload.remove('avatar')} className="rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#b91c1c] hover:bg-[#fdecec] disabled:opacity-60">Remove</button>}
+                      <button type="button" disabled={photoUpload.uploading !== null} onClick={() => photoUpload.choose('avatar')} className="rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#1f4d1f] hover:bg-[#f6efd9] disabled:opacity-60">Upload photo</button>
+                    </div>
                   </div>
                   <div className="flex justify-center">
-                    <label className={`group relative block h-40 w-40 cursor-pointer rounded-full ${uploading ? 'pointer-events-none' : ''}`} aria-label="Upload profile picture">
+                    <button type="button" disabled={photoUpload.uploading !== null} onClick={() => photoUpload.choose('avatar')} className="group relative block h-40 w-40 rounded-full" aria-label="Upload profile picture">
                       <span className="absolute inset-0 grid place-items-center rounded-full bg-gradient-to-br from-[#f3dc9b] to-[#b68428] text-5xl font-extrabold text-[#1f3d1a]">{(editName || user.name || '?').trim().charAt(0).toUpperCase()}</span>
                       {editAvatar && <img key={editAvatar} src={editAvatar} alt="Profile picture" onError={event => { event.currentTarget.style.display = 'none'; }} className="absolute inset-0 h-full w-full rounded-full object-cover" />}
                       <span className="absolute inset-0 rounded-full ring-4 ring-[#ffffff] shadow-[0_0_0_2px_#e2c06e]" />
-                      {uploading === 'avatar'
+                      {photoUpload.uploading === 'avatar'
                         ? <span className="absolute inset-0 grid place-items-center rounded-full bg-[#000000]/45 text-[#ffffff]"><span className="h-9 w-9 animate-spin rounded-full border-4 border-[#ffffff]/40 border-t-[#ffffff]" /></span>
                         : <span className="absolute bottom-1 right-1 grid h-10 w-10 place-items-center rounded-full border-2 border-[#ffffff] bg-[#eef0f2] text-[#111111] shadow transition group-hover:bg-[#e2e5e9]"><Camera size={19} /></span>}
-                      <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'avatar')} />
-                    </label>
+                    </button>
                   </div>
                 </section>
 
                 {/* Cover photo */}
                 <section>
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="mb-3 flex items-center justify-between gap-2">
                     <h4 className="text-[16px] font-extrabold">Cover photo</h4>
-                    <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#1f4d1f] hover:bg-[#f6efd9] ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
-                      Upload cover
-                      <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'cover')} />
-                    </label>
+                    <div className="flex items-center gap-1">
+                      {!isGeneratedImage(editCover) && <button type="button" disabled={photoUpload.uploading !== null} onClick={() => void photoUpload.remove('cover')} className="rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#b91c1c] hover:bg-[#fdecec] disabled:opacity-60">Remove</button>}
+                      <button type="button" disabled={photoUpload.uploading !== null} onClick={() => photoUpload.choose('cover')} className="rounded-lg px-3 py-1.5 text-[14px] font-bold text-[#1f4d1f] hover:bg-[#f6efd9] disabled:opacity-60">Upload cover</button>
+                    </div>
                   </div>
-                  <label className={`group relative block aspect-[16/6] w-full cursor-pointer overflow-hidden rounded-2xl border border-[#e5e7eb] ${uploading ? 'pointer-events-none' : ''}`} aria-label="Upload cover photo">
+                  <button type="button" disabled={photoUpload.uploading !== null} onClick={() => photoUpload.choose('cover')} className="group relative block aspect-[16/9] w-full overflow-hidden rounded-2xl border border-[#e5e7eb]" aria-label="Upload cover photo">
                     <span className="absolute inset-0 bg-gradient-to-br from-[#f6e7bd] via-[#e9d29a] to-[#cfa24a]" />
                     {editCover && <img key={editCover} src={editCover} alt="Cover photo" onError={event => { event.currentTarget.style.display = 'none'; }} className="absolute inset-0 h-full w-full object-cover" />}
-                    {uploading === 'cover'
+                    {photoUpload.uploading === 'cover'
                       ? <span className="absolute inset-0 grid place-items-center bg-[#000000]/40"><span className="h-9 w-9 animate-spin rounded-full border-4 border-[#ffffff]/40 border-t-[#ffffff]" /></span>
-                      : <span className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-lg bg-[#ffffff]/95 px-3 py-1.5 text-[13px] font-bold text-[#111111] shadow transition group-hover:bg-[#ffffff]"><Camera size={16} />Change cover</span>}
-                    <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading !== null} onChange={e => handleImageUpload(e, 'cover')} />
-                  </label>
-                  {uploadError && <p role="alert" className="mt-2 text-[13px] font-semibold text-[#b91c1c]">{uploadError}</p>}
+                      : <span className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-lg bg-[#ffffff]/95 px-3 py-1.5 text-[13px] font-bold text-[#111111] shadow transition group-hover:bg-[#ffffff]"><Camera size={16} />Edit Cover Photo</span>}
+                  </button>
+                  {photoUpload.error && <p role="alert" className="mt-2 text-[13px] font-semibold text-[#b91c1c]">{photoUpload.error}</p>}
+                  {!photoUpload.error && photoUpload.notice && <p className="mt-2 text-[13px] font-semibold text-[#047857]">✓ {photoUpload.notice}</p>}
                 </section>
 
                 {/* Name + bio */}
@@ -778,9 +755,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
               <div className="flex gap-2 border-t border-[#eceef1] px-5 pb-[calc(env(safe-area-inset-bottom)+14px)] pt-3">
                 <button type="button" onClick={() => setIsEditModalOpen(false)} className="h-12 flex-1 rounded-xl border border-[#d4d7db] bg-[#ffffff] text-[15px] font-bold text-[#374151] hover:bg-[#f1f2f4] sm:flex-none sm:px-6">Cancel</button>
-                <button type="submit" disabled={isSavingProfile || Boolean(uploading)}
+                <button type="submit" disabled={isSavingProfile || photoUpload.uploading !== null}
                   className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-xl border border-[#b8862b] bg-gradient-to-b from-[#f3dc9b] via-[#d9b25a] to-[#b68428] text-[16px] font-extrabold text-[#1f3d1a] shadow-[0_6px_16px_rgba(166,120,30,0.30),inset_0_1px_0_rgba(255,255,255,0.6)] hover:brightness-105 disabled:cursor-wait disabled:opacity-70 sm:ml-auto sm:flex-none sm:px-8">
-                  {uploading ? 'Uploading…' : isSavingProfile ? 'Saving…' : 'Save'}
+                  {photoUpload.uploading ? 'Uploading…' : isSavingProfile ? 'Saving…' : 'Save'}
                 </button>
               </div>
             </form>

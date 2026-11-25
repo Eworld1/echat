@@ -7,6 +7,7 @@ import { setChatSoundVolume } from '../utils/sounds';
 import { listenBlockIds, unblockLiveUser } from '../services/liveDiscovery';
 import { LowDataSettingsCard } from '../components/LowData';
 import { PushNotificationsCard } from '../components/PushNotifications';
+import { ProfilePhotoEditor } from '../components/ProfilePhotoEditor';
 import {
   Settings as SettingsIcon,
   Shield,
@@ -68,8 +69,6 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
   const [location, setLocation] = useState(user?.location || '');
   const [work, setWork] = useState(user?.work || '');
   const [education, setEducation] = useState(user?.education || '');
-  const [avatar, setAvatar] = useState(user?.avatar || '');
-  const [coverPhoto, setCoverPhoto] = useState(user?.coverPhoto || '');
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [profileSuccessMsg, setProfileSuccessMsg] = useState('');
 
@@ -89,14 +88,6 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
       const savedWifiOnly = localStorage.getItem('reels_wifi_only');
       setReelsAutoplayEnabled(savedAutoplay !== null ? savedAutoplay === 'true' : user.reelsAutoplay !== false);
       setReelsWifiOnly(savedWifiOnly !== null ? savedWifiOnly === 'true' : Boolean(user.reelsWifiOnly));
-      setName(user.name || '');
-      setEmail(user.email || '');
-      setBio(user.bio || '');
-      setLocation(user.location || '');
-      setWork(user.work || '');
-      setEducation(user.education || '');
-      setAvatar(user.avatar || '');
-      setCoverPhoto(user.coverPhoto || '');
       setBlockedUsers(user.blockedUsers || []);
 
       // Load custom privacy settings if saved
@@ -107,6 +98,18 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
       }
     }
   }, [user]);
+
+  // Fill the text fields once per account, so saving a new photo never wipes what the person is typing.
+  useEffect(() => {
+    if (!user) return;
+    setName(user.name || '');
+    setEmail(user.email || '');
+    setBio(user.bio || '');
+    setLocation(user.location || '');
+    setWork(user.work || '');
+    setEducation(user.education || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) { setLiveBlockedUsers([]); return; }
@@ -208,9 +211,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
         bio: bio.trim(),
         location: location.trim(),
         work: work.trim(),
-        education: education.trim(),
-        avatar: avatar.trim(),
-        coverPhoto: coverPhoto.trim()
+        education: education.trim()
       });
       updateUser(updated);
       setProfileSuccessMsg('Profile updated successfully!');
@@ -634,8 +635,12 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
               Edit Profile Information
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Update your personal bio, avatars, credentials, and password
+              Update your profile picture, cover photo, bio and password
             </p>
+          </div>
+
+          <div className="max-w-xl">
+            <ProfilePhotoEditor />
           </div>
 
           <form onSubmit={handleSaveProfile} className="space-y-4 max-w-xl">
@@ -706,43 +711,6 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateHome }) => {
                   className="w-full text-sm p-3 bg-slate-50 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-            </div>
-
-            {/* Profile Avatar URL */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Profile Avatar URL
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={avatar}
-                  onChange={(e) => setAvatar(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full text-xs p-3 bg-slate-50 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setAvatar(`https://api.dicebear.com/7.x/avataaars/svg?seed=${Date.now()}`)}
-                  className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 shrink-0 cursor-pointer"
-                >
-                  Randomize
-                </button>
-              </div>
-            </div>
-
-            {/* Cover Photo URL */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Cover Photo URL
-              </label>
-              <input
-                type="url"
-                value={coverPhoto}
-                onChange={(e) => setCoverPhoto(e.target.value)}
-                placeholder="https://images.unsplash.com/..."
-                className="w-full text-xs p-3 bg-slate-50 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
             </div>
 
             <div className="pt-2 flex items-center gap-3">
