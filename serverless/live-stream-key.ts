@@ -1,6 +1,6 @@
 import { IngressClient, IngressInput } from 'livekit-server-sdk';
 import type { DocumentData } from 'firebase-admin/firestore';
-import { firestore, requireLiveKit } from './live.js';
+import { firestore, hostLiveRef, requireLiveKit } from './live.js';
 
 export { describeLiveKitError } from './live.js';
 
@@ -109,6 +109,7 @@ export async function resetLiveStreamIngress(uid: string): Promise<LiveStreamIng
       }
     }
     await saveIngress(uid, ingress.ingressId, ingress.url, ingress.streamKey);
+    await hostLiveRef(uid).set({ holdUntilOffAir: false }, { merge: true }).catch(() => {});
   } catch (error) {
     await ingressClient.deleteIngress(ingress.ingressId).catch(cleanupError => {
       console.error('[Live RTMP] Could not remove an incomplete key reset ingress.', cleanupError);

@@ -53,6 +53,13 @@ export const LiveViewerModal: React.FC<LiveViewerModalProps> = ({ session, strea
     return listenHostLive(currentStream.hostId, currentStream.id, setHostLive);
   }, [currentStream?.hostId, currentStream?.id, currentStream?.liveKitRoom]);
   // LiveKit lives wait for the host document, so nothing ever joins an old stream id from a card.
+  // Streaming-app live: ask the server to re-check OBS with LiveKit, so "Live Ended" shows soon after it stops.
+  const isSoftwareLive = (hostLive.stream?.source || currentStream?.source) === 'rtmp';
+  useEffect(() => {
+    if (!isSoftwareLive) return;
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void api.syncLives(); }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [isSoftwareLive]);
   const streamId = currentStream?.liveKitRoom ? (hostLive.loaded ? hostLive.stream?.id || currentStream.id : '') : currentStream?.id || '';
   const hostProfile = useLiveProfile(currentStream?.hostId);
   const liveData = liveDataState ? withLive({ ...liveDataState, ...(hostLive.stream ? { title: hostLive.stream.title || liveDataState.title, category: hostLive.stream.category || liveDataState.category, id: hostLive.stream.id } : {}) }, hostProfile ? { id: hostProfile.id, name: hostProfile.name, avatar: hostProfile.avatar, isVerified: hostProfile.isVerified } : undefined) : null;

@@ -7,6 +7,7 @@ import heartbeat from '../../serverless/live-routes/heartbeat.js';
 import publish from '../../serverless/live-routes/publish.js';
 import react from '../../serverless/live-routes/react.js';
 import rtmpDetails from '../../serverless/live-routes/rtmp-details.js';
+import rtmpStatus from '../../serverless/live-routes/rtmp-status.js';
 import start from '../../serverless/live-routes/start.js';
 import status from '../../serverless/live-routes/status.js';
 import { viewerPresence } from '../../serverless/live-routes/viewer.js';
@@ -41,6 +42,7 @@ const handlers: Record<string, (req: ApiRequest, res: ApiResponse) => Promise<vo
   publish,
   react,
   'rtmp-details': rtmpDetails,
+  'rtmp-status': rtmpStatus,
   start,
   status,
   'viewer/join': viewerPresence('join'),

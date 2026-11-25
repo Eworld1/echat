@@ -1,5 +1,6 @@
 import type { ApiRequest, ApiResponse } from '../live.js';
-import { firestore, handleError, hostLiveToStream, isHeartbeatStale, sendJson, sweepStaleLives } from '../live.js';
+import { firestore, handleError, hostLiveToStream, isHeartbeatStale, liveConfigStatus, sendJson, sweepStaleLives } from '../live.js';
+import { syncAllRtmpLivesThrottled } from '../rtmp-sync.js';
 
 /**
  * GET /api/live/current[?id=<hostId or streamId>]
@@ -10,6 +11,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed', code: 'method-not-allowed' });
   try {
     await sweepStaleLives().catch(error => console.warn('[Vercel Live API] stale sweep failed', error instanceof Error ? error.message : error));
+    // Streaming software lives: confirm with LiveKit which ingresses are on air (works without the webhook).
+    if (liveConfigStatus().ready) await syncAllRtmpLivesThrottled().catch(error => console.warn('[Vercel Live API] RTMP sync failed', error instanceof Error ? error.message : error));
     const id = String(req.query?.id || '').trim();
     const result = await firestore.collection('lives').where('status', '==', 'live').get();
     const onAir = result.docs

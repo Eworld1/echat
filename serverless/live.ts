@@ -125,7 +125,8 @@ export async function publishHostLive(live: Record<string, any>): Promise<void> 
     updatedAt: now,
     viewerCount: 0,
     endedAt: null,
-    endedReason: null
+    endedReason: null,
+    holdUntilOffAir: false
   });
 }
 

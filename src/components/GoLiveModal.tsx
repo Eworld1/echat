@@ -10,6 +10,8 @@ import { collection, query, where } from 'firebase/firestore';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { VerifiedBadge } from './VerifiedBadge';
+import { SoftwareLivePreview } from './SoftwareLivePreview';
+import { avatarSrc } from './UserAvatar';
 import {
   Video,
   VideoOff,
@@ -114,6 +116,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
   const [rtmpDetailsNotice, setRtmpDetailsNotice] = useState('');
   const [rtmpDetailsSaving, setRtmpDetailsSaving] = useState(false);
   const [softwareLive, setSoftwareLive] = useState<LiveStream | null>(null);
+  const [rtmpPoll, setRtmpPoll] = useState<{ publishing: boolean; ingressStatus: number; held: boolean } | null>(null);
+  const [softwareNow, setSoftwareNow] = useState(() => Date.now());
   const lastReactionCountRef = useRef<number | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
@@ -263,6 +267,8 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     return () => window.clearTimeout(timeout);
   }, [isOpen, authLoading]);
 
+  // Whole days only: the exact age changes every millisecond, which re-ran this effect on every render (render loop).
+  const accountAgeWholeDays = Math.floor(goLiveEligibility.ageDaysExact || 0);
   useEffect(() => {
     if (!isOpen) return;
     setAccessLoading(true);
@@ -285,7 +291,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     setAccessInfo(info);
     setAccessLoading(false);
     console.info('[Go Live] Local eligibility check', { uid: firebaseUser?.uid || user?.id, role: user?.role || 'user', accountAgeDays: info.accountAgeDays, canGoLive: info.canGoLive });
-  }, [isOpen, user?.id, user?.role, user?.isAdmin, user?.isBlocked, user?.createdAt, authLoading, developerIdentity, signedIn, goLiveEligibility.ageDaysExact, goLiveEligibility.daysLeft, goLiveEligibility.developer, goLiveEligibility.canGoLive]);
+  }, [isOpen, user?.id, user?.role, user?.isAdmin, user?.isBlocked, user?.createdAt, authLoading, developerIdentity, signedIn, accountAgeWholeDays, goLiveEligibility.daysLeft, goLiveEligibility.developer, goLiveEligibility.canGoLive]);
 
   const sendAccessRequest = async () => {
     setAccessBusy(true); setAccessError('');
@@ -770,6 +776,27 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
     }, () => setSoftwareLive(null));
   }, [isOpen, studioMode, firebaseUser?.uid]);
 
+  // Like Facebook / YouTube Live: OBS starting IS going live. Every 3 s ask the server, which asks
+  // LiveKit whether this user's ingress is receiving the stream, and starts / ends the live to match.
+  useEffect(() => {
+    if (!isOpen || studioMode !== 'software' || !signedIn) { setRtmpPoll(null); return; }
+    let active = true;
+    const check = () => api.getRtmpStatus().then(result => {
+      if (!active) return;
+      setRtmpPoll({ publishing: result.publishing, ingressStatus: result.ingressStatus, held: result.held });
+      setSoftwareLive(previous => result.live ? { ...(previous?.id === result.live.id ? previous : {}), ...result.live } : null);
+    }).catch(() => {});
+    void check();
+    const timer = window.setInterval(check, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [isOpen, studioMode, signedIn]);
+
+  useEffect(() => {
+    if (!softwareLive) return;
+    const timer = window.setInterval(() => setSoftwareNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [softwareLive?.id]);
+
   useEffect(() => {
     if (!isOpen || studioMode !== 'software' || !signedIn) return;
     let active = true;
@@ -922,7 +949,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
             <div className="flex items-center gap-3">
               <div className="relative">
                 <img
-                  src={user?.avatar}
+                  src={avatarSrc(user?.avatar, user?.name || 'You')}
                   alt={user?.name}
                   className="w-10 h-10 rounded-full object-cover border-2 border-rose-500"
                 />
@@ -1004,7 +1031,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950 p-8 text-center text-slate-300">
                   <div className="relative mb-4">
                     <img
-                      src={user?.avatar}
+                      src={avatarSrc(user?.avatar, user?.name || 'You')}
                       alt="Host"
                       className="w-24 h-24 rounded-full object-cover ring-4 ring-rose-500/80 shadow-2xl"
                     />
@@ -1158,7 +1185,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                 ) : (
                   comments.map(c => (
                     <div key={c.id} className="relative text-xs bg-slate-800/60 p-2 rounded-xl border border-slate-800 flex items-start gap-2">
-                      <img src={c.userAvatar} alt={c.userName} className="w-6 h-6 rounded-full object-cover shrink-0" />
+                      <img src={avatarSrc(c.userAvatar, c.userName)} alt={c.userName} className="w-6 h-6 rounded-full object-cover shrink-0" />
                       <div className="min-w-0">
                         <span className="font-bold text-rose-400 mr-1.5">{c.userName}:</span>
                         <span className="text-slate-200">{c.text}</span>
@@ -1200,16 +1227,23 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
               </div>
 
               {softwareLive ? (
-                <div role="status" className="flex flex-wrap items-center gap-3 rounded-xl border border-rose-700 bg-rose-950/60 p-3">
-                  <span className="flex items-center gap-1.5 rounded-md bg-rose-600 px-2 py-1 text-xs font-black uppercase"><span className="h-2 w-2 animate-ping rounded-full bg-white"/>Live</span>
-                  <div className="min-w-0 flex-1 text-sm">
-                    <p className="truncate font-bold">{softwareLive.title}</p>
-                    <p className="text-xs text-rose-200">You are live from your streaming app · {softwareLive.viewersCount ?? 0} watching</p>
+                <div role="status" aria-label="You are live" className="space-y-3 rounded-xl border border-rose-700 bg-rose-950/60 p-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="flex items-center gap-1.5 rounded-md bg-rose-600 px-2 py-1 text-xs font-black uppercase"><span className="h-2 w-2 animate-ping rounded-full bg-white"/>Live</span>
+                    <div className="min-w-0 flex-1 text-sm">
+                      <p className="font-extrabold">YOU ARE LIVE <span className="ml-1 font-mono text-rose-200">{formatDuration(Math.max(0, Math.floor((softwareNow - (softwareLive.startedAt || softwareNow)) / 1000)))}</span></p>
+                      <p className="truncate text-xs text-rose-200">{softwareLive.title} · {softwareLive.viewersCount ?? 0} watching</p>
+                    </div>
+                    <button type="button" onClick={() => void endSoftwareLive()} className="min-h-10 rounded-xl bg-white px-3 text-sm font-extrabold text-rose-700">End Live</button>
                   </div>
-                  <button type="button" onClick={() => void endSoftwareLive()} className="min-h-10 rounded-xl bg-white px-3 text-sm font-extrabold text-rose-700">End Live</button>
+                  {firebaseUser?.uid && <SoftwareLivePreview streamId={softwareLive.id} hostId={firebaseUser.uid} />}
                 </div>
+              ) : rtmpPoll?.held ? (
+                <p role="status" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-xs leading-5 text-amber-200">You ended your live, but your streaming app is still sending video. <strong>Stop streaming in your app</strong>, then start again to go live.</p>
+              ) : rtmpPoll?.publishing || rtmpPoll?.ingressStatus === 1 ? (
+                <p role="status" className="rounded-xl border border-rose-800 bg-rose-950/40 p-3 text-xs leading-5 text-rose-100"><span className="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-rose-500"/>Status: <strong>Receiving your stream…</strong> Going live now.</p>
               ) : (
-                <p className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-400">Status: <strong className="text-slate-200">Waiting for your stream.</strong> When your app starts streaming, you appear in Live Now automatically. When it stops, viewers see Live Ended.</p>
+                <p role="status" className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-400">Status: <strong className="text-slate-200">Waiting for your stream.</strong> Start streaming in your app — you go live automatically (checked every 3 seconds). When it stops, viewers see Live Ended.</p>
               )}
 
               {liveConfig && !liveConfig.ready && <div role="alert" className="rounded-xl border border-amber-700/70 bg-amber-950/60 p-3 text-sm leading-5 text-amber-200">

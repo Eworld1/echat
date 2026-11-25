@@ -8,6 +8,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/livekit-webhook",
+      "destination": "/api/live/webhook?route=webhook"
+    },
+    {
       "source": "/post/:id",
       "destination": "/api/preview?kind=post&id=:id"
     },

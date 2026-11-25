@@ -28,7 +28,10 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     const isAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'developer' || Boolean(user.isAdmin);
     if (data.hostId !== user.uid && !isAdmin) return sendJson(res, 403, { error: 'You cannot end another user’s live stream.', code: 'not-live-host' });
     const reason = data.hostId === user.uid ? 'host' : 'admin';
-    await endBroadcast(snapshot.id, String(data.liveKitRoom || ''), reason);
+    const software = data.source === 'rtmp';
+    // A streaming-app live keeps its permanent ingress room; it stays ended until the app stops and starts again.
+    await endBroadcast(snapshot.id, software ? '' : String(data.liveKitRoom || ''), reason);
+    if (software) await hostLiveRef(String(data.hostId)).set({ holdUntilOffAir: true }, { merge: true });
     return sendJson(res, 200, { success: true, live: { ...data, id: snapshot.id, isActive: false, endedAt: Date.now() } });
   } catch (error) {
     return handleError(res, error, 'end');

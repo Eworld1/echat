@@ -9,7 +9,7 @@ export const API_URL: string = LEGACY_API_URL;
 
 export function apiUrl(path: string): string {
   // These Go Live control-plane endpoints now run inside this Vercel project.
-  if (import.meta.env.PROD && /^\/api\/live\/(auth|start|end|heartbeat|current|watch|publish|stream-key(?:\/reset)?|viewer\/(?:join|leave)|react|status|rtmp-details)(?:\?|$)/.test(path)) return path;
+  if (import.meta.env.PROD && /^\/api\/live\/(auth|start|end|heartbeat|current|watch|publish|stream-key(?:\/reset)?|viewer\/(?:join|leave)|react|status|rtmp-details|rtmp-status)(?:\?|$)/.test(path)) return path;
   return `${API_URL}${path}`;
 }
 

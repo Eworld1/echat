@@ -5,6 +5,7 @@ import { useSocket } from '../context/SocketContext';
 import type { LiveCategory, LiveLocation, LiveStream } from '../types';
 import { LIVE_CATEGORIES, LIVE_LOCATIONS, getLiveDiscoveryUserData, invalidateLiveDiscoveryUserData, listenLiveStreams, markLiveNotificationsRead } from '../services/liveDiscovery';
 import { LiveUserActions } from './LiveUserActions';
+import { api } from '../services/api';
 import { avatarSrc } from './UserAvatar';
 import { getGoLiveEligibility } from '../config/featureFlags';
 import { useLiveProfiles } from '../services/liveProfiles';
@@ -32,6 +33,14 @@ export const LiveDiscoveryFeed: React.FC<Props> = ({ onWatchLive, onOpenGoLive, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Streaming-app (OBS) lives are confirmed with LiveKit on the server; nudge it while this tab is open
+  // so starts/stops show even if the LiveKit webhook isn't configured. Results arrive via the listener.
+  useEffect(() => {
+    const sync = () => { if (document.visibilityState === 'visible') void api.syncLives(); };
+    sync();
+    const timer = window.setInterval(sync, 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => listenLiveStreams(items => { setStreams(items); setLoading(false); setError(''); }, err => { setError(err.message || 'Could not load live streams.'); setLoading(false); }), []);
   useEffect(() => {
     if (!user?.id) { setFollowingIds([]); setBlockedIds([]); setBlockedByIds([]); setNotificationCount(0); return; }
