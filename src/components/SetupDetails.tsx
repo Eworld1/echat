@@ -1,9 +1,7 @@
 // SetupDetails.tsx - PART 1 TAB 1 SETUP - CORRECTED for Echat
 import { useState } from "react";
 import { doc, setDoc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../services/firebase";
-
 export default function SetupDetails({ liveId, roomName }: { liveId: string; roomName: string }) {
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("Just Chatting");
@@ -31,10 +29,18 @@ export default function SetupDetails({ liveId, roomName }: { liveId: string; roo
     try {
       let imageUrl = "";
       if (thumbnailFile) {
-        const thumbRef = ref(storage, `thumbnails/${liveId}-${Date.now()}.jpg`);
-        await uploadBytes(thumbRef, thumbnailFile);
-        imageUrl = await getDownloadURL(thumbRef);
-      }
+  const formData = new FormData();
+  formData.append("file", thumbnailFile);
+  formData.append("upload_preset", process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET!);
+
+  const res = await fetch(
+    `https://api.cloudinary.com/v1_1/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`,
+    { method: "POST", body: formData }
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || "Cloudinary upload failed");
+  imageUrl = data.secure_url;
+}
       await setDoc(doc(db, "lives", liveId), {
         liveId, roomName,
         title: title.trim(),
