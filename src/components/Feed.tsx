@@ -13,7 +13,7 @@ import { CreatePostModal } from './CreatePostModal';
 import { DashboardHeader } from './DashboardHeader';
 import { LiveFeedBanner } from './LiveFeedBanner';
 import { useLowDataMode } from '../services/lowData';
-import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown, UserPlus, Sparkles } from 'lucide-react';
+import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown, UserPlus, Sparkles, Users } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 
 
@@ -314,7 +314,7 @@ export const Feed: React.FC<FeedProps> = ({
                 <div key={`pymk-${index}-${postCount}`} className="ec-card bg-white p-4 dark:bg-[#161033] my-4 border border-slate-200 dark:border-white/10 rounded-2xl shadow-xs">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                      <UsersIcon size={16} className="text-blue-600" />
+                      <Users size={16} className="text-blue-600" />
                       People You May Know ({suggestions.length})
                     </h3>
                   </div>
