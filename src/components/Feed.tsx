@@ -13,7 +13,10 @@ import { CreatePostModal } from './CreatePostModal';
 import { DashboardHeader } from './DashboardHeader';
 import { LiveFeedBanner } from './LiveFeedBanner';
 import { useLowDataMode } from '../services/lowData';
-import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown } from 'lucide-react';
+import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown, UserPlus, Sparkles } from 'lucide-react';
+import { VerifiedBadge } from './VerifiedBadge';
+
+
 
 interface FeedProps {
   onOpenChat: (user: User) => void;
@@ -32,7 +35,7 @@ export const Feed: React.FC<FeedProps> = ({
   onWatchLive,
   onOpenSection,
 }) => {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const { t } = usePreferences();
   const { onNewPost, onPostUpdated, onPostDeleted } = useSocket();
   const [posts, setPosts] = useState<Post[]>([]);
@@ -47,6 +50,55 @@ export const Feed: React.FC<FeedProps> = ({
   const [pullDistance, setPullDistance] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  // People You May Know suggestions state
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [sentNow, setSentNow] = useState<Set<string>>(new Set());
+  const [removedNow, setRemovedNow] = useState<Set<string>>(new Set());
+
+  const loadSuggestionsUsers = async () => {
+    try {
+      const list = await api.getUsers();
+      if (Array.isArray(list)) {
+        setAllUsers(list);
+      }
+    } catch (err) {
+      console.error('Failed to load users for suggestions:', err);
+    }
+  };
+
+  useEffect(() => {
+    void loadSuggestionsUsers();
+  }, []);
+
+  const suggestions = user ? allUsers.filter(
+    u => u.id !== user.id &&
+         !user.friends.includes(u.id) &&
+         !user.friendRequestsReceived.includes(u.id) &&
+         !user.friendRequestsSent.includes(u.id) &&
+         !sentNow.has(u.id) &&
+         !removedNow.has(u.id)
+  ) : [];
+
+  const handleSendRequest = async (toUserId: string) => {
+    setSentNow(prev => new Set(prev).add(toUserId));
+    try {
+      await api.sendFriendRequest(toUserId);
+      await refreshUser();
+      void loadSuggestionsUsers();
+    } catch (err) {
+      setSentNow(prev => {
+        const next = new Set(prev);
+        next.delete(toUserId);
+        return next;
+      });
+      alert(err instanceof Error ? err.message : 'Could not send the friend request. Please try again.');
+    }
+  };
+
+  const handleRemoveSuggestion = (userId: string) => {
+    setRemovedNow(prev => new Set(prev).add(userId));
+  };
+
   const loadingMoreRef = useRef(false);
   // Low Data Mode: 10 posts at a time and only when "Load More" is tapped (no automatic preloading).
   const [lowData] = useLowDataMode();
@@ -59,6 +111,9 @@ export const Feed: React.FC<FeedProps> = ({
     try {
       const data = await api.getPostsPage();
       setNextCursor(data.nextCursor);
+      setPosts(data.posts.filter(isFeedPost));
+      void loadSuggestionsUsers();
+
       setPosts(data.posts.filter(isFeedPost));
     } catch (err) {
       console.error('Failed to load posts:', err);
@@ -227,19 +282,100 @@ export const Feed: React.FC<FeedProps> = ({
         </div>
       ) : (
         <>
-        {mergeFeed(posts, photoPosts, Boolean(nextCursor)).map((item) => item.kind === 'photo' ? (
-          <ProfilePhotoPostCard key={item.post.id} post={item.post} onViewProfile={onViewProfile} />
-        ) : (
-          <PostCard
-            key={item.post.id}
-            post={item.post}
-            onPostUpdated={(updated) => {
-              setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
-            }}
-            onPostDeleted={handlePostDeleted}
-            onViewProfile={onViewProfile}
-          />
-        ))}
+        {(() => {
+          const feedItems = mergeFeed(posts, photoPosts, Boolean(nextCursor));
+          const renderedElements: React.ReactNode[] = [];
+          let postCount = 0;
+
+          feedItems.forEach((item, index) => {
+            if (item.kind === 'photo') {
+              renderedElements.push(
+                <ProfilePhotoPostCard key={item.post.id} post={item.post} onViewProfile={onViewProfile} />
+              );
+              postCount++;
+            } else {
+              renderedElements.push(
+                <PostCard
+                  key={item.post.id}
+                  post={item.post}
+                  onPostUpdated={(updated) => {
+                    setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
+                  }}
+                  onPostDeleted={handlePostDeleted}
+                  onViewProfile={onViewProfile}
+                />
+              );
+              postCount++;
+            }
+
+            // After every 3rd post, show horizontal scroll row of People You May Know user cards if suggestions exist
+            if (postCount > 0 && postCount % 3 === 0 && suggestions.length > 0) {
+              renderedElements.push(
+                <div key={`pymk-${index}-${postCount}`} className="ec-card bg-white p-4 dark:bg-[#161033] my-4 border border-slate-200 dark:border-white/10 rounded-2xl shadow-xs">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                      <UsersIcon size={16} className="text-blue-600" />
+                      People You May Know ({suggestions.length})
+                    </h3>
+                  </div>
+                  <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-white/10">
+                    {suggestions.map(u => {
+                      const isDev = u.isOfficialDeveloper || u.email?.toLowerCase().trim() === 'eldermoses89@gmail.com';
+                      const displayName = isDev ? 'EChat Official - Developer' : u.name;
+                      const mutualCount = user?.friends ? u.friends.filter(fId => user.friends.includes(fId)).length : 0;
+
+                      return (
+                        <div key={u.id} className={`w-48 shrink-0 rounded-2xl overflow-hidden shadow-xs border flex flex-col ${
+                          isDev ? 'bg-purple-50/60 border-purple-200 dark:bg-purple-950/20 dark:border-purple-800/30' : 'bg-white border-slate-200 dark:bg-[#1e173f] dark:border-white/10'
+                        }`}>
+                          <div className="h-32 overflow-hidden relative cursor-pointer" onClick={() => onViewProfile(u.id)}>
+                            <img src={u.avatar} alt={displayName} className="w-full h-full object-cover hover:scale-105 transition duration-300" />
+                            {isDev && (
+                              <div className="absolute top-2 left-2 bg-purple-700/95 backdrop-blur-xs text-white text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
+                                <Sparkles size={10} /> Official
+                              </div>
+                            )}
+                          </div>
+                          <div className="p-3 flex-1 flex flex-col justify-between">
+                            <div>
+                              <div className="flex items-center gap-1">
+                                <h4 onClick={() => onViewProfile(u.id)} className="font-bold text-slate-900 dark:text-white text-xs hover:underline cursor-pointer truncate">
+                                  {displayName}
+                                </h4>
+                                {(u.isVerified || isDev) && <VerifiedBadge size={12} />}
+                              </div>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                                {mutualCount > 0 ? `${mutualCount} mutual friend${mutualCount > 1 ? 's' : ''}` : (u.location || u.work || 'Suggested')}
+                              </p>
+                            </div>
+                            <div className="mt-3 space-y-1.5">
+                              <button
+                                onClick={() => handleSendRequest(u.id)}
+                                className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <UserPlus size={13} />
+                                {t('add_friend')}
+                              </button>
+                              <button
+                                onClick={() => handleRemoveSuggestion(u.id)}
+                                className="w-full py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+          });
+
+          return renderedElements;
+        })()}
+
         <div ref={loadMoreRef} aria-live="polite">
           {loadingMore && <PostSkeleton withImage={false} />}
           {nextCursor && !loadingMore && <button type="button" onClick={() => void loadMore()} className={`w-full rounded-xl border py-3 text-sm font-semibold ${lowData ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/10 dark:text-emerald-200' : 'border-slate-200 bg-white text-slate-700'}`}>{lowData ? 'Load More (10 posts)' : 'Load more posts'}</button>}
