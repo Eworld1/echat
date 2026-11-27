@@ -9,6 +9,7 @@ import { addLiveComment, blockLiveUser, deleteLiveComment, listenLiveComments, L
 import { collection, query, where } from 'firebase/firestore';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import SetupDetails from './SetupDetails';
 import { VerifiedBadge } from './VerifiedBadge';
 import { SoftwareLivePreview } from './SoftwareLivePreview';
 import { avatarSrc } from './UserAvatar';
@@ -697,6 +698,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
           await newRoom.localParticipant.publishTrack(track, track.kind === 'audio' ? audioPublishOptions() : videoPublishOptions());
         }
         watchHostNetwork(newRoom);
+
         liveKitRoomRef.current = newRoom;
         setCurrentSession(res.live);
         setComments([]);
@@ -1414,6 +1416,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
                 <p className="mt-1 text-xs text-slate-500">Tip: use H.264 video + AAC audio, 2-second keyframe interval, 2,500–4,500 kbps for 720p.</p>
               </div>
 
+<SetupDetails liveId={currentSession?.id || "draft-live"} roomName={streamTitle || "My Live"} />
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-2">
                 <h3 className="text-sm font-extrabold">Stream details</h3>
                 <p className="text-xs text-slate-400">Shown in Live Now when your app starts streaming.</p>
