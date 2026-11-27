@@ -31,10 +31,10 @@ export default function SetupDetails({ liveId, roomName }: { liveId: string; roo
       if (thumbnailFile) {
   const formData = new FormData();
   formData.append("file", thumbnailFile);
-  formData.append("upload_preset", process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET!);
+  formData.append("upload_preset", "echat_upload");
 
-  const res = await fetch(
-    `https://api.cloudinary.com/v1_1/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`,
+ const res = await fetch(
+    `https://api.cloudinary.com/v1_1/gcsxnba1/image/upload`,
     { method: "POST", body: formData }
   );
   const data = await res.json();
