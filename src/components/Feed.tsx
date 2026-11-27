@@ -286,6 +286,7 @@ export const Feed: React.FC<FeedProps> = ({
           const feedItems = mergeFeed(posts, photoPosts, Boolean(nextCursor));
           const renderedElements: React.ReactNode[] = [];
           let postCount = 0;
+          let pymkShown = false;
 
           feedItems.forEach((item, index) => {
             if (item.kind === 'photo') {
@@ -308,8 +309,9 @@ export const Feed: React.FC<FeedProps> = ({
               postCount++;
             }
 
-            // After every 3rd post, show horizontal scroll row of People You May Know user cards if suggestions exist
-            if (postCount > 0 && postCount % 3 === 0 && suggestions.length > 0) {
+            // Show People You May Know row ONLY ONCE per feed load, after the 3rd post
+            if (postCount === 3 && !pymkShown && suggestions.length > 0) {
+              pymkShown = true;
               renderedElements.push(
                 <div key={`pymk-${index}-${postCount}`} className="ec-card bg-white p-4 dark:bg-[#161033] my-4 border border-slate-200 dark:border-white/10 rounded-2xl shadow-xs">
                   <div className="flex items-center justify-between mb-3">
