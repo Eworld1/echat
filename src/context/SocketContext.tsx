@@ -29,6 +29,7 @@ import {
   unavailableMessage
 } from '../services/calls';
 import { callDiagnostics, describeIceServers, explainIceError, testTurnRelay } from '../services/callDiagnostics';
+import { joinCallRelay, type CallRelay } from '../services/callRelay';
 export interface IncomingCall {
   id: string; // Firestore document ID
   callerId: string;
@@ -346,6 +347,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const appliedRemoteCandidatesRef = useRef(0);
   /** Receiver: the caller's last offer we answered (a new one = ICE restart). */
   const appliedOfferSdpRef = useRef('');
+  /** LiveKit relay fallback (when P2P + TURN can't connect): the room, and the tracks it delivers. */
+  const relayRef = useRef<CallRelay | null>(null);
+  const relayStartingRef = useRef(false);
+  const relayActiveRef = useRef(false);
+  const relayTracksRef = useRef(new Map<string, MediaStreamTrack>());
+  const startRelayRef = useRef<(callId: string, reason: string) => void>(() => {});
   const connectedAtRef = useRef<number | null>(null);
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showIncomingCall = useCallback((call: IncomingCall | null) => {
@@ -378,6 +385,20 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const publishRemoteTracks = useCallback((extraTrack?: MediaStreamTrack) => {
+    // Relay mode: play only what LiveKit delivers (the silent P2P receivers would add a black video).
+    if (relayActiveRef.current) {
+      for (const [id, track] of relayTracksRef.current) if (track.readyState === 'ended') relayTracksRef.current.delete(id);
+      const relayStream = new MediaStream([...relayTracksRef.current.values()]);
+      setRemoteStream(relayStream);
+      const relayAudio = callAudioElementRef.current;
+      if (relayAudio && relayStream.getAudioTracks().length) {
+        relayAudio.srcObject = relayStream;
+        relayAudio.muted = !speakerEnabled;
+        relayAudio.volume = speakerEnabled ? 1 : 0;
+        void relayAudio.play().catch(() => {});
+      }
+      return;
+    }
     const pc = peerConnectionRef.current;
     for (const receiver of pc?.getReceivers() || []) {
       const track = receiver.track;
@@ -455,6 +476,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     connectedAtRef.current = null;
     appliedRemoteCandidatesRef.current = 0;
     appliedOfferSdpRef.current = '';
+    relayRef.current?.leave();
+    relayRef.current = null;
+    relayStartingRef.current = false;
+    relayActiveRef.current = false;
+    relayTracksRef.current.clear();
     incomingCallRef.current = null;
     remoteTracksRef.current.clear();
     if (peerConnectionRef.current) {
@@ -787,7 +813,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let restartTimer: ReturnType<typeof setTimeout> | null = null;
     let connectTimer: ReturnType<typeof setTimeout> | null = null;
     let lastRoute = '';
-    const isUp = () => pc.connectionState === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed';
+    const isUp = () => relayActiveRef.current || pc.connectionState === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed';
     const closed = () => peerConnectionRef.current !== pc || pc.signalingState === 'closed';
     /** Only the caller restarts (no glare). From the 2nd try, or when asked, gather TURN relay candidates only. */
     const restartIce = async (reason: string, forceRelay = false) => {
@@ -847,8 +873,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('[Call] Not connected after 10s', callDiagnostics.get());
         callDiagnostics.note('Not connected after 10s');
         setCallNotice('Still connecting… switching to the relay server.');
+        // Both sides do this on their own: TURN relay restart AND the LiveKit relay; first one to carry audio wins.
         void restartIce('not connected after 10s', true);
-        scheduleHangUp('Could not connect the call. The network may be blocking calls — try again or switch networks.', 15000);
+        startRelayRef.current(callId, 'not connected after 10s');
+        scheduleHangUp('Could not connect the call. The network may be blocking calls — try again or switch networks.', 20000);
       }, 10000);
     };
     const onState = () => {
@@ -863,8 +891,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         markConnected();
         void logCallRoute(pc);
       } else if (state === 'failed') {
-        // All candidate pairs failed: restart ICE right away, relay only.
+        // All candidate pairs failed: restart ICE right away (relay only) and bring in the LiveKit relay.
         scheduleRestart('ice failed', 0, true);
+        startRelayRef.current(callId, 'ice failed');
         scheduleHangUp('Could not connect the call. The network may be blocking calls — try again or switch networks.', 20000);
       } else if (state === 'disconnected') {
         // Brief drops (switching Wi-Fi / mobile data) often recover by themselves; restart if not.
@@ -964,6 +993,55 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [user?.id, cleanUpCallMedia, logMissedCall]);
   const hangUpRef = useRef(hangUp);
   hangUpRef.current = hangUp;
+
+  /** Join the LiveKit relay room for this call (once). Remote audio/video from it replaces P2P. */
+  startRelayRef.current = (callId: string, reason: string) => {
+    const stream = localStreamRef.current;
+    if (relayRef.current || relayStartingRef.current || !stream || activeCallRef.current?.id !== callId) return;
+    relayStartingRef.current = true;
+    console.info(`[Call] Starting LiveKit relay (${reason})`);
+    callDiagnostics.note(`LiveKit relay: starting (${reason})`);
+    const stillThisCall = () => activeCallRef.current?.id === callId;
+    joinCallRelay(callId, stream, {
+      onRemoteTrack: track => {
+        if (!stillThisCall()) return;
+        relayTracksRef.current.set(track.id, track);
+        if (!relayActiveRef.current) {
+          relayActiveRef.current = true;
+          console.info('[Call] connected via LiveKit relay');
+          callDiagnostics.set({ route: 'LiveKit relay' });
+          if (disconnectTimerRef.current) { clearTimeout(disconnectTimerRef.current); disconnectTimerRef.current = null; }
+          stopRingtoneRef.current?.();
+          stopRingtoneRef.current = null;
+          connectedAtRef.current = connectedAtRef.current || Date.now();
+          setCallNotice(notice => notice?.startsWith('Still connecting') ? null : notice);
+          if (activeCallRef.current?.status !== 'connected') updateActiveCall({ status: 'connected', startedAt: connectedAtRef.current });
+        }
+        publishRemoteTracks();
+      },
+      onRemoteTrackEnded: track => { relayTracksRef.current.delete(track.id); if (stillThisCall()) publishRemoteTracks(); },
+      onConnected: () => callDiagnostics.set({ route: callDiagnostics.get().route || 'LiveKit relay (waiting for the other side)' }),
+      onDisconnected: why => {
+        callDiagnostics.note(`LiveKit relay: disconnected (${why})`);
+        relayRef.current = null;
+        if (stillThisCall() && relayActiveRef.current) {
+          const pc = peerConnectionRef.current;
+          relayActiveRef.current = false;
+          relayTracksRef.current.clear();
+          const p2pUp = pc && (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed');
+          if (p2pUp) publishRemoteTracks();
+          else { setCallNotice('Call dropped: the connection was lost.'); void hangUpRef.current(); }
+        }
+      },
+      onLog: line => { console.info(`[Call] ${line}`); callDiagnostics.note(line); }
+    }).then(relay => {
+      if (!stillThisCall()) { relay.leave(); return; }
+      relayRef.current = relay;
+    }).catch(error => {
+      logCallSetupError('LiveKit relay', error);
+      callDiagnostics.note(`LiveKit relay failed: ${error instanceof Error ? error.message : String(error)}`);
+    }).finally(() => { relayStartingRef.current = false; });
+  };
 
   // Start outgoing call
   const startCall = async (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => {

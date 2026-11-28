@@ -124,6 +124,18 @@ const providers: Provider[] = [
     }
   },
   {
+    // Any number of extra TURN servers (OpenRelay, ExpressTURN, your own coturn…) as JSON:
+    // TURN_EXTRA_SERVERS=[{"urls":["turns:host:443?transport=tcp"],"username":"u","credential":"p"}]
+    name: 'extra',
+    supports443: false,
+    shared: true,
+    configured: () => Boolean(env('TURN_EXTRA_SERVERS')),
+    load: async () => {
+      try { return normalize(JSON.parse(env('TURN_EXTRA_SERVERS'))); }
+      catch { throw new Error('TURN_EXTRA_SERVERS is not valid JSON'); }
+    }
+  },
+  {
     name: 'static',
     supports443: false,
     shared: true,
