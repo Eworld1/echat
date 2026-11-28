@@ -2,6 +2,7 @@ import { initialsAvatar } from '../utils/avatar';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from '../context/SocketContext';
 import { useBackButton } from '../hooks/useBackButton';
+import { CallDebugPanel } from './CallDebugPanel';
 import {
   Phone,
   PhoneOff,
@@ -538,6 +539,7 @@ export const CallScreen: React.FC = () => {
     <>
       <audio ref={audioRef} autoPlay playsInline />
       <CallScreenView />
+      <CallDebugPanel active={Boolean(activeCall)} />
       {callNotice && (
         <div
           className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000] max-w-sm w-[calc(100%-2rem)] bg-slate-900 text-white text-sm rounded-2xl shadow-2xl px-4 py-3 flex items-start gap-3"

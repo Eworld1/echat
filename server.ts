@@ -195,6 +195,17 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Public check (no secrets): does the server actually get TURN servers from the provider right now?
+app.get('/api/calls/ice-status', async (_req: Request, res: Response) => {
+  const config = await getIceConfig('status-check');
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    provider: config.provider,
+    hasTurn: config.hasTurn,
+    urls: config.iceServers.flatMap(server => (Array.isArray(server.urls) ? server.urls : [server.urls]).map(url => `${url}${server.username ? ' (credentials ok)' : ''}`))
+  });
+});
+
 app.get('/api/calls/ice-config', async (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });

@@ -261,8 +261,8 @@ async function getLegacyLiveHeaders(forceRefresh = false): Promise<Record<string
 }
 
 export const api = {
-  async getCallIceConfig(signal?: AbortSignal): Promise<RTCConfiguration & { provider?: string; hasTurn?: boolean; ttlSeconds?: number }> {
-    const res = await fetch(apiUrl('/api/calls/ice-config'), { headers: getHeaders(), cache: 'no-store', signal });
+  async getCallIceConfig(signal?: AbortSignal, userId?: string): Promise<RTCConfiguration & { provider?: string; hasTurn?: boolean; ttlSeconds?: number }> {
+    const res = await fetch(apiUrl('/api/calls/ice-config'), { headers: getHeaders(userId ? { 'x-user-id': userId } : {}), cache: 'no-store', signal });
     return readResponse<RTCConfiguration & { provider?: string; hasTurn?: boolean; ttlSeconds?: number }>(res, 'Could not load call network configuration');
   },
   // File upload (profile photos, cover photos, media). Returns a loadable URL.
