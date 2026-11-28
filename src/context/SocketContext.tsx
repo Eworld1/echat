@@ -28,7 +28,7 @@ import {
   remoteCandidates,
   unavailableMessage
 } from '../services/calls';
-import { callDiagnostics, describeIceServers, testTurnRelay } from '../services/callDiagnostics';
+import { callDiagnostics, describeIceServers, explainIceError, testTurnRelay } from '../services/callDiagnostics';
 export interface IncomingCall {
   id: string; // Firestore document ID
   callerId: string;
@@ -874,8 +874,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
     pc.onicecandidateerror = event => {
       const error = event as RTCPeerConnectionIceErrorEvent;
-      // 701 = a STUN/TURN server didn't answer on one network interface; normal on mobile, so debug only.
-      if (error.errorCode !== 701) console.warn('[Call] ICE server error', { url: error.url, code: error.errorCode, text: error.errorText });
+      // Log every error with its URL (701 = unreachable/blocked, 401 = bad credentials) for diagnosis.
+      const line = `ICE error ${explainIceError(error.errorCode)} @ ${error.url || '?'}${error.errorText ? ` "${error.errorText}"` : ''}`;
+      console.warn(`[Call] ${line}`);
+      if (/^turns?:/i.test(error.url || '')) callDiagnostics.note(line);
     };
     pc.onconnectionstatechange = onState;
     pc.oniceconnectionstatechange = onState;

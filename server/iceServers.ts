@@ -59,11 +59,19 @@ function normalize(list: unknown): IceServer[] {
   });
 }
 
-type Provider = { name: string; configured: () => boolean; shared: boolean; load: (userId: string) => Promise<IceServer[]> };
+type Provider = {
+  name: string;
+  configured: () => boolean;
+  shared: boolean;
+  /** The provider serves TURN on 443 over UDP, TCP and TLS on the same host, so missing 443 variants can be added. */
+  supports443: boolean;
+  load: (userId: string) => Promise<IceServer[]>;
+};
 
 const providers: Provider[] = [
   {
     name: 'metered',
+    supports443: true,
     shared: true,
     configured: () => Boolean(env('METERED_TURN_DOMAIN') && env('METERED_TURN_API_KEY')),
     load: async () => {
@@ -73,6 +81,7 @@ const providers: Provider[] = [
   },
   {
     name: 'cloudflare',
+    supports443: false,
     shared: true,
     configured: () => Boolean(env('CLOUDFLARE_TURN_KEY_ID') && env('CLOUDFLARE_TURN_API_TOKEN')),
     load: async () => {
@@ -86,6 +95,7 @@ const providers: Provider[] = [
   },
   {
     name: 'twilio',
+    supports443: false,
     shared: true,
     configured: () => Boolean(env('TWILIO_ACCOUNT_SID') && env('TWILIO_AUTH_TOKEN')),
     load: async () => {
@@ -103,6 +113,7 @@ const providers: Provider[] = [
   },
   {
     name: 'coturn',
+    supports443: false,
     shared: false,
     configured: () => Boolean(env('TURN_URLS') && env('TURN_SECRET')),
     // coturn REST API auth: username = "<expiry>:<user>", password = base64(HMAC-SHA1(secret, username)).
@@ -114,37 +125,98 @@ const providers: Provider[] = [
   },
   {
     name: 'static',
+    supports443: false,
     shared: true,
     configured: () => Boolean(env('TURN_URLS') && env('TURN_USERNAME') && env('TURN_CREDENTIAL')),
     load: async () => [{ urls: splitUrls(env('TURN_URLS')), username: env('TURN_USERNAME'), credential: env('TURN_CREDENTIAL') }]
   }
 ];
 
-let sharedCache: { provider: string; servers: IceServer[]; expiresAt: number } | null = null;
+const sharedCache = new Map<string, { servers: IceServer[]; expiresAt: number }>();
 
-/** STUN + the first working TURN provider. Never throws: with no TURN configured it returns STUN only. */
-export async function getIceConfig(userId: string): Promise<IceConfigResult> {
-  const ttlSeconds = Math.floor(CREDENTIAL_TTL_SECONDS / 2);
-  for (const provider of providers) {
-    if (!provider.configured()) continue;
-    try {
-      let servers: IceServer[];
-      if (provider.shared && sharedCache?.provider === provider.name && sharedCache.expiresAt > Date.now()) servers = sharedCache.servers;
-      else {
-        servers = await provider.load(userId);
-        // Reuse provider credentials for half their lifetime so we don't hit the provider on every call.
-        if (provider.shared && hasTurnServer(servers)) sharedCache = { provider: provider.name, servers, expiresAt: Date.now() + ttlSeconds * 1000 };
-      }
-      if (!hasTurnServer(servers)) throw new Error('response had no TURN servers');
-      return { iceServers: [...STUN_SERVERS, ...servers.filter(server => !(Array.isArray(server.urls) ? server.urls : [server.urls]).every(url => /^stun:/i.test(url)))], provider: provider.name, hasTurn: true, ttlSeconds };
-    } catch (error) {
-      console.warn(`[ICE] ${provider.name} TURN credentials failed:`, error instanceof Error ? error.message : error);
+/** One RTCIceServer per URL so the order the browser tries them in is explicit. */
+function splitByUrl(servers: IceServer[]): IceServer[] {
+  return servers.flatMap(server => (Array.isArray(server.urls) ? server.urls : [server.urls]).map(url => ({ ...server, urls: url })));
+}
+
+const urlOf = (server: IceServer) => String(Array.isArray(server.urls) ? server.urls[0] : server.urls);
+const turnHost = (url: string) => url.replace(/^turns?:/i, '').split('?')[0].replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+
+/**
+ * Carriers such as Orange SL block UDP and the usual TURN ports (3478, 80). Port 443 looks like
+ * ordinary HTTPS, so it gets through: TLS on 443 first, then TCP on 443, then UDP on 443, and only
+ * then any other port as a last resort.
+ */
+export function turnRank(url: string): number {
+  const tls = /^turns:/i.test(url);
+  const port = Number((url.split('?')[0].match(/:(\d+)$/) || [])[1] || (tls ? 5349 : 3478));
+  const tcp = /transport=tcp/i.test(url) || tls;
+  if (port === 443 && tls) return 0;
+  if (port === 443 && tcp) return 1;
+  if (port === 443) return 2;
+  if (tls) return 3;
+  if (tcp) return 4;
+  return 5;
+}
+
+/** Add turns:HOST:443?transport=tcp, turn:HOST:443?transport=tcp and turn:HOST:443 when missing. */
+function with443Variants(servers: IceServer[]): IceServer[] {
+  const out = [...servers];
+  const have = new Set(servers.map(urlOf));
+  for (const server of servers) {
+    const url = urlOf(server);
+    if (!/^turns?:/i.test(url) || !server.username) continue;
+    const host = turnHost(url);
+    for (const variant of [`turns:${host}:443?transport=tcp`, `turn:${host}:443?transport=tcp`, `turn:${host}:443`]) {
+      if (have.has(variant)) continue;
+      have.add(variant);
+      out.push({ urls: variant, username: server.username, credential: server.credential });
     }
   }
-  return { iceServers: STUN_SERVERS, provider: 'stun-only', hasTurn: false, ttlSeconds: 300 };
+  return out;
+}
+
+async function loadProvider(provider: Provider, userId: string, ttlSeconds: number): Promise<IceServer[]> {
+  const cached = provider.shared ? sharedCache.get(provider.name) : undefined;
+  if (cached && cached.expiresAt > Date.now()) return cached.servers;
+  let servers = splitByUrl(await provider.load(userId)).filter(server => /^turns?:/i.test(urlOf(server)));
+  if (provider.supports443) servers = with443Variants(servers);
+  if (!servers.length) throw new Error('response had no TURN servers');
+  // Reuse provider credentials for half their lifetime so we don't hit the provider on every call.
+  if (provider.shared) sharedCache.set(provider.name, { servers, expiresAt: Date.now() + ttlSeconds * 1000 });
+  return servers;
+}
+
+const MAX_TURN_URLS = 9;
+
+/**
+ * STUN + TURN from EVERY configured provider (e.g. Metered as primary, Cloudflare/Twilio as backup),
+ * ordered 443-TLS → 443-TCP → 443-UDP → other ports; the primary provider wins ties.
+ * Never throws: with no working TURN it returns STUN only.
+ */
+export async function getIceConfig(userId: string): Promise<IceConfigResult> {
+  const ttlSeconds = Math.floor(CREDENTIAL_TTL_SECONDS / 2);
+  const configured = providers.filter(provider => provider.configured());
+  const results = await Promise.all(configured.map(async (provider, order) => {
+    try {
+      return { provider: provider.name, order, servers: await loadProvider(provider, userId, ttlSeconds) };
+    } catch (error) {
+      console.warn(`[ICE] ${provider.name} TURN credentials failed:`, error instanceof Error ? error.message : error);
+      return { provider: provider.name, order, servers: [] as IceServer[] };
+    }
+  }));
+  const working = results.filter(result => result.servers.length);
+  if (!working.length) return { iceServers: STUN_SERVERS, provider: 'stun-only', hasTurn: false, ttlSeconds: 300 };
+  const turn = working
+    .flatMap(result => result.servers.map((server, index) => ({ server, order: result.order, index })))
+    .sort((a, b) => turnRank(urlOf(a.server)) - turnRank(urlOf(b.server)) || a.order - b.order || a.index - b.index)
+    .slice(0, MAX_TURN_URLS)
+    .map(item => item.server);
+  // TURN first so the browser starts allocating the relay immediately; STUN after.
+  return { iceServers: [...turn, ...STUN_SERVERS], provider: working.map(result => result.provider).join('+'), hasTurn: true, ttlSeconds };
 }
 
 /** For /api/health and startup logs: which TURN provider is configured (no secrets). */
 export function configuredTurnProvider(): string {
-  return providers.find(provider => provider.configured())?.name || 'none';
+  return providers.filter(provider => provider.configured()).map(provider => provider.name).join('+') || 'none';
 }

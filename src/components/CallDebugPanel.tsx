@@ -8,18 +8,19 @@ import { callDiagnostics, isCallDebugEnabled } from '../services/callDiagnostics
 export const CallDebugPanel: React.FC<{ active: boolean }> = ({ active }) => {
   const [enabled] = useState(isCallDebugEnabled);
   const [testing, setTesting] = useState(false);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(active);
   const info = useSyncExternalStore(callDiagnostics.subscribe, callDiagnostics.get, callDiagnostics.get);
-  if (!enabled || !active) return null;
+  if (!enabled) return null;
   const runTest = async () => {
     setTesting(true);
+    setOpen(true);
     try { await (window as Window & { echatTestTurn?: () => Promise<unknown> }).echatTestTurn?.(); }
     finally { setTesting(false); }
   };
   return (
     <div className="fixed bottom-2 left-2 z-[10001] max-h-[45vh] w-[min(22rem,calc(100%-1rem))] overflow-y-auto rounded-xl bg-black/85 p-2 font-mono text-[10px] leading-snug text-emerald-200 shadow-2xl">
       <div className="mb-1 flex items-center gap-2">
-        <b className="flex-1 text-white">Call debug</b>
+        <b className="flex-1 text-white">Call debug{active ? '' : ' (no call)'}</b>
         <button type="button" onClick={() => void runTest()} disabled={testing} className="rounded bg-emerald-600 px-2 py-0.5 text-white disabled:opacity-50">{testing ? 'Testing…' : 'Test TURN'}</button>
         <button type="button" onClick={() => setOpen(value => !value)} className="rounded bg-white/15 px-2 py-0.5 text-white">{open ? 'Hide' : 'Show'}</button>
       </div>
