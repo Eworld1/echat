@@ -1,8 +1,7 @@
 /**
  * Call network diagnostics: what ICE servers the browser got, which candidate types it gathered
  * (host / srflx / relay) and how the call connected. Always logged to the console with a [Call]
- * prefix; shown on screen during a call when the site is opened once with ?calldebug=1
- * (turn it off with ?calldebug=0).
+ * prefix; the on-screen panel appears only when the URL has ?calldebug=1 (collapsed by default).
  */
 
 export interface CallDiagnostics {
@@ -53,12 +52,14 @@ export const callDiagnostics = {
 export const describeIceServers = (servers: RTCIceServer[] = []) =>
   servers.flatMap(server => (Array.isArray(server.urls) ? server.urls : [server.urls]).map(url => `${url}${server.username ? ' (with credentials)' : ''}`));
 
+/** Debug panel only when the current URL has ?calldebug=1 (never remembered between visits). */
 export const isCallDebugEnabled = () => {
   try {
-    const flag = new URLSearchParams(window.location.search).get('calldebug');
-    if (flag === '1') localStorage.setItem('echat_call_debug', '1');
-    if (flag === '0') localStorage.removeItem('echat_call_debug');
-    return localStorage.getItem('echat_call_debug') === '1';
+    // Drop the old "remember me" flag so the panel never appears on its own anymore.
+    localStorage.removeItem('echat_call_debug');
+  } catch { /* storage blocked */ }
+  try {
+    return new URLSearchParams(window.location.search).get('calldebug') === '1';
   } catch {
     return false;
   }

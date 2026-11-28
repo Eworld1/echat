@@ -2,13 +2,14 @@ import React, { useState, useSyncExternalStore } from 'react';
 import { callDiagnostics, isCallDebugEnabled } from '../services/callDiagnostics';
 
 /**
- * Hidden call-network readout for testing on phones (no console needed). Enable by opening the site
- * once with ?calldebug=1; disable with ?calldebug=0. Shows ICE servers, candidate types, state, route.
+ * Hidden call-network readout for testing on phones (no console needed). Appears only when the URL
+ * has ?calldebug=1, collapsed until you tap Show. Shows ICE servers, candidate types, state, route.
  */
 export const CallDebugPanel: React.FC<{ active: boolean }> = ({ active }) => {
   const [enabled] = useState(isCallDebugEnabled);
   const [testing, setTesting] = useState(false);
-  const [open, setOpen] = useState(active);
+  // Hidden (collapsed) by default; tap Show to expand.
+  const [open, setOpen] = useState(false);
   const info = useSyncExternalStore(callDiagnostics.subscribe, callDiagnostics.get, callDiagnostics.get);
   if (!enabled) return null;
   const runRelayTest = async () => {
