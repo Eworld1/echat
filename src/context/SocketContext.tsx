@@ -97,11 +97,19 @@ const SocketContext = createContext<SocketContextType | undefined>(undefined);
 const TURN_URL: string = import.meta.env.VITE_TURN_URL ?? '';
 const TURN_USERNAME = import.meta.env.VITE_TURN_USERNAME?.trim() ?? '';
 const TURN_CREDENTIAL = import.meta.env.VITE_TURN_CREDENTIAL ?? '';
+/** Shared WebRTC settings: try every route (direct, STUN, TURN relay) and bundle media on one port. */
+const PEER_SETTINGS: RTCConfiguration = {
+  iceTransportPolicy: 'all',
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require',
+  iceCandidatePoolSize: 10
+};
 const ICE_CONFIG: RTCConfiguration = {
+  ...PEER_SETTINGS,
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
     ...(TURN_URL && TURN_USERNAME && TURN_CREDENTIAL
       ? [{
           urls: TURN_URL,
@@ -109,8 +117,7 @@ const ICE_CONFIG: RTCConfiguration = {
           credential: TURN_CREDENTIAL
         }]
       : [])
-  ],
-  iceCandidatePoolSize: 10
+  ]
 };
 
 function logCallSetupError(stage: string, error: unknown): void {
@@ -120,17 +127,61 @@ function logCallSetupError(stage: string, error: unknown): void {
   console.error(`[Call] ${stage} failed`, details);
 }
 
+const hasTurn = (servers: RTCIceServer[] = []) => servers.some(server => (Array.isArray(server.urls) ? server.urls : [server.urls]).some(url => /^turns?:/i.test(url)));
+let iceConfigCache: { config: RTCConfiguration; expiresAt: number } | null = null;
+
+/**
+ * STUN + TURN relay servers from the backend (TURN credentials stay server-side, in env vars).
+ * Cached while the credentials are valid so a call doesn't wait on the network; 6s timeout.
+ */
 async function getCallIceConfig(): Promise<RTCConfiguration> {
+  if (iceConfigCache && iceConfigCache.expiresAt > Date.now()) return iceConfigCache.config;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 6000);
   try {
-    const config = await api.getCallIceConfig();
-    if (!Array.isArray(config.iceServers) || config.iceServers.length === 0) {
+    const remote = await api.getCallIceConfig(controller.signal);
+    if (!Array.isArray(remote.iceServers) || remote.iceServers.length === 0) {
       throw new Error('The call network configuration did not include any ICE servers');
     }
-    return { ...config, iceCandidatePoolSize: 10 };
+    const config: RTCConfiguration = { ...PEER_SETTINGS, iceServers: remote.iceServers };
+    if (hasTurn(remote.iceServers)) {
+      console.info(`[Call] ICE servers loaded: STUN + TURN relay (${remote.provider || 'server'})`);
+      iceConfigCache = { config, expiresAt: Date.now() + Math.max(60, Math.min(remote.ttlSeconds || 3600, 6 * 3600)) * 1000 };
+      return config;
+    }
+    console.warn('[Call] Server has no TURN relay configured; calls between different mobile networks may fail.');
+    // A build-time TURN (VITE_TURN_*) can still help when the server has none.
+    return hasTurn(ICE_CONFIG.iceServers) ? { ...config, iceServers: [...remote.iceServers, ...(ICE_CONFIG.iceServers || []).filter(server => hasTurn([server]))] } : config;
   } catch (error) {
     logCallSetupError('Loading ICE configuration; using the browser fallback', error);
     return ICE_CONFIG;
+  } finally {
+    window.clearTimeout(timer);
   }
+}
+
+/** "relay" when media goes through the TURN server, else "direct" (host / STUN-mapped). */
+async function logCallRoute(pc: RTCPeerConnection): Promise<void> {
+  try {
+    const stats = await pc.getStats();
+    let pair: (RTCStats & { localCandidateId?: string; remoteCandidateId?: string; nominated?: boolean; state?: string; selected?: boolean }) | undefined;
+    stats.forEach(report => {
+      if (report.type === 'transport' && (report as RTCStats & { selectedCandidatePairId?: string }).selectedCandidatePairId) {
+        pair = stats.get((report as RTCStats & { selectedCandidatePairId?: string }).selectedCandidatePairId!) as typeof pair;
+      }
+    });
+    if (!pair) stats.forEach(report => {
+      const candidate = report as typeof pair;
+      if (!pair && report.type === 'candidate-pair' && candidate && (candidate.selected || (candidate.nominated && candidate.state === 'succeeded'))) pair = candidate;
+    });
+    if (!pair) return;
+    const local = stats.get(pair.localCandidateId || '') as { candidateType?: string; protocol?: string; relayProtocol?: string } | undefined;
+    const remote = stats.get(pair.remoteCandidateId || '') as { candidateType?: string } | undefined;
+    const relayed = local?.candidateType === 'relay' || remote?.candidateType === 'relay';
+    console.info(relayed
+      ? `[Call] connected via relay (TURN${local?.relayProtocol ? `/${local.relayProtocol}` : ''})`
+      : `[Call] connected direct (${local?.candidateType || '?'} → ${remote?.candidateType || '?'}, ${local?.protocol || 'udp'})`);
+  } catch { /* stats are diagnostics only */ }
 }
 
 let callAudioContext: AudioContext | null = null;
@@ -259,6 +310,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const incomingCallRef = useRef<IncomingCall | null>(null);
   const appliedRemoteCandidatesRef = useRef(0);
+  /** Receiver: the caller's last offer we answered (a new one = ICE restart). */
+  const appliedOfferSdpRef = useRef('');
   const connectedAtRef = useRef<number | null>(null);
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showIncomingCall = useCallback((call: IncomingCall | null) => {
@@ -365,6 +418,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     connectedAtRef.current = null;
     appliedRemoteCandidatesRef.current = 0;
+    appliedOfferSdpRef.current = '';
     incomingCallRef.current = null;
     remoteTracksRef.current.clear();
     if (peerConnectionRef.current) {
@@ -640,7 +694,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   /** One peer connection for either side. ICE candidates go into the call doc as they appear. */
   const createPeer = useCallback(async (callId: string, role: 'caller' | 'receiver', stream: MediaStream, callType: 'audio' | 'video', docReady: Promise<void> = Promise.resolve()) => {
     const config = await getCallIceConfig();
-    const pc = new RTCPeerConnection({ ...config, iceCandidatePoolSize: 10 });
+    const pc = new RTCPeerConnection(config);
     peerConnectionRef.current = pc;
     localStreamRef.current = stream;
     const field = role === 'caller' ? 'callerCandidates' : 'receiverCandidates';
@@ -670,22 +724,75 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       stopRingtoneRef.current = null;
       updateActiveCall({ status: 'connected', startedAt: connectedAtRef.current });
     };
+    /*
+     * Network changes (Wi-Fi ↔ mobile data, carrier NAT rebinding) drop the route. Instead of hanging
+     * up, the caller does an ICE restart: a new offer goes through the call doc, the receiver answers,
+     * and fresh candidates (including TURN relay ones) are gathered. Up to 3 tries per drop.
+     */
+    let restartAttempts = 0;
+    let restartTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastRoute = '';
+    const closed = () => peerConnectionRef.current !== pc || pc.signalingState === 'closed';
+    const restartIce = async (reason: string) => {
+      if (role !== 'caller' || closed() || pc.signalingState !== 'stable') return;
+      if (restartAttempts >= 3) {
+        setCallNotice('The call could not reconnect. Check your internet connection and try again.');
+        void hangUpRef.current();
+        return;
+      }
+      restartAttempts += 1;
+      console.info(`[Call] ICE restart ${restartAttempts}/3 (${reason})`);
+      try {
+        const offer = await pc.createOffer({ iceRestart: true });
+        if (closed()) return;
+        await pc.setLocalDescription(offer);
+        // Clearing the old answer makes sure only the receiver's fresh answer is applied.
+        await updateDoc(doc(firestore, 'calls', callId), { offer: { type: offer.type, sdp: offer.sdp }, answer: null });
+      } catch (error) {
+        logCallSetupError('ICE restart', error);
+      }
+    };
+    const scheduleRestart = (reason: string, delayMs: number) => {
+      if (restartTimer || role !== 'caller') return;
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        const state = pc.connectionState || pc.iceConnectionState;
+        if (!closed() && (state === 'disconnected' || state === 'failed')) void restartIce(reason);
+      }, delayMs);
+    };
+    const scheduleHangUp = (message: string, delayMs: number) => {
+      if (disconnectTimerRef.current) return;
+      disconnectTimerRef.current = setTimeout(() => {
+        disconnectTimerRef.current = null;
+        const state = pc.connectionState || pc.iceConnectionState;
+        if (!closed() && state !== 'connected' && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+          setCallNotice(message);
+          void hangUpRef.current();
+        }
+      }, delayMs);
+    };
     const onState = () => {
       const state = pc.connectionState || pc.iceConnectionState;
-      if (state === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') markConnected();
-      else if (state === 'failed') {
-        setCallNotice('The call could not connect. Check your internet connection and try again.');
-        void hangUpRef.current();
-      } else if (state === 'disconnected' && !disconnectTimerRef.current) {
-        // Brief drops (switching Wi-Fi / mobile data) often recover by themselves.
-        disconnectTimerRef.current = setTimeout(() => {
-          disconnectTimerRef.current = null;
-          if (peerConnectionRef.current === pc && (pc.connectionState === 'disconnected' || pc.iceConnectionState === 'disconnected')) {
-            setCallNotice('Call dropped: the connection was lost.');
-            void hangUpRef.current();
-          }
-        }, 12000);
+      if (state !== lastRoute) { lastRoute = state; console.info(`[Call] connectionState: ${pc.connectionState} / ice: ${pc.iceConnectionState}`); }
+      if (state === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+        restartAttempts = 0;
+        markConnected();
+        void logCallRoute(pc);
+      } else if (state === 'failed') {
+        // All candidate pairs (direct, STUN and TURN relay) failed: restart ICE right away.
+        scheduleRestart('ice failed', 0);
+        scheduleHangUp('The call could not connect. Check your internet connection and try again.', 40000);
+      } else if (state === 'disconnected') {
+        // Brief drops (switching Wi-Fi / mobile data) often recover by themselves; restart if not.
+        scheduleRestart('disconnected', 2500);
+        scheduleHangUp('Call dropped: the connection was lost.', 40000);
       }
+    };
+    pc.onicecandidateerror = event => {
+      const error = event as RTCPeerConnectionIceErrorEvent;
+      // 701 = a STUN/TURN server didn't answer on one network interface; normal on mobile, so debug only.
+      if (error.errorCode !== 701) console.warn('[Call] ICE server error', { url: error.url, code: error.errorCode, text: error.errorText });
     };
     pc.onconnectionstatechange = onState;
     pc.oniceconnectionstatechange = onState;
@@ -730,6 +837,14 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             stopRingtoneRef.current = null;
             if (activeCallRef.current?.status !== 'connected') updateActiveCall({ status: 'connecting' });
           }
+        }
+        if (role === 'receiver' && data.offer?.sdp && appliedOfferSdpRef.current && data.offer.sdp !== appliedOfferSdpRef.current && pc.signalingState === 'stable') {
+          appliedOfferSdpRef.current = data.offer.sdp;
+          console.info('[Call] Answering ICE restart from the caller');
+          await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await updateDoc(doc(firestore, 'calls', callId), { answer: { type: answer.type, sdp: answer.sdp } });
         }
         await applyRemoteCandidates(pc, remoteCandidates(data, role));
         if (data.currentType && data.currentTypeBy !== user?.id && data.currentType !== activeCallRef.current?.callType) {
@@ -865,6 +980,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (activeCallRef.current?.id !== call.id) { media.stream.getTracks().forEach(track => track.stop()); return; }
       if (media.videoFallback) setCallNotice('No camera found, so you joined with audio only.');
       const pc = await createPeer(call.id, 'receiver', media.stream, call.callType);
+      appliedOfferSdpRef.current = data.offer.sdp || '';
       await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
       await applyRemoteCandidates(pc, remoteCandidates(data, 'receiver'));
       const answer = await pc.createAnswer();

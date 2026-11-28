@@ -261,9 +261,9 @@ async function getLegacyLiveHeaders(forceRefresh = false): Promise<Record<string
 }
 
 export const api = {
-  async getCallIceConfig(): Promise<RTCConfiguration> {
-    const res = await fetch(apiUrl('/api/calls/ice-config'), { headers: getHeaders(), cache: 'no-store' });
-    return readResponse<RTCConfiguration>(res, 'Could not load call network configuration');
+  async getCallIceConfig(signal?: AbortSignal): Promise<RTCConfiguration & { provider?: string; hasTurn?: boolean; ttlSeconds?: number }> {
+    const res = await fetch(apiUrl('/api/calls/ice-config'), { headers: getHeaders(), cache: 'no-store', signal });
+    return readResponse<RTCConfiguration & { provider?: string; hasTurn?: boolean; ttlSeconds?: number }>(res, 'Could not load call network configuration');
   },
   // File upload (profile photos, cover photos, media). Returns a loadable URL.
   /** Uploads any file (photo, video, attachment) to Cloudinary and returns its https URL. */

@@ -1,3 +1,4 @@
+import { configuredTurnProvider, getIceConfig } from './server/iceServers.js';
 import { gradientCover, initialsAvatar } from './server/avatar.js';
 import fs from 'fs';
 import http from 'http';
@@ -189,33 +190,18 @@ app.get('/api/health', (_req: Request, res: Response) => {
     status: storage.state === 'degraded' ? 'degraded' : 'ok',
     ...(storage.state === 'degraded' ? { message: 'Database unavailable; using local storage. Data may not persist across restarts.' } : {}),
     uptime: process.uptime(),
-    storage: db.persistenceStats ?? storage.state
+    storage: db.persistenceStats ?? storage.state,
+    turn: configuredTurnProvider()
   });
 });
 
 app.get('/api/calls/ice-config', async (req: Request, res: Response) => {
-  if (!getAuthUser(req)) return res.status(401).json({ error: 'Not authenticated' });
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!accountSid || !authToken) return res.status(503).json({ error: 'TURN credentials are not configured on the server' });
-  try {
-    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Tokens.json`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({ Ttl: '3600' })
-    });
-    const payload = await response.json() as { ice_servers?: RTCIceServer[]; message?: string };
-    if (!response.ok || !Array.isArray(payload.ice_servers) || payload.ice_servers.length === 0) {
-      return res.status(502).json({ error: 'Could not create temporary TURN credentials' });
-    }
-    res.setHeader('Cache-Control', 'no-store');
-    res.json({ iceServers: payload.ice_servers });
-  } catch {
-    res.status(502).json({ error: 'TURN credential service is unavailable' });
-  }
+  const authUser = getAuthUser(req);
+  if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
+  const config = await getIceConfig(authUser.id);
+  if (!config.hasTurn) console.warn('[ICE] No TURN relay configured: calls between different mobile networks may fail. Set METERED_TURN_* (or another TURN provider) on the server.');
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(config);
 });
 
 app.get('/api/site-config', (_req: Request, res: Response) => {
