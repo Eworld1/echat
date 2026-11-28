@@ -29,7 +29,7 @@ import {
   unavailableMessage
 } from '../services/calls';
 import { callDiagnostics, describeIceServers, explainIceError, testTurnRelay } from '../services/callDiagnostics';
-import { joinCallRelay, type CallRelay } from '../services/callRelay';
+import { createWsAudioRelay, TYPE_ECHO, type WsAudioRelay } from '../services/wsAudioRelay';
 export interface IncomingCall {
   id: string; // Firestore document ID
   callerId: string;
@@ -347,8 +347,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const appliedRemoteCandidatesRef = useRef(0);
   /** Receiver: the caller's last offer we answered (a new one = ICE restart). */
   const appliedOfferSdpRef = useRef('');
-  /** LiveKit relay fallback (when P2P + TURN can't connect): the room, and the tracks it delivers. */
-  const relayRef = useRef<CallRelay | null>(null);
+  /** Voice relay over the Render WebSocket (when P2P + TURN can't connect), and the track it plays. */
+  const relayRef = useRef<{ leave: () => void } | null>(null);
+  const wsRelayRef = useRef<WsAudioRelay | null>(null);
+  const relayJoinRef = useRef<{ callId: string; partnerId: string } | null>(null);
+  /** Socket-level relay events (binary audio, join/peer/error/pong) handled next to startRelay. */
+  const relayEventRef = useRef<(event: { binary?: ArrayBuffer; json?: { type: string; [key: string]: unknown } }) => void>(() => {});
   const relayStartingRef = useRef(false);
   const relayActiveRef = useRef(false);
   const relayTracksRef = useRef(new Map<string, MediaStreamTrack>());
@@ -566,6 +570,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const connect = () => {
     const ws = new WebSocket(wsUrl());
+    ws.binaryType = 'arraybuffer';
     socketRef.current = ws;
 
     ws.onopen = () => {
@@ -595,8 +600,17 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     ws.onmessage = async (event) => {
+      if (typeof event.data !== 'string') {
+        if (event.data instanceof ArrayBuffer) relayEventRef.current({ binary: event.data });
+        return;
+      }
       try {
         const data = JSON.parse(event.data);
+        if (typeof data?.type === 'string' && data.type.startsWith('call_relay_')) { relayEventRef.current({ json: data }); return; }
+        // Signed in again after a reconnect: rejoin the voice relay of the call in progress.
+        if (data?.type === 'online_users_list' && relayJoinRef.current && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'call_relay_join', ...relayJoinRef.current }));
+        }
 
         switch (data.type) {
           case 'online_users_list':
@@ -873,7 +887,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('[Call] Not connected after 10s', callDiagnostics.get());
         callDiagnostics.note('Not connected after 10s');
         setCallNotice('Still connecting… switching to the relay server.');
-        // Both sides do this on their own: TURN relay restart AND the LiveKit relay; first one to carry audio wins.
+        // Both sides do this on their own: TURN relay restart AND the eChat server voice relay; first one to carry audio wins.
         void restartIce('not connected after 10s', true);
         startRelayRef.current(callId, 'not connected after 10s');
         scheduleHangUp('Could not connect the call. The network may be blocking calls — try again or switch networks.', 20000);
@@ -891,7 +905,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         markConnected();
         void logCallRoute(pc);
       } else if (state === 'failed') {
-        // All candidate pairs failed: restart ICE right away (relay only) and bring in the LiveKit relay.
+        // All candidate pairs failed: restart ICE right away (relay only) and start the eChat server voice relay.
         scheduleRestart('ice failed', 0, true);
         startRelayRef.current(callId, 'ice failed');
         scheduleHangUp('Could not connect the call. The network may be blocking calls — try again or switch networks.', 20000);
@@ -994,54 +1008,138 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const hangUpRef = useRef(hangUp);
   hangUpRef.current = hangUp;
 
-  /** Join the LiveKit relay room for this call (once). Remote audio/video from it replaces P2P. */
+  /** Mark the call connected through the voice relay (first audio from the partner arrived). */
+  const activateRelay = (track: MediaStreamTrack) => {
+    relayTracksRef.current.clear();
+    relayTracksRef.current.set(track.id, track);
+    if (relayActiveRef.current) return;
+    relayActiveRef.current = true;
+    console.info('[Call] connected via eChat server voice relay (Render WebSocket)');
+    callDiagnostics.set({ route: 'eChat server relay (voice)' });
+    callDiagnostics.note('relay: receiving audio from partner');
+    if (disconnectTimerRef.current) { clearTimeout(disconnectTimerRef.current); disconnectTimerRef.current = null; }
+    stopRingtoneRef.current?.();
+    stopRingtoneRef.current = null;
+    connectedAtRef.current = connectedAtRef.current || Date.now();
+    setCallNotice(notice => notice?.startsWith('Still connecting') ? null : notice);
+    if (activeCallRef.current?.callType === 'video') setCallNotice('Connected through the eChat relay: voice only on this network.');
+    if (activeCallRef.current?.status !== 'connected') updateActiveCall({ status: 'connected', startedAt: connectedAtRef.current });
+    publishRemoteTracks();
+  };
+
+  const pendingTestsRef = useRef(new Map<string, (value: number) => void>());
+  relayEventRef.current = ({ binary, json }) => {
+    if (binary) {
+      const bytes = new Uint8Array(binary);
+      if (bytes[0] === TYPE_ECHO) { pendingTestsRef.current.get('echo')?.(Date.now()); return; }
+      const relay = wsRelayRef.current;
+      if (!relay || !relayJoinRef.current) return;
+      relay.receive(binary);
+      if (!relayActiveRef.current) activateRelay(relay.outputTrack);
+      return;
+    }
+    if (!json) return;
+    if (json.type === 'call_relay_pong') { pendingTestsRef.current.get('pong')?.(json.signedIn ? 1 : 0); return; }
+    if (json.callId && json.callId !== relayJoinRef.current?.callId) return;
+    if (json.type === 'call_relay_joined') callDiagnostics.note(`relay: joined on server (partner ${json.partnerPresent ? 'already there' : 'not there yet'})`);
+    else if (json.type === 'call_relay_peer') {
+      callDiagnostics.note(`relay: partner ${json.present ? 'joined' : 'left'} the relay`);
+      if (!json.present && relayActiveRef.current) {
+        const pc = peerConnectionRef.current;
+        const p2pUp = pc && (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed');
+        if (!p2pUp) { setCallNotice('Call dropped: the connection was lost.'); void hangUpRef.current(); }
+      }
+    } else if (json.type === 'call_relay_error') {
+      console.error('[Call] relay error from server:', json.error);
+      callDiagnostics.note(`relay ERROR from server: ${String(json.error)}`);
+    }
+  };
+
+  /**
+   * Start the voice relay through the eChat server (Render). Both sides do this on their own after
+   * 10s without a WebRTC connection; audio flows as soon as both have joined.
+   */
   startRelayRef.current = (callId: string, reason: string) => {
     const stream = localStreamRef.current;
-    if (relayRef.current || relayStartingRef.current || !stream || activeCallRef.current?.id !== callId) return;
+    const call = activeCallRef.current;
+    if (relayRef.current || relayStartingRef.current || !stream || call?.id !== callId) return;
+    const ws = socketRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      const line = `relay FAILED: socket to the eChat server is not connected (state ${ws ? ws.readyState : 'none'})`;
+      console.error(`[Call] ${line}`);
+      callDiagnostics.note(line);
+      return;
+    }
+    const context = getCallAudioContext();
+    if (!context) { callDiagnostics.note('relay FAILED: this browser has no Web Audio'); return; }
     relayStartingRef.current = true;
-    console.info(`[Call] Starting LiveKit relay (${reason})`);
-    callDiagnostics.note(`LiveKit relay: starting (${reason})`);
-    const stillThisCall = () => activeCallRef.current?.id === callId;
-    joinCallRelay(callId, stream, {
-      onRemoteTrack: track => {
-        if (!stillThisCall()) return;
-        relayTracksRef.current.set(track.id, track);
-        if (!relayActiveRef.current) {
-          relayActiveRef.current = true;
-          console.info('[Call] connected via LiveKit relay');
-          callDiagnostics.set({ route: 'LiveKit relay' });
-          if (disconnectTimerRef.current) { clearTimeout(disconnectTimerRef.current); disconnectTimerRef.current = null; }
-          stopRingtoneRef.current?.();
-          stopRingtoneRef.current = null;
-          connectedAtRef.current = connectedAtRef.current || Date.now();
-          setCallNotice(notice => notice?.startsWith('Still connecting') ? null : notice);
-          if (activeCallRef.current?.status !== 'connected') updateActiveCall({ status: 'connected', startedAt: connectedAtRef.current });
+    console.info(`[Call] Starting eChat server voice relay (${reason})`);
+    callDiagnostics.note(`relay: starting (${reason})`);
+    const send = (frame: ArrayBuffer) => {
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > 256 * 1024) return false;
+      socket.send(frame);
+      return true;
+    };
+    createWsAudioRelay(context, stream, send).then(relay => {
+      if (activeCallRef.current?.id !== callId) { relay.stop(); return; }
+      wsRelayRef.current = relay;
+      relayJoinRef.current = { callId, partnerId: call.partnerId };
+      socketRef.current?.send(JSON.stringify({ type: 'call_relay_join', callId, partnerId: call.partnerId }));
+      const watchdog = window.setInterval(() => {
+        if (activeCallRef.current?.id !== callId || !wsRelayRef.current) { window.clearInterval(watchdog); return; }
+        const { sent, received, dropped } = wsRelayRef.current.stats();
+        callDiagnostics.set({ route: relayActiveRef.current ? `eChat server relay (voice) · sent ${sent} recv ${received} drop ${dropped}` : callDiagnostics.get().route });
+        if (!relayActiveRef.current) callDiagnostics.note(`relay: waiting for partner audio (sent ${sent}, received ${received})`);
+      }, 5000);
+      relayRef.current = {
+        leave: () => {
+          window.clearInterval(watchdog);
+          const socket = socketRef.current;
+          if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'call_relay_leave', callId }));
+          relay.stop();
+          wsRelayRef.current = null;
+          relayJoinRef.current = null;
         }
-        publishRemoteTracks();
-      },
-      onRemoteTrackEnded: track => { relayTracksRef.current.delete(track.id); if (stillThisCall()) publishRemoteTracks(); },
-      onConnected: () => callDiagnostics.set({ route: callDiagnostics.get().route || 'LiveKit relay (waiting for the other side)' }),
-      onDisconnected: why => {
-        callDiagnostics.note(`LiveKit relay: disconnected (${why})`);
-        relayRef.current = null;
-        if (stillThisCall() && relayActiveRef.current) {
-          const pc = peerConnectionRef.current;
-          relayActiveRef.current = false;
-          relayTracksRef.current.clear();
-          const p2pUp = pc && (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed');
-          if (p2pUp) publishRemoteTracks();
-          else { setCallNotice('Call dropped: the connection was lost.'); void hangUpRef.current(); }
-        }
-      },
-      onLog: line => { console.info(`[Call] ${line}`); callDiagnostics.note(line); }
-    }).then(relay => {
-      if (!stillThisCall()) { relay.leave(); return; }
-      relayRef.current = relay;
+      };
     }).catch(error => {
-      logCallSetupError('LiveKit relay', error);
-      callDiagnostics.note(`LiveKit relay failed: ${error instanceof Error ? error.message : String(error)}`);
+      const line = `relay FAILED: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`;
+      logCallSetupError('Voice relay', error);
+      callDiagnostics.note(line);
     }).finally(() => { relayStartingRef.current = false; });
   };
+
+  /** Console / debug-panel test of the relay path: JSON ping and a binary echo through the eChat server. */
+  useEffect(() => {
+    (window as Window & { echatTestRelay?: () => Promise<string> }).echatTestRelay = async () => {
+      const ws = socketRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        const line = `RELAY TEST FAILED: socket to the eChat server is not open (state ${ws ? ws.readyState : 'none'})`;
+        callDiagnostics.note(line); console.error(`[Call] ${line}`); return line;
+      }
+      const wait = (key: string, ms: number) => new Promise<number>((resolve, reject) => {
+        const timer = window.setTimeout(() => { pendingTestsRef.current.delete(key); reject(new Error(`no ${key} in ${ms / 1000}s`)); }, ms);
+        pendingTestsRef.current.set(key, value => { window.clearTimeout(timer); pendingTestsRef.current.delete(key); resolve(value); });
+      });
+      try {
+        let started = Date.now();
+        const pong = wait('pong', 5000);
+        ws.send(JSON.stringify({ type: 'call_relay_ping', t: started }));
+        const signedIn = await pong;
+        const pingMs = Date.now() - started;
+        started = Date.now();
+        const echo = wait('echo', 5000);
+        const frame = new Uint8Array(643); frame[0] = TYPE_ECHO;
+        ws.send(frame.buffer);
+        await echo;
+        const line = `RELAY TEST OK: server reachable (ping ${pingMs}ms, audio-size echo ${Date.now() - started}ms), socket ${signedIn ? 'signed in' : 'NOT signed in — relay will refuse to join'}`;
+        callDiagnostics.note(line); console.info(`[Call] ${line}`); return line;
+      } catch (error) {
+        const line = `RELAY TEST FAILED: ${error instanceof Error ? error.message : String(error)}`;
+        callDiagnostics.note(line); console.error(`[Call] ${line}`); return line;
+      }
+    };
+  }, []);
 
   // Start outgoing call
   const startCall = async (targetUserId: string, targetName: string, targetAvatar: string, callType: 'audio' | 'video') => {

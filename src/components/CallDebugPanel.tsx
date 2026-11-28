@@ -11,6 +11,12 @@ export const CallDebugPanel: React.FC<{ active: boolean }> = ({ active }) => {
   const [open, setOpen] = useState(active);
   const info = useSyncExternalStore(callDiagnostics.subscribe, callDiagnostics.get, callDiagnostics.get);
   if (!enabled) return null;
+  const runRelayTest = async () => {
+    setOpen(true);
+    setTesting(true);
+    try { await (window as Window & { echatTestRelay?: () => Promise<string> }).echatTestRelay?.(); }
+    finally { setTesting(false); }
+  };
   const runTest = async () => {
     setTesting(true);
     setOpen(true);
@@ -22,6 +28,7 @@ export const CallDebugPanel: React.FC<{ active: boolean }> = ({ active }) => {
       <div className="mb-1 flex items-center gap-2">
         <b className="flex-1 text-white">Call debug{active ? '' : ' (no call)'}</b>
         <button type="button" onClick={() => void runTest()} disabled={testing} className="rounded bg-emerald-600 px-2 py-0.5 text-white disabled:opacity-50">{testing ? 'Testing…' : 'Test TURN'}</button>
+        <button type="button" onClick={() => void runRelayTest()} disabled={testing} className="rounded bg-sky-600 px-2 py-0.5 text-white disabled:opacity-50">Test relay</button>
         <button type="button" onClick={() => setOpen(value => !value)} className="rounded bg-white/15 px-2 py-0.5 text-white">{open ? 'Hide' : 'Show'}</button>
       </div>
       {open && <>

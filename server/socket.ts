@@ -11,6 +11,13 @@ export class SocketManager {
   private wss: WebSocketServer;
   private userSockets: Map<string, Set<WebSocket>> = new Map();
   private liveHosts = new Map<string, string>();
+  /**
+   * Call audio relay (fallback when WebRTC can't connect, e.g. a carrier blocks TURN): each socket can
+   * be in one call relay. Audio frames go only to the partner's relay socket, and only when BOTH sides
+   * joined the same callId naming each other — a third person can't listen in by guessing an id.
+   */
+  private relayOf = new Map<WebSocket, { callId: string; userId: string; partnerId: string }>();
+  private relayFramesForwarded = 0;
 
   // Calls that are ringing and have not been answered, declined or cancelled yet.
   private pendingCalls = new Map<string, { callerId: string; receiverId: string; callType: 'audio' | 'video'; timer: ReturnType<typeof setTimeout> }>();
@@ -81,7 +88,8 @@ export class SocketManager {
     this.wss.on('connection', (ws: WebSocket) => {
       let currentUserId: string | undefined;
 
-      ws.on('message', (data: string) => {
+      ws.on('message', (data: Buffer, isBinary: boolean) => {
+        if (isBinary) { this.forwardRelayFrame(ws, data); return; }
         try {
           const payload = JSON.parse(data.toString());
           this.handleMessage(ws, payload, (userId) => {
@@ -93,6 +101,7 @@ export class SocketManager {
       });
 
       ws.on('close', () => {
+        this.leaveRelay(ws);
         if (currentUserId) {
           const set = this.userSockets.get(currentUserId);
           if (set) {
@@ -114,6 +123,40 @@ export class SocketManager {
       // Send initial connection ack
       ws.send(JSON.stringify({ type: 'connected', timestamp: Date.now() }));
     });
+  }
+
+  private relayPartnerSocket(ws: WebSocket): WebSocket | null {
+    const me = this.relayOf.get(ws);
+    if (!me) return null;
+    for (const socket of this.userSockets.get(me.partnerId) || []) {
+      const other = this.relayOf.get(socket);
+      if (other && other.callId === me.callId && other.partnerId === me.userId && socket.readyState === WebSocket.OPEN) return socket;
+    }
+    return null;
+  }
+
+  private forwardRelayFrame(ws: WebSocket, data: Buffer) {
+    if (data.length < 2 || data.length > 8192) return;
+    // 0x02 = echo test: bounce it straight back (lets a phone check the binary path to the server).
+    if (data[0] === 0x02) { if (ws.readyState === WebSocket.OPEN) ws.send(data, { binary: true }); return; }
+    const partner = this.relayPartnerSocket(ws);
+    if (!partner) return;
+    // Drop audio instead of queueing when the partner's connection is backed up (keeps latency low).
+    if (partner.bufferedAmount > 64 * 1024) return;
+    partner.send(data, { binary: true });
+    this.relayFramesForwarded += 1;
+  }
+
+  private leaveRelay(ws: WebSocket) {
+    const me = this.relayOf.get(ws);
+    if (!me) return;
+    const partner = this.relayPartnerSocket(ws);
+    this.relayOf.delete(ws);
+    if (partner) partner.send(JSON.stringify({ type: 'call_relay_peer', callId: me.callId, present: false }));
+  }
+
+  public relayStats() {
+    return { relaySockets: this.relayOf.size, relayFramesForwarded: this.relayFramesForwarded };
   }
 
   /** Only called after the "auth" message was verified. */
@@ -138,6 +181,29 @@ export class SocketManager {
         void this.authVerifier(userId, typeof idToken === 'string' ? idToken : '')
           .then(ok => { if (!ok) fail(); else if (ws.readyState === WebSocket.OPEN) this.registerSocket(ws, userId, setCurrentUser); })
           .catch(fail);
+        break;
+      }
+
+      case 'call_relay_join': {
+        const userId = this.userIdOf(ws);
+        const callId = typeof payload.callId === 'string' ? payload.callId.slice(0, 128) : '';
+        const partnerId = typeof payload.partnerId === 'string' ? payload.partnerId.slice(0, 128) : '';
+        if (!userId) { ws.send(JSON.stringify({ type: 'call_relay_error', callId, error: 'socket not signed in (auth not verified)' })); return; }
+        if (!callId || !partnerId || partnerId === userId) { ws.send(JSON.stringify({ type: 'call_relay_error', callId, error: 'bad relay join' })); return; }
+        this.relayOf.set(ws, { callId, userId, partnerId });
+        const partner = this.relayPartnerSocket(ws);
+        ws.send(JSON.stringify({ type: 'call_relay_joined', callId, partnerPresent: Boolean(partner) }));
+        if (partner) partner.send(JSON.stringify({ type: 'call_relay_peer', callId, present: true }));
+        break;
+      }
+
+      case 'call_relay_leave': {
+        this.leaveRelay(ws);
+        break;
+      }
+
+      case 'call_relay_ping': {
+        ws.send(JSON.stringify({ type: 'call_relay_pong', t: Number(payload.t) || 0, signedIn: Boolean(this.userIdOf(ws)) }));
         break;
       }
 

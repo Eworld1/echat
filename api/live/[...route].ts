@@ -1,7 +1,6 @@
 import type { ApiRequest, ApiResponse } from '../../serverless/live.js';
 import { applyLiveCors, handleError, handleLiveOptions, sendJson, verifyLiveUser } from '../../serverless/live.js';
 import auth from '../../serverless/live-routes/auth.js';
-import callRelay from '../../serverless/live-routes/call-relay.js';
 import current from '../../serverless/live-routes/current.js';
 import end from '../../serverless/live-routes/end.js';
 import heartbeat from '../../serverless/live-routes/heartbeat.js';
@@ -38,7 +37,6 @@ async function handleStreamKey(req: ApiRequest, res: ApiResponse, reset = false)
 
 const handlers: Record<string, (req: ApiRequest, res: ApiResponse) => Promise<void>> = {
   auth,
-  'call-relay': callRelay,
   current,
   end,
   heartbeat,

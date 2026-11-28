@@ -261,12 +261,6 @@ async function getLegacyLiveHeaders(forceRefresh = false): Promise<Record<string
 }
 
 export const api = {
-  /** LiveKit relay room for a 1:1 call (fallback when P2P/TURN can't connect). Vercel route. */
-  async getCallRelayToken(callId: string): Promise<{ url: string; token: string; room: string }> {
-    const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : '';
-    const res = await fetch(apiUrl('/api/live/call-relay'), { method: 'POST', headers: idToken ? getHeaders({ 'x-firebase-id-token': idToken }) : await getVercelLiveHeaders(), body: JSON.stringify({ callId }), cache: 'no-store' });
-    return readResponse<{ url: string; token: string; room: string }>(res, 'Could not start the call relay');
-  },
   async getCallIceConfig(signal?: AbortSignal, userId?: string): Promise<RTCConfiguration & { provider?: string; hasTurn?: boolean; ttlSeconds?: number }> {
     const res = await fetch(apiUrl('/api/calls/ice-config'), { headers: getHeaders(userId ? { 'x-user-id': userId } : {}), cache: 'no-store', signal });
     return readResponse<RTCConfiguration & { provider?: string; hasTurn?: boolean; ttlSeconds?: number }>(res, 'Could not load call network configuration');
