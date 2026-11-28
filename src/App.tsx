@@ -1,4 +1,5 @@
 import { AvatarViewerHost } from './components/AvatarViewer';
+import { OPEN_PROFILE_EVENT } from './utils/profileNav';
 import { PushPermissionPrompt } from './components/PushNotifications';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { badgeLabel, useUnreadCounts } from './services/unread';
@@ -265,6 +266,18 @@ export function MainApp() {
     setMobileMenuOpen(false);
     handleNavigate(view, targetProfileId);
   };
+
+  // Tapping a name/photo anywhere (feed, comments, messages, stories) opens that profile.
+  const navigateRef = useRef(handleNavigate);
+  navigateRef.current = handleNavigate;
+  useEffect(() => {
+    const open = (event: Event) => {
+      const userId = (event as CustomEvent<string>).detail;
+      if (userId) navigateRef.current('profile', userId);
+    };
+    window.addEventListener(OPEN_PROFILE_EVENT, open);
+    return () => window.removeEventListener(OPEN_PROFILE_EVENT, open);
+  }, []);
 
   useEffect(() => {
     if (!window.history.state?.echatApp) window.history.pushState({ echatApp: true, tab: currentViewRef.current }, '', `${window.location.pathname}${window.location.search}`);

@@ -70,7 +70,7 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
   return (
     <article id={`post-${post.id}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <header className="flex items-start gap-3 px-4 pb-2 pt-3">
-        <UserAvatar src={author.avatar || post.newPhotoURL} name={name} size={40} onClick={view} className="ring-1 ring-slate-200" />
+        <UserAvatar src={author.avatar || post.newPhotoURL} name={name} size={40} onClick={() => onViewProfile(post.userId)} className="ring-1 ring-slate-200" />
         <div className="min-w-0 flex-1">
           <p className="text-[15px] leading-5 text-slate-900">
             <button type="button" onClick={() => onViewProfile(post.userId)} className="font-bold hover:underline">{name}</button>{(author.isVerified || author.isOfficialDeveloper) && <span className="ml-1 inline-flex align-[-2px]"><VerifiedBadge size={14} /></span>}
@@ -124,7 +124,7 @@ export const ProfilePhotoPostCard: React.FC<Props> = ({ post, onViewProfile }) =
         <div className="space-y-3 border-t border-slate-200 px-4 py-3">
           {comments.map(saved => { const comment = { ...saved, ...(live[saved.userId]?.name ? { userName: live[saved.userId].name! } : {}), ...(live[saved.userId]?.avatar ? { userAvatar: live[saved.userId].avatar! } : {}) }; return (
             <div key={comment.id} className="flex gap-2">
-              <UserAvatar src={comment.userAvatar} name={comment.userName} size={32} onClick={() => openAvatarViewer({ userId: comment.userId, name: comment.userName, avatar: comment.userAvatar })} />
+              <UserAvatar src={comment.userAvatar} name={comment.userName} size={32} onClick={() => onViewProfile(comment.userId)} />
               <div className="min-w-0 flex-1">
                 <div className="inline-block max-w-full rounded-2xl bg-slate-100 px-3 py-2">
                   <button type="button" onClick={() => onViewProfile(comment.userId)} className="text-xs font-bold text-slate-900 hover:underline">{comment.userName}</button>

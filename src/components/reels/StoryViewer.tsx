@@ -9,9 +9,11 @@ import { listenFollowingIds } from '../../services/liveDiscovery';
 import { StickerPreview } from './CreateStudio';
 import {
   DEFAULT_EDIT, IMAGE_SECONDS, MAX_STORY_SECONDS, addStoryComment, countStoryShare, deleteStory, deleteStoryComment, filterCss,
-  listenMyStoryLikes, listenMyStorySaves, listenStoryComments, listenStoryVotes, recordStoryView, setStoryLike, setStorySave, voteOnStory,
-  type MediaEdit, type StoryComment, type StorySticker
+  listenMyStoryLikes, listenMyStorySaves, listenStoryComments, listenStoryViewers, listenStoryVotes, recordStoryView, setStoryLike, setStorySave, voteOnStory,
+  type MediaEdit, type StoryComment, type StorySticker, type StoryViewRecord
 } from '../../services/reels/reelsStore';
+import { UserAvatar } from '../UserAvatar';
+import { openUserProfile } from '../../utils/profileNav';
 import type { User } from '../../types';
 import { useLiveList } from '../../services/liveProfiles';
 const NO_COMMENTS: StoryComment[] = [];
@@ -38,6 +40,8 @@ export interface ViewerStory {
   stickers: StorySticker[];
   views: number;
   legacyAuthor?: User;
+  /** Server (legacy) stories carry their viewers inline. */
+  legacyViewers?: { userId: string; viewedAt: number; name?: string; avatar?: string }[];
   /** TikTok-style photo carousel (new stories): each photo is its own slide, music plays across them. */
   carousel?: boolean;
   slides?: StorySlide[];
@@ -161,7 +165,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ groups, startGroup, st
   /* ---- pause state ---- */
   const [held, setHeld] = useState(false);
   const [typing, setTyping] = useState(false);
-  const [sheet, setSheet] = useState<'' | 'comments' | 'share' | 'volume' | 'menu'>('');
+  const [sheet, setSheet] = useState<'' | 'comments' | 'share' | 'volume' | 'menu' | 'viewers'>('');
   const [hidden, setHidden] = useState(() => document.hidden);
   useEffect(() => { const onVisibility = () => setHidden(document.hidden); document.addEventListener('visibilitychange', onVisibility); return () => document.removeEventListener('visibilitychange', onVisibility); }, []);
 
@@ -566,8 +570,10 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ groups, startGroup, st
         <div className="absolute inset-x-0 bottom-0 z-30 space-y-2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-white">
           <div className="max-w-[calc(100%-4.5rem)] space-y-1.5">
             <div className="flex items-center gap-2">
-              <img src={group.authorAvatar || '/logo-mark-blue.svg'} alt="" className="h-9 w-9 rounded-full border-2 object-cover" style={{ borderColor: GOLD }} />
-              <p className="min-w-0 truncate text-[15px] font-extrabold">{group.authorName}</p>
+              <button type="button" disabled={preview} onClick={() => { onClose(); openUserProfile(group.authorId); }} aria-label={`View ${group.authorName}'s profile`} className="flex min-w-0 items-center gap-2 text-left">
+                <UserAvatar src={group.authorAvatar} name={group.authorName || 'Echat user'} size={36} className="border-2" />
+                <span className="min-w-0 truncate text-[15px] font-extrabold hover:underline">{group.authorName}</span>
+              </button>
               <span className="shrink-0 text-xs text-white/70">· {timeAgo(story.createdAt)}</span>
             </div>
             {story.caption && <p className="line-clamp-3 whitespace-pre-wrap break-words text-sm leading-snug">{story.caption}</p>}
@@ -582,7 +588,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ groups, startGroup, st
                 )}
               </div>
             )}
-            {isOwn && !preview && <p className="flex items-center gap-1.5 text-xs font-semibold text-white/80"><Eye size={14} />{story.views} {story.views === 1 ? 'view' : 'views'}</p>}
+            {isOwn && !preview && <button type="button" onClick={() => setSheet('viewers')} aria-label={`${story.views} views. See who viewed`} className="flex min-h-9 items-center gap-1.5 rounded-full bg-black/40 px-3 text-xs font-semibold text-white"><Eye size={14} />{story.views} {story.views === 1 ? 'view' : 'views'} · See who viewed</button>}
           </div>
 
           {!isOwn && !preview && (
@@ -596,6 +602,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ groups, startGroup, st
           )}
         </div>
 
+        {sheet === 'viewers' && isOwn && !preview && <ViewersSheet story={story} ownerId={uid} onClose={() => setSheet('')} onOpenProfile={id => { onClose(); openUserProfile(id); }} />}
         {sheet === 'comments' && interactive && <CommentsSheet story={story} uid={uid} isOwnStory={isOwn} onClose={() => setSheet('')} onTyping={setTyping} />}
         {sheet === 'share' && interactive && <ShareSheet story={story} onClose={() => setSheet('')} onDone={message => { setSheet(''); setToast(message); }} />}
       </div>
@@ -612,6 +619,43 @@ const RailButton: React.FC<{ label: string; count?: number; onClick: () => void;
 );
 
 /* ------------------------------------------------------------------ comments */
+
+/** Owner-only list of who viewed this story: photo, name, time. */
+const ViewersSheet: React.FC<{ story: ViewerStory; ownerId: string; onClose: () => void; onOpenProfile: (id: string) => void }> = ({ story, ownerId, onClose, onOpenProfile }) => {
+  const [firestoreViews, setFirestoreViews] = useState<StoryViewRecord[] | null>(story.source === 'firestore' ? null : []);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (story.source !== 'firestore') return;
+    return listenStoryViewers(story.id, ownerId, setFirestoreViews, () => { setFirestoreViews([]); setError('Could not load viewers.'); });
+  }, [story.id, story.source, ownerId]);
+  const saved = useMemo(() => story.source === 'legacy'
+    ? [...(story.legacyViewers || [])].filter(view => view.userId !== ownerId).sort((a, b) => b.viewedAt - a.viewedAt).map(view => ({ userId: view.userId, viewedAt: view.viewedAt, name: view.name || '', avatar: view.avatar || '' }))
+    : (firestoreViews || []).map(view => ({ ...view, name: '', avatar: '' })), [story, firestoreViews, ownerId]);
+  const viewers = useLiveList(saved, 'userId', 'name', 'avatar');
+  return (
+    <div className="absolute inset-0 z-40 flex items-end bg-black/50" onClick={onClose}>
+      <section role="dialog" aria-modal="true" aria-label="Story viewers" onClick={event => event.stopPropagation()} className="max-h-[70%] w-full overflow-y-auto rounded-t-2xl bg-white p-4 text-slate-900">
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300" />
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-base font-bold"><Eye size={18} />Viewers ({firestoreViews === null ? story.views : viewers.length})</h2>
+          <button type="button" onClick={onClose} aria-label="Close viewers" className="grid h-10 w-10 place-items-center rounded-full hover:bg-slate-100"><X size={20} /></button>
+        </div>
+        {error && <p role="alert" className="mt-2 text-xs font-semibold text-rose-600">{error}</p>}
+        {firestoreViews === null ? <p className="flex items-center justify-center gap-2 py-8 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" />Loading viewers…</p>
+          : viewers.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">No views yet.</p>
+          : <ul className="mt-2 divide-y divide-slate-100">{viewers.map(view => (
+            <li key={view.userId}>
+              <button type="button" onClick={() => onOpenProfile(view.userId)} className="flex w-full items-center gap-3 py-2.5 text-left">
+                <UserAvatar src={view.avatar} name={view.name || 'Echat user'} size={40} />
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold">{view.name || 'Echat user'}</span>
+                <time className="shrink-0 text-xs text-slate-500">{timeAgo(view.viewedAt)}</time>
+              </button>
+            </li>
+          ))}</ul>}
+      </section>
+    </div>
+  );
+};
 
 const CommentsSheet: React.FC<{ story: ViewerStory; uid: string; isOwnStory: boolean; onClose: () => void; onTyping: (typing: boolean) => void }> = ({ story, uid, isOwnStory, onClose, onTyping }) => {
   const { user } = useAuth();

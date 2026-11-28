@@ -1,6 +1,5 @@
 import { usePreferences } from '../context/PreferencesContext';
 import { UserAvatar } from './UserAvatar';
-import { openAvatarViewer } from './AvatarViewer';
 import { getReelsMuted, setReelsMuted } from '../services/reels/reelSound';
 import { SharePostModal, postPermalink } from './SharePostModal';
 import { initialsAvatar } from '../utils/avatar';
@@ -36,6 +35,7 @@ import {
   Users,
   Send,
   Download
+  , Eye
   , Play
   , Loader2
 } from 'lucide-react';
@@ -342,6 +342,31 @@ export const PostCard: React.FC<PostCardProps> = ({
   const network = typeof navigator !== 'undefined' ? (navigator as Navigator & { connection?: { type?: string; effectiveType?: string } }).connection : undefined;
   const autoplayBlockedByDataSaver = wifiOnlyAutoplay && (network?.type === 'cellular' || ['slow-2g', '2g', '3g'].includes(network?.effectiveType || ''));
 
+  const handleDownloadMedia = async () => {
+    const url = assetUrl(postMediaUrls[0] || '');
+    if (!url) return;
+    if (post.mediaType !== 'video') {
+      for (let index = 0; index < postMediaUrls.length; index++) await saveTileImage(index);
+      return;
+    }
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('download failed');
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `echat-${post.id}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+      setImageToast('Video saved to your device');
+    } catch {
+      // Cross-origin or offline: open the file so the browser's own download/save works.
+      window.open(url, '_blank', 'noopener');
+    }
+  };
+
   const handleToggleSave = async () => {
     if (!user) return;
     setIsSaving(true);
@@ -349,6 +374,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       const { savedPosts } = await api.toggleSavePost(post.id);
       updateUser({ ...user, savedPosts });
       setShowOptions(false);
+      setImageToast(savedPosts.includes(post.id) ? 'Saved to Menu > Saved' : 'Removed from Saved');
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Could not update your saved posts.');
     } finally {
@@ -453,7 +479,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* Post Header */}
       <div className={reelMode ? 'absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/75 to-transparent p-3 pb-7 text-white' : 'p-4 flex items-center justify-between'}>
         <div className="flex items-center gap-3">
-          <UserAvatar src={author.avatar} name={author.name || 'EChat user'} size={40} onClick={() => openAvatarViewer({ userId: author.id, name: author.name || 'EChat user', avatar: author.avatar })} className={reelMode ? 'ring-2 ring-white/80' : 'ring-1 ring-slate-200'} />
+          <UserAvatar src={author.avatar} name={author.name || 'EChat user'} size={40} onClick={() => onViewProfile(author.id)} className={reelMode ? 'ring-2 ring-white/80' : 'ring-1 ring-slate-200'} />
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
               <span
@@ -754,7 +780,9 @@ export const PostCard: React.FC<PostCardProps> = ({
             <div className="flex shrink-0 items-center gap-3 text-[13px] text-slate-500">
               {(post.comments || []).length > 0 && <button onClick={() => setShowComments(!showComments)} className="whitespace-nowrap hover:underline">{(post.comments || []).length} comment{(post.comments || []).length === 1 ? '' : 's'}</button>}
               {(post.sharesCount || 0) > 0 && <span className="whitespace-nowrap">{post.sharesCount} share{post.sharesCount === 1 ? '' : 's'}</span>}
-              {user?.id === post.authorId && <button onClick={handleLoadPostViewers} className="whitespace-nowrap hover:underline" title="See who viewed this post">{post.viewsCount || 0} views</button>}
+              {user?.id === post.authorId
+                ? <button type="button" onClick={handleLoadPostViewers} className="flex items-center gap-1 whitespace-nowrap hover:underline" title="See who viewed this post" aria-label={`${post.viewsCount || 0} views. See who viewed`}><Eye size={14} />{(post.viewsCount || 0).toLocaleString()}</button>
+                : <span className="flex items-center gap-1 whitespace-nowrap" title="Views" aria-label={`${post.viewsCount || 0} views`}><Eye size={14} />{(post.viewsCount || 0).toLocaleString()}</span>}
             </div>
           </>
         ) : (
@@ -852,7 +880,37 @@ export const PostCard: React.FC<PostCardProps> = ({
           <Share2 size={18} />
           <span>{t('share')}</span>
         </button>
+
+        {/* Save (bookmark) — saved posts appear in Menu > Saved */}
+        {!reelMode && (
+          <button
+            type="button"
+            onClick={() => void handleToggleSave()}
+            disabled={isSaving || !user}
+            aria-pressed={isSaved}
+            aria-label={isSaved ? 'Unsave post' : 'Save post'}
+            title={isSaved ? 'Saved — tap to remove from Saved' : 'Save post'}
+            className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl transition hover:bg-slate-50 disabled:opacity-50 ${isSaved ? 'text-amber-500' : 'text-slate-600'}`}
+          >
+            <Bookmark size={18} className={isSaved ? 'fill-amber-400' : ''} />
+          </button>
+        )}
+
+        {/* Download photo / video */}
+        {!reelMode && !isVoicePost && postMediaUrls.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void handleDownloadMedia()}
+            aria-label={post.mediaType === 'video' ? 'Download video' : 'Download photo'}
+            title={post.mediaType === 'video' ? 'Download video' : 'Download photo'}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-slate-600 transition hover:bg-slate-50"
+          >
+            <Download size={18} />
+          </button>
+        )}
       </div>
+
+      {imageToast && postMediaUrls.length === 0 && <p role="status" className="mx-4 mb-2 rounded-full bg-slate-900 px-4 py-2 text-center text-xs font-semibold text-white">{imageToast}</p>}
 
       {/* Comments Section */}
       {showComments && (
@@ -899,7 +957,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               }), ...withLive({}, liveProfiles[comment.authorId]), ...(user && comment.authorId === user.id ? { name: user.name, avatar: user.avatar } : {}) };
               return (
                 <div key={comment.id} className="flex items-start gap-2.5 group">
-                  <UserAvatar src={commentAuthor.avatar} name={commentAuthor.name || 'EChat user'} size={32} onClick={() => openAvatarViewer({ userId: comment.authorId, name: commentAuthor.name || 'EChat user', avatar: commentAuthor.avatar })} className="mt-0.5" />
+                  <UserAvatar src={commentAuthor.avatar} name={commentAuthor.name || 'EChat user'} size={32} onClick={() => onViewProfile(comment.authorId)} className="mt-0.5" />
                   <div className="flex-1">
                     <div className="bg-white rounded-2xl px-3.5 py-2 shadow-2xs border border-slate-200/70 inline-block max-w-full">
                       <p

@@ -62,7 +62,7 @@ function fromLegacy(story: Story): ViewerStory {
   return {
     key: `legacy_${story.id}`, source: 'legacy', id: story.id, authorId: story.authorId, authorName: story.author?.name || 'EChat user', authorAvatar: story.author?.avatar || '',
     createdAt: story.createdAt, kind: story.type, mediaUrl: story.mediaUrl || '', coverUrl: '', text: story.text, background: story.backgroundGradient,
-    edit: { ...DEFAULT_EDIT }, stickers: [], views: story.viewers?.length || 0, legacyAuthor: story.author
+    edit: { ...DEFAULT_EDIT }, stickers: [], views: story.viewers?.length || 0, legacyAuthor: story.author, legacyViewers: (story.viewers || []).map(view => ({ userId: view.userId, viewedAt: view.viewedAt, name: view.user?.name, avatar: view.user?.avatar }))
   };
 }
 

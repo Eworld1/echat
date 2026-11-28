@@ -505,6 +505,17 @@ export function recordStoryView(id: string, uid = '', ownerId = ''): void {
   }).catch(() => { /* already viewed, or offline */ });
 }
 
+/** Who viewed my story (owner only — firestore.rules let the owner list views by ownerId). Newest first. */
+export interface StoryViewRecord { userId: string; viewedAt: number }
+export function listenStoryViewers(storyId: string, ownerId: string, onViews: (views: StoryViewRecord[]) => void, onError?: (error: Error) => void): Unsubscribe {
+  if (!storyId || !ownerId) { onViews([]); return () => {}; }
+  return onSnapshot(
+    query(collection(db, 'storyViews'), where('ownerId', '==', ownerId), where('storyId', '==', storyId)),
+    snapshot => onViews(snapshot.docs.map(item => ({ userId: str(item.data().userId), viewedAt: num(item.data().viewedAt) })).filter(view => view.userId && view.userId !== ownerId).sort((a, b) => b.viewedAt - a.viewedAt)),
+    error => onError?.(error)
+  );
+}
+
 // ---- story likes / saves / comments / shares (TikTok-style rail) ----
 export function listenMyStoryLikes(uid: string, onIds: (ids: Set<string>) => void): Unsubscribe {
   if (!uid) { onIds(new Set()); return () => {}; }

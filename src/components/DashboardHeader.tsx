@@ -2,8 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { MessageCircle, Radio, ShoppingBag, Users } from 'lucide-react';
 import { collection, getCountFromServer, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { api } from '../services/api';
-import { listenFollowerCount } from '../services/liveDiscovery';
+import { useUnreadCounts } from '../services/unread';
 import { useAuth } from '../context/AuthContext';
 
 const HEADER_COUNTS_TTL_MS = 5 * 60 * 1000;
@@ -34,7 +33,8 @@ interface Stat {
   key: Target;
   label: string;
   value: number | null;
-  sub: string;
+  /** Second line; hidden when empty (e.g. the number is 0). */
+  sub?: string;
   icon: React.ReactNode;
   tint: string;
   glow: string;
@@ -49,12 +49,11 @@ const greeting = () => {
 export const DashboardHeader: React.FC<Props> = ({ onGoLive, onOpen }) => {
   const { user } = useAuth();
   const uid = user?.id || '';
-  const [followers, setFollowers] = useState<number | null>(null);
   const [streams, setStreams] = useState<number | null>(null);
-  const [messages, setMessages] = useState<{ unread: number; chats: number } | null>(null);
+  // Same live counter as the Messages badge, so the two can never disagree.
+  const unread = useUnreadCounts(uid || null);
   const [sales, setSales] = useState<{ sold: number; active: number } | null>(null);
 
-  useEffect(() => (uid ? listenFollowerCount(uid, setFollowers) : undefined), [uid]);
   useEffect(() => {
     if (!uid) return;
     let active = true;
@@ -64,20 +63,18 @@ export const DashboardHeader: React.FC<Props> = ({ onGoLive, onOpen }) => {
       setStreams(counts.streams);
       setSales({ sold: counts.sold, active: Math.max(0, counts.listings - counts.sold) });
     });
-    api.getDmConversations(uid)
-      .then(list => { if (active) setMessages({ unread: list.reduce((sum, item) => sum + (item.unreadCount || 0), 0), chats: list.length }); })
-      .catch(() => { if (active) setMessages({ unread: 0, chats: 0 }); });
     return () => { active = false; };
   }, [uid]);
 
   if (!user) return null;
   const firstName = (user.name || '').trim().split(/\s+/)[0] || 'friend';
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const friendCount = user.friends?.length || 0;
   const stats: Stat[] = [
-    { key: 'profile', label: 'My Followers', value: followers, sub: `${user.friends?.length || 0} friends`, icon: <Users size={20} />, tint: 'from-violet-600 to-purple-500', glow: 'shadow-violet-500/30' },
-    { key: 'live', label: 'My Streams', value: streams, sub: 'times you went live', icon: <Radio size={20} />, tint: 'from-pink-500 to-rose-500', glow: 'shadow-pink-500/30' },
-    { key: 'messages', label: 'My Messages', value: messages?.unread ?? null, sub: messages ? `unread · ${messages.chats} chats` : 'unread', icon: <MessageCircle size={20} />, tint: 'from-blue-600 to-cyan-500', glow: 'shadow-blue-500/30' },
-    { key: 'marketplace', label: 'Marketplace Sales', value: sales?.sold ?? null, sub: sales ? `sold · ${sales.active} active` : 'items sold', icon: <ShoppingBag size={20} />, tint: 'from-amber-500 to-orange-500', glow: 'shadow-amber-500/30' }
+    { key: 'profile', label: 'My Followers', value: friendCount, sub: friendCount ? (friendCount === 1 ? 'friend' : 'friends') : undefined, icon: <Users size={20} />, tint: 'from-violet-600 to-purple-500', glow: 'shadow-violet-500/30' },
+    { key: 'live', label: 'My Streams', value: streams, sub: streams ? 'times you went live' : undefined, icon: <Radio size={20} />, tint: 'from-pink-500 to-rose-500', glow: 'shadow-pink-500/30' },
+    { key: 'messages', label: 'My Messages', value: unread.messages, sub: unread.messages ? 'unread' : undefined, icon: <MessageCircle size={20} />, tint: 'from-blue-600 to-cyan-500', glow: 'shadow-blue-500/30' },
+    { key: 'marketplace', label: 'Marketplace Sales', value: sales?.sold ?? null, sub: sales && (sales.sold || sales.active) ? `sold · ${sales.active} active` : undefined, icon: <ShoppingBag size={20} />, tint: 'from-amber-500 to-orange-500', glow: 'shadow-amber-500/30' }
   ];
 
   return (
@@ -108,7 +105,7 @@ export const DashboardHeader: React.FC<Props> = ({ onGoLive, onOpen }) => {
             </span>
             <span className="min-w-0">
               <span className="block truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">{stat.label}</span>
-              <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{stat.sub}</span>
+              {stat.sub && <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{stat.sub}</span>}
             </span>
           </button>
         ))}

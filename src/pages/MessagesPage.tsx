@@ -3,7 +3,8 @@ import { ChatMediaGate } from '../components/LowData';
 import { ArrowLeft, Camera, Check, Download, MoreVertical, Pencil, Trash2, ExternalLink, FileArchive, FileAudio, FileText, Image as ImageIcon, Mic, MessageSquare, Paperclip, Phone, Play, SendHorizontal, Share2, Smile, Square, Video, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
-import { avatarClick } from '../components/AvatarViewer';
+import { UserAvatar } from '../components/UserAvatar';
+import { profileClick } from '../utils/profileNav';
 import { api, invalidateApiReadCache, type DirectConversation, type DirectMessage } from '../services/api';
 import type { MessageAttachment, User } from '../types';
 import { assetUrl } from '../services/apiBase';
@@ -16,6 +17,24 @@ import { ConfirmDialog, DeleteMessageModal, MessageActionSheet, ReplyQuote, Swip
 import { useLiveProfiles, withLive } from '../services/liveProfiles';
 
 interface MessagesPageProps { initialUserId: string | null; onViewProfile: (userId: string) => void; }
+/** "Active now" / "Active 5m ago" / "Last seen 12 Mar" — '' when we don't know. */
+const lastSeenLabel = (online: boolean, lastSeen?: number) => {
+  if (online) return 'Active now';
+  if (!lastSeen || !Number.isFinite(lastSeen)) return '';
+  const minutes = Math.floor((Date.now() - lastSeen) / 60000);
+  if (minutes < 1) return 'Active just now';
+  if (minutes < 60) return `Active ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Active ${hours}h ago`;
+  return `Last seen ${new Date(lastSeen).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+};
+/** Photo (or coloured first-letter circle) with a green dot when the person is online. */
+const PresenceAvatar: React.FC<{ user: Pick<User, 'id' | 'name' | 'avatar'>; size: number; online: boolean }> = ({ user, size, online }) => (
+  <span className="relative inline-flex shrink-0" onClick={profileClick(user.id)} title={`View ${user.name || 'profile'}`}>
+    <UserAvatar src={user.avatar} name={user.name || 'Echat user'} size={size} className="cursor-pointer" />
+    {online && <span aria-label="Online" className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white" />}
+  </span>
+);
 const timeLabel = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const MAX_MESSAGE_LENGTH = 2000;
 const INPUT_MAX_HEIGHT = 100;
@@ -296,7 +315,8 @@ const MessageComposer: React.FC<ComposerProps> = ({ value, onChange: setValue, o
 
 export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onViewProfile }) => {
   const { user: currentUser } = useAuth();
-  const { startCall, isConnected, onDirectMessage, onDirectMessagesRead } = useSocket();
+  const { startCall, isConnected, onDirectMessage, onDirectMessagesRead, onlineUserIds } = useSocket();
+  const onlineSet = useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
   const [savedConversations, setConversations] = useState<DirectConversation[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string|null>(initialUserId);
   const [savedSelectedUser, setSelectedUser] = useState<User|null>(null);
@@ -684,13 +704,13 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({ initialUserId, onVie
     <div className="grid min-h-0 flex-1 md:grid-cols-[300px_minmax(0,1fr)]">
       <aside className={`${selectedUserId && !showContacts ? 'hidden md:flex' : 'flex'} min-h-0 flex-col border-b border-slate-200 md:border-b-0 md:border-r`}>
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3"><div className="text-sm font-bold text-slate-800">{showContacts ? 'New chat' : 'Your conversations'}</div>{showContacts ? <button type="button" onClick={()=>setShowContacts(false)} className="rounded-lg px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">Back</button> : <button type="button" onClick={()=>setShowContacts(true)} className="rounded-lg px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">New Chat</button>}</div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">{showContacts ? <>{loadingContacts && <p className="px-3 py-6 text-center text-sm text-slate-500">Loading contacts…</p>}{!loadingContacts && contacts.length===0 && <p className="px-3 py-6 text-center text-sm text-slate-500">No contacts available.</p>}{contacts.map(c=><button key={c.id} type="button" onClick={()=>selectContact(c)} className="flex min-h-[64px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-slate-50"><img src={c.avatar} alt="" title="View profile picture" onClick={avatarClick({ userId: c.id, name: c.name, avatar: c.avatar })} className="h-10 w-10 shrink-0 cursor-pointer rounded-full bg-slate-200 object-cover"/><span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{c.name}</span></button>)}</> : <>{loadingList && <p className="px-3 py-6 text-center text-sm text-slate-500">Loading conversations…</p>}{!loadingList && conversations.length===0 && <div className="px-4 py-10 text-center"><p className="font-semibold text-slate-800">No conversations yet</p><p className="mt-1 text-sm text-slate-500">Say hi to start chatting.</p></div>}{conversations.map(item=><button key={item.user.id} type="button" onClick={()=>selectConversation(item)} className={`flex min-h-[72px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-slate-50 ${selectedUserId===item.user.id?'bg-blue-50':''}`}><img src={item.user.avatar} alt="" title="View profile picture" onClick={avatarClick({ userId: item.user.id, name: item.user.name, avatar: item.user.avatar })} className="h-11 w-11 shrink-0 cursor-pointer rounded-full bg-slate-200 object-cover"/><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-900">{item.user.name}</span><span className="block truncate text-xs text-slate-500">{conversationPreview(item.lastMessage)}</span></span><span className="flex shrink-0 flex-col items-end gap-1"><span className="text-[10px] text-slate-400">{timeLabel(item.lastMessage.createdAt)}</span>{item.unreadCount>0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-bold text-white">{item.unreadCount}</span>}</span></button>)}</>}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">{showContacts ? <>{loadingContacts && <p className="px-3 py-6 text-center text-sm text-slate-500">Loading contacts…</p>}{!loadingContacts && contacts.length===0 && <p className="px-3 py-6 text-center text-sm text-slate-500">No contacts available.</p>}{contacts.map(c=><button key={c.id} type="button" onClick={()=>selectContact(c)} className="flex min-h-[64px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-slate-50"><PresenceAvatar user={c} size={40} online={onlineSet.has(c.id)} /><span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{c.name}</span></button>)}</> : <>{loadingList && <p className="px-3 py-6 text-center text-sm text-slate-500">Loading conversations…</p>}{!loadingList && conversations.length===0 && <div className="px-4 py-10 text-center"><p className="font-semibold text-slate-800">No conversations yet</p><p className="mt-1 text-sm text-slate-500">Say hi to start chatting.</p></div>}{conversations.map(item=><button key={item.user.id} type="button" onClick={()=>selectConversation(item)} className={`flex min-h-[72px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-slate-50 ${selectedUserId===item.user.id?'bg-blue-50':''}`}><PresenceAvatar user={item.user} size={44} online={onlineSet.has(item.user.id)} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-900">{item.user.name}</span><span className="block truncate text-xs text-slate-500">{conversationPreview(item.lastMessage)}</span></span><span className="flex shrink-0 flex-col items-end gap-1"><span className="text-[10px] text-slate-400">{timeLabel(item.lastMessage.createdAt)}</span>{item.unreadCount>0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-bold text-white">{item.unreadCount}</span>}</span></button>)}</>}</div>
       </aside>
       <section className={`${selectedUserId && !showContacts ? 'flex' : 'hidden md:flex'} min-h-0 min-w-0 flex-col`}>
         {selectedUser ? <>
           <div className="sticky top-0 z-20 flex min-h-[64px] shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 sm:px-5">
             <button type="button" onClick={()=>setSelectedUserId(null)} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-slate-100 md:hidden" aria-label="Back"><ArrowLeft size={20}/></button>
-            <button type="button" onClick={()=>onViewProfile(selectedUser.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left"><img src={selectedUser.avatar} alt="" title="View profile picture" onClick={avatarClick({ userId: selectedUser.id, name: selectedUser.name, avatar: selectedUser.avatar })} className="h-10 w-10 shrink-0 cursor-pointer rounded-full object-cover"/><span className="min-w-0 flex-1"><span className="block truncate font-bold text-slate-900">{selectedUser.name}</span>{!isOnline ? <span className="block text-[11px] text-slate-400">Offline. Reconnect to load messages</span> : !isConnected ? <span className="block text-[11px] text-slate-400">Connecting…</span> : null}</span></button>
+            <button type="button" onClick={()=>onViewProfile(selectedUser.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left"><PresenceAvatar user={selectedUser} size={40} online={onlineSet.has(selectedUser.id)} /><span className="min-w-0 flex-1"><span className="block truncate font-bold text-slate-900">{selectedUser.name}</span>{!isOnline ? <span className="block text-[11px] text-slate-400">Offline. Reconnect to load messages</span> : !isConnected ? <span className="block text-[11px] text-slate-400">Connecting…</span> : lastSeenLabel(onlineSet.has(selectedUser.id), selectedUser.lastSeen) ? <span className={`block text-[11px] ${onlineSet.has(selectedUser.id) ? 'font-semibold text-emerald-600' : 'text-slate-500'}`}>{lastSeenLabel(onlineSet.has(selectedUser.id), selectedUser.lastSeen)}</span> : null}</span></button>
             <button type="button" onClick={()=>startDmCall('audio')} title="Voice call" aria-label="Voice call" className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100"><Phone size={20}/></button>
             <button type="button" onClick={()=>startDmCall('video')} title="Video call" aria-label="Video call" className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100"><Video size={20}/></button>
             <div className="relative">
