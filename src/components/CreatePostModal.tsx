@@ -4,7 +4,8 @@ import { compressImage } from '../utils/image';
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { X, Image, Smile, Globe, Users, Lock, Sparkles, UserPlus } from 'lucide-react';
+import { X, Image, Smile, Globe, Users, Lock, Sparkles, UserPlus, Mic } from 'lucide-react';
+import { HoldToRecordButton, VoicePlayer, type VoiceClip } from './VoicePost';
 import { TagFriendsPicker } from './TagFriendsPicker';
 import { parseVideoLink } from '../utils/embedVideo';
 import { LinkPreviewCard } from './LinkPreviewCard';
@@ -21,6 +22,8 @@ interface CreatePostModalProps {
   forcePublic?: boolean;
   title?: string;
   videoOnly?: boolean;
+  /** Open straight into the voice recorder (Feed composer mic button). */
+  startWithVoice?: boolean;
 }
 
 const FEELINGS = [
@@ -41,7 +44,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   onPostCreated,
   forcePublic = false,
   title,
-  videoOnly = false
+  videoOnly = false,
+  startWithVoice = false
 }) => {
   const { user } = useAuth();
   const { t } = usePreferences();
@@ -77,13 +81,15 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [videoResolution, setVideoResolution] = useState('');
   const [previewUnavailable, setPreviewUnavailable] = useState(false);
   const [previewReady, setPreviewReady] = useState(false);
+  const [showVoice, setShowVoice] = useState(false);
+  const [voiceClip, setVoiceClip] = useState<VoiceClip | null>(null);
   const previewUrlsRef = useRef<string[]>([]);
   const draggedMediaIndex = useRef<number | null>(null);
   const uploadAbortControllerRef = useRef<AbortController | null>(null);
   const cancelUpload = () => uploadAbortControllerRef.current?.abort();
   const postDisabled = isSubmitting || uploadError || (videoOnly
     ? !mediaFile || mediaType !== 'video' || mediaDuration <= 0 || mediaDuration > 90
-    : !content.trim() && !mediaFile);
+    : !content.trim() && !mediaFile && !voiceClip);
   useBackButton(isOpen, () => {
     if (videoOnly && isSubmitting) cancelUpload();
     else onClose();
@@ -104,7 +110,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     previewUrlsRef.current.forEach(URL.revokeObjectURL);
   }, []);
   useEffect(() => {
-    if (isOpen) return;
+    if (isOpen) { if (startWithVoice && !videoOnly) setShowVoice(true); return; }
+    setShowVoice(false);
+    setVoiceClip(current => { if (current) URL.revokeObjectURL(current.previewUrl); return null; });
     previewUrlsRef.current.forEach(URL.revokeObjectURL);
     previewUrlsRef.current = [];
     setMediaUrl('');
@@ -118,9 +126,25 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setVideoResolution('');
     setPreviewReady(false);
     setPreviewUnavailable(false);
-  }, [isOpen]);
+  }, [isOpen, startWithVoice, videoOnly]);
 
   if (!isOpen) return null;
+
+  const discardVoice = () => {
+    if (voiceClip) URL.revokeObjectURL(voiceClip.previewUrl);
+    setVoiceClip(null);
+  };
+  const handleVoiceRecorded = (clip: VoiceClip) => {
+    // A voice post is audio-only: drop any selected photos/videos.
+    [mediaUrl, ...additionalMediaUrls].forEach(revokePreviewUrl);
+    setMediaUrl('');
+    setMediaFile(null);
+    setAdditionalMediaUrls([]);
+    setAdditionalMediaFiles([]);
+    discardVoice();
+    setError('');
+    setVoiceClip(clip);
+  };
 
   const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const pickedFiles = Array.from(e.target.files || []);
@@ -258,7 +282,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     if (videoOnly && mediaDuration > 90) { setError('Video too long, please choose under 90s'); return; }
     if (videoOnly && mediaDuration <= 0) { setError('Could not read video duration. Choose another video.'); return; }
     if (videoOnly && content.trim().length > 2200) { setError('Caption too long. Keep Reel captions under 2,200 characters.'); return; }
-    if (!content.trim() && !mediaFile) return;
+    if (!content.trim() && !mediaFile && !voiceClip) return;
     if (videoOnly && showCompressionPrompt) { setError('Choose Compress & Upload or Upload Original to continue.'); return; }
 
     setIsSubmitting(true);
@@ -271,6 +295,28 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     uploadAbortControllerRef.current = uploadController;
     let submittedReelUrl = uploadedReelUrl;
     try {
+      if (!videoOnly && voiceClip) {
+        const audioUrl = await api.uploadFile(voiceClip.file);
+        const voicePost = await api.createPost({
+          content: content.trim(),
+          mediaUrl: audioUrl,
+          mediaType: 'audio',
+          mediaDuration: voiceClip.duration,
+          mediaSize: voiceClip.file.size,
+          feeling: feeling || undefined,
+          privacy: forcePublic ? 'public' : privacy,
+          taggedUserIds: taggedFriends.map(f => f.id)
+        });
+        confetti({ particleCount: 50, spread: 60, origin: { y: 0.8 } });
+        setContent('');
+        discardVoice();
+        setShowVoice(false);
+        setTaggedFriends([]);
+        setFeeling(null);
+        onPostCreated(voicePost);
+        onClose();
+        return;
+      }
       const files = [mediaFile, ...additionalMediaFiles].filter((file): file is File => Boolean(file));
       let uploadedUrls: string[];
       let reelSize = 0;
@@ -454,6 +500,22 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           {error && <div role="alert" className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-red-700"><span>{error}</span>{uploadError && <button type="button" onClick={() => void handleSubmit()} disabled={isSubmitting} className="min-h-10 rounded-lg bg-rose-600 px-3 py-1.5 text-white disabled:opacity-50">Retry Upload</button>}</div>}
           {successMessage && <p role="status" className="mx-4 mb-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">{successMessage}</p>}
 
+          {!videoOnly && (showVoice || voiceClip) && (
+            <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
+              {voiceClip ? (
+                <>
+                  <p className="mb-2 text-xs font-bold text-slate-600">Voice preview</p>
+                  <VoicePlayer src={voiceClip.previewUrl} duration={voiceClip.duration} onRemove={isSubmitting ? undefined : discardVoice} />
+                  <p className="mt-2 text-[11px] text-slate-500">Tap Post to share, or the bin to record again.</p>
+                </>
+              ) : (
+                <div className="flex flex-col items-center py-2">
+                  <HoldToRecordButton disabled={isSubmitting} onRecorded={handleVoiceRecorded} onError={setError} />
+                </div>
+              )}
+            </div>
+          )}
+
           {mediaUrl && mediaType === 'image' && (
             <div className="mt-3">
               <PostPhotoGrid
@@ -535,9 +597,22 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                   multiple={!videoOnly}
                   className="hidden"
                   disabled={isSubmitting}
-                  onChange={handleMediaUpload}
+                  onChange={event => { discardVoice(); setShowVoice(false); void handleMediaUpload(event); }}
                 />
               </label>
+
+              {!videoOnly && (
+                <button
+                  type="button"
+                  onClick={() => setShowVoice(v => !v || Boolean(voiceClip))}
+                  disabled={isSubmitting}
+                  className={`p-2 rounded-full transition ${showVoice || voiceClip ? 'bg-rose-100 text-rose-600' : 'text-rose-500 hover:bg-rose-50'}`}
+                  title="Voice post (hold to record, up to 30s)"
+                  aria-label="Voice post"
+                >
+                  <Mic size={20} />
+                </button>
+              )}
 
               <button
                 type="button"

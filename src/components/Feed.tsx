@@ -13,7 +13,7 @@ import { CreatePostModal } from './CreatePostModal';
 import { DashboardHeader } from './DashboardHeader';
 import { LiveFeedBanner } from './LiveFeedBanner';
 import { useLowDataMode } from '../services/lowData';
-import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown, UserPlus, Sparkles, Users } from 'lucide-react';
+import { Video, Image, Smile, PenSquare, RefreshCw, ArrowDown, UserPlus, Sparkles, Users, Mic } from 'lucide-react';
 import { VerifiedBadge } from './VerifiedBadge';
 
 
@@ -40,6 +40,7 @@ export const Feed: React.FC<FeedProps> = ({
   const { onNewPost, onPostUpdated, onPostDeleted } = useSocket();
   const [posts, setPosts] = useState<Post[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createWithVoice, setCreateWithVoice] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -232,7 +233,7 @@ export const Feed: React.FC<FeedProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-3 pt-2 text-xs font-semibold text-slate-600">
+        <div className="grid grid-cols-4 pt-2 text-xs font-semibold text-slate-600">
           <button
             onClick={onOpenGoLive}
             className="py-2 hover:bg-pink-50 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-pink-600 font-bold dark:hover:bg-white/5"
@@ -247,6 +248,16 @@ export const Feed: React.FC<FeedProps> = ({
           >
             <Image size={18} />
             <span className="text-slate-600 hidden sm:inline">{t('photo_video')}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setCreateWithVoice(true); setIsCreateModalOpen(true); }}
+            aria-label="Voice post"
+            className="py-2 hover:bg-rose-50 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-rose-500 dark:hover:bg-white/5"
+          >
+            <Mic size={18} />
+            <span className="text-slate-600 hidden sm:inline">Voice</span>
           </button>
 
           <button
@@ -389,7 +400,8 @@ export const Feed: React.FC<FeedProps> = ({
       {/* Create Post Modal */}
       <CreatePostModal
         isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        startWithVoice={createWithVoice}
+        onClose={() => { setIsCreateModalOpen(false); setCreateWithVoice(false); }}
         onPostCreated={() => loadPosts(true)}
       />
     </div>

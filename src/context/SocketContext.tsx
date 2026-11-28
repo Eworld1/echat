@@ -205,7 +205,7 @@ function startSynthRingtone(ringtoneId = 'classic', kind: 'incoming' | 'outgoing
       if (timer) clearTimeout(timer);
       ctx.removeEventListener('statechange', onStateChange);
       oscillators.forEach(oscillator => {
-        try { oscillator.stop(); } catch {}
+        try { oscillator.stop(); } catch { /* ignore */ }
       });
       oscillators.clear();
     };
@@ -356,7 +356,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (localStreamRef.current) {
       try {
         localStreamRef.current.getTracks().forEach(track => track.stop());
-      } catch {}
+      } catch { /* ignore */ }
       localStreamRef.current = null;
     }
     if (disconnectTimerRef.current) {
@@ -375,7 +375,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         pc.onicecandidate = null;
         pc.onconnectionstatechange = null;
         pc.close();
-      } catch {}
+      } catch { /* ignore */ }
       peerConnectionRef.current = null;
     }
     currentCallDocIdRef.current = null;

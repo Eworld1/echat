@@ -60,7 +60,7 @@ const CallScreenView: React.FC = () => {
       const samples = new Uint8Array(analyser.frequencyBinCount);
       const read = () => { analyser.getByteTimeDomainData(samples); const rms = Math.sqrt(samples.reduce((sum, value) => sum + (value - 128) ** 2, 0) / samples.length); setMicLevel(Math.min(100, Math.round(rms * 3))); frame = requestAnimationFrame(read); };
       void context.resume(); read();
-    } catch { }
+    } catch { /* ignore */ }
     return () => { cancelAnimationFrame(frame); void context?.close(); };
   }, [localStreamRef, activeCall?.status]);
 

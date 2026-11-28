@@ -45,7 +45,6 @@ import {
 import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
 import { GO_LIVE, getGoLiveEligibility } from '../config/featureFlags';
-// @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
 import { AudioPresets, ConnectionQuality, ParticipantEvent, Room, Track, VideoPresets, type LocalTrackPublication } from 'livekit-client';
 
 type VideoQuality = 'auto' | '1080p' | '720p' | '480p' | 'saver';
@@ -215,9 +214,9 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
       const now = Date.now();
       if (now - lastCaptionSentRef.current >= 1000 && event.results[event.results.length - 1]?.isFinal) { lastCaptionSentRef.current = now; sendLiveCaption(currentSession.id, text); }
     };
-    recognition.onend = () => { if (recognitionRef.current === recognition && captionsEnabled) { try { recognition.start(); } catch {} } };
-    try { recognition.start(); } catch {}
-    return () => { recognitionRef.current = null; try { recognition.stop(); } catch {} };
+    recognition.onend = () => { if (recognitionRef.current === recognition && captionsEnabled) { try { recognition.start(); } catch { /* ignore */ } } };
+    try { recognition.start(); } catch { /* ignore */ }
+    return () => { recognitionRef.current = null; try { recognition.stop(); } catch { /* ignore */ } };
   }, [isBroadcasting, currentSession?.id, captionsEnabled, captionLanguage, sendLiveCaption]);
 
   const startScreenShare = async () => {
@@ -376,7 +375,7 @@ export const GoLiveModal: React.FC<GoLiveModalProps> = ({
             const fallback = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             if (isMounted) { mediaStreamRef.current?.getTracks().forEach(track => track.stop()); mediaStreamRef.current = fallback; if (videoPreviewRef.current) videoPreviewRef.current.srcObject = fallback; setHasCameraPermission(true); setSelectedCameraId(''); }
             return;
-          } catch { }
+          } catch { /* ignore */ }
         }
         if (isMounted) {
           setHasCameraPermission(false);

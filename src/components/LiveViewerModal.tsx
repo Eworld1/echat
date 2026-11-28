@@ -14,7 +14,6 @@ import { db } from '../services/firebase';
 import { LiveUserActions } from './LiveUserActions';
 import { isLowDataMode } from '../services/lowData';
 import { Ban, Bookmark, ChevronDown, Maximize, Minimize, MoreVertical, Pause, Play, RotateCw, Settings2, ThumbsDown, Trash2 } from 'lucide-react';
-// @ts-ignore The SDK package is installed by Vercel's production install; local package typings may be absent in managed workspaces.
 import { Room, RoomEvent, Track, VideoQuality } from 'livekit-client';
 import {
   X,

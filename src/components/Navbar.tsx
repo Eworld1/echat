@@ -389,7 +389,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       const updated = [clean, ...prev.filter(i => i.toLowerCase() !== clean.toLowerCase())].slice(0, 8);
       try {
         localStorage.setItem('echat_recent_searches', JSON.stringify(updated));
-      } catch {}
+      } catch { /* ignore */ }
       return updated;
     });
   };
@@ -400,7 +400,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       const updated = prev.filter(i => i !== term);
       try {
         localStorage.setItem('echat_recent_searches', JSON.stringify(updated));
-      } catch {}
+      } catch { /* ignore */ }
       return updated;
     });
   };
@@ -410,7 +410,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     setRecentSearches([]);
     try {
       localStorage.removeItem('echat_recent_searches');
-    } catch {}
+    } catch { /* ignore */ }
   };
 
   const handleSelectUser = (targetUser: User) => {

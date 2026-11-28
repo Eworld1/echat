@@ -17,6 +17,7 @@ import confetti from 'canvas-confetti';
 import { useBackButton } from '../hooks/useBackButton';
 import { PhotoViewer } from './PhotoViewer';
 import { PostPhotoGrid } from './PostPhotoGrid';
+import { HoldToRecordButton, VoicePlayer, type VoiceClip } from './VoicePost';
 import { LowDataVideoCover } from './LowData';
 import { isUnlocked, lightVideoUrl, useLowDataMode } from '../services/lowData';
 import { getPostImageUrls } from '../utils/postImages';
@@ -97,6 +98,9 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [textExpanded, setTextExpanded] = useState(false);
   const [likePop, setLikePop] = useState(0);
   const [commentInput, setCommentInput] = useState('');
+  const [voiceComment, setVoiceComment] = useState<VoiceClip | null>(null);
+  const [sendingVoiceComment, setSendingVoiceComment] = useState(false);
+  const [voiceCommentError, setVoiceCommentError] = useState('');
   const [showOptions, setShowOptions] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportReason, setReportReason] = useState('Inappropriate or offensive content');
@@ -323,7 +327,8 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   const isSaved = Boolean(user?.savedPosts?.includes(post.id));
-  const postMediaUrls = getPostImageUrls(post);
+  const isVoicePost = post.mediaType === 'audio';
+  const postMediaUrls = isVoicePost ? [] : getPostImageUrls(post);
   const openPhoto = (index: number) => {
     if (!window.location.pathname.startsWith('/photo/')) window.history.pushState({ ...window.history.state, echatPhotoViewer: true }, '', `/photo/${encodeURIComponent(post.id)}/${index}`);
     setPhotoIndex(index);
@@ -365,8 +370,31 @@ export const PostCard: React.FC<PostCardProps> = ({
     }
   };
 
+  const discardVoiceComment = () => {
+    if (voiceComment) URL.revokeObjectURL(voiceComment.previewUrl);
+    setVoiceComment(null);
+  };
+
+  const sendVoiceComment = async () => {
+    if (!voiceComment || !user || sendingVoiceComment) return;
+    setSendingVoiceComment(true);
+    setVoiceCommentError('');
+    try {
+      const audioUrl = await api.uploadFile(voiceComment.file);
+      const updated = await api.commentPost(post.id, commentInput.trim(), { url: audioUrl, duration: voiceComment.duration });
+      discardVoiceComment();
+      setCommentInput('');
+      onPostUpdated(updated);
+    } catch (err) {
+      setVoiceCommentError(err instanceof Error ? err.message : 'Could not send voice comment.');
+    } finally {
+      setSendingVoiceComment(false);
+    }
+  };
+
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (voiceComment) { void sendVoiceComment(); return; }
     if (!commentInput.trim() || !user) return;
     try {
       const updated = await api.commentPost(post.id, commentInput.trim());
@@ -653,7 +681,9 @@ export const PostCard: React.FC<PostCardProps> = ({
                 <p className="px-3 pb-3 text-sm text-slate-800 whitespace-pre-wrap break-words">{post.sharedPost.content}</p>
               )}
               {post.sharedPost.mediaUrl && (
-                post.sharedPost.mediaType === 'video'
+                post.sharedPost.mediaType === 'audio'
+                  ? <div className="px-3 pb-3"><VoicePlayer src={assetUrl(post.sharedPost.mediaUrl)} /></div>
+                  : post.sharedPost.mediaType === 'video'
                   ? <SharedVideo url={post.sharedPost.mediaUrl} />
                   : lowData ? <PostPhotoGrid urls={[post.sharedPost.mediaUrl]} altPrefix="Shared photo" />
                   : <img src={post.sharedPost.mediaUrl} alt="" className="w-full max-h-80 object-cover" />
@@ -662,6 +692,13 @@ export const PostCard: React.FC<PostCardProps> = ({
           ); })() : (
             <p className="p-4 text-xs text-slate-500">This post is no longer available.</p>
           )}
+        </div>
+      )}
+
+      {/* Voice post */}
+      {isVoicePost && post.mediaUrl && (
+        <div className="px-4 pb-3">
+          <VoicePlayer src={assetUrl(post.mediaUrl)} duration={post.mediaDuration} />
         </div>
       )}
 
@@ -830,17 +867,27 @@ export const PostCard: React.FC<PostCardProps> = ({
                 onChange={(e) => setCommentInput(e.target.value)}
                 placeholder="Write a comment..."
                 aria-label="Write a comment"
-                className="min-h-[44px] w-full rounded-full border border-slate-200 bg-[#F0F2F5] py-2 pl-4 pr-16 text-base text-slate-800 transition focus:border-blue-400 focus:bg-white focus:outline-hidden"
+                className="min-h-[44px] w-full rounded-full border border-slate-200 bg-[#F0F2F5] py-2 pl-4 pr-28 text-base text-slate-800 transition focus:border-blue-400 focus:bg-white focus:outline-hidden"
               />
+              <span className="absolute right-[4.5rem]">
+                <HoldToRecordButton compact disabled={sendingVoiceComment} onRecorded={clip => { discardVoiceComment(); setVoiceCommentError(''); setVoiceComment(clip); }} onError={setVoiceCommentError} />
+              </span>
               <button
                 type="submit"
-                disabled={!commentInput.trim()}
+                disabled={(!commentInput.trim() && !voiceComment) || sendingVoiceComment}
                 className="absolute right-1.5 flex min-h-8 items-center gap-1 rounded-full bg-[#1877F2] px-3 text-xs font-bold text-white transition hover:bg-[#166FE5] disabled:bg-slate-300 cursor-pointer"
               >
                 <Send size={13} />Post
               </button>
             </div>
           </form>
+          {voiceComment && (
+            <div className="ml-10 flex items-center gap-2">
+              <div className="flex-1"><VoicePlayer compact src={voiceComment.previewUrl} duration={voiceComment.duration} onRemove={sendingVoiceComment ? undefined : discardVoiceComment} /></div>
+              <button type="button" onClick={() => void sendVoiceComment()} disabled={sendingVoiceComment} className="flex min-h-8 items-center gap-1 rounded-full bg-[#1877F2] px-3 text-xs font-bold text-white disabled:bg-slate-300"><Send size={13} />{sendingVoiceComment ? 'Sending…' : 'Send'}</button>
+            </div>
+          )}
+          {voiceCommentError && <p role="alert" className="ml-10 text-xs font-semibold text-red-600">{voiceCommentError}</p>}
 
           {/* Comments list */}
           <div className="space-y-2.5 pt-1">
@@ -861,9 +908,10 @@ export const PostCard: React.FC<PostCardProps> = ({
                       >
                         {commentAuthor.name}
                       </p>
-                      <p className="text-xs text-slate-700 mt-0.5 leading-relaxed break-words">
+                      {comment.content && <p className="text-xs text-slate-700 mt-0.5 leading-relaxed break-words">
                         {comment.content}
-                      </p>
+                      </p>}
+                      {comment.audioUrl && <div className="mt-1 w-64 max-w-full"><VoicePlayer compact src={assetUrl(comment.audioUrl)} duration={comment.audioDuration} /></div>}
                       <VideoLinkCard text={comment.content} />
                       <LinkPreviewCard text={comment.content} compact />
                     </div>

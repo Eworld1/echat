@@ -243,7 +243,7 @@ export function listenHostLive(hostId: string, fallbackStreamId: string, onState
     if (closed) return;
     onState({ loaded: true, stream: latest, ended, stale: Boolean(latest && !ended && !isLiveFresh(latest)), source });
   };
-  const useServer = () => {
+  const pollServer = () => {
     if (poll !== null || closed) return;
     source = 'server';
     stopFirestore?.();
@@ -268,16 +268,16 @@ export function listenHostLive(hostId: string, fallbackStreamId: string, onState
     void check();
     poll = window.setInterval(() => { void check(); }, 4000);
   };
-  if (!hostId) useServer();
+  if (!hostId) pollServer();
   else {
     stopFirestore = onSnapshot(doc(db, 'lives', hostId), snapshot => {
       if (closed) return;
-      if (!snapshot.exists()) { useServer(); return; }
+      if (!snapshot.exists()) { pollServer(); return; }
       const data = snapshot.data();
       latest = hostLiveToStream(hostId, data);
       ended = data.status === 'ended';
       emit();
-    }, () => useServer());
+    }, () => pollServer());
   }
   const ticker = window.setInterval(() => { if (latest) emit(); }, 5000);
   return () => { closed = true; stopFirestore?.(); if (poll !== null) window.clearInterval(poll); window.clearInterval(ticker); };

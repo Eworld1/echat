@@ -34,7 +34,7 @@ export const VideoLinkCard: React.FC<{ text: string }> = ({ text }) => {
     rec.onresult = (event: any) => { const result = event.results[event.results.length - 1]; if (result?.[0]) setCaption(result[0].transcript); };
     rec.onerror = () => setCcError('Captions unavailable');
     try { rec.start(); } catch { setCcError('Captions unavailable'); }
-    return () => { try { rec.stop(); } catch {} };
+    return () => { try { rec.stop(); } catch { /* ignore */ } };
   }, [playing, cc]);
   if (!link) return null;
   const source = link.kind === 'youtube' ? 'YouTube Live' : link.kind === 'facebook' ? 'Facebook Live' : 'Link preview';

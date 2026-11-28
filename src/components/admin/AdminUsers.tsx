@@ -186,7 +186,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUserId, onViewProfile, onCh
           <tbody className="divide-y divide-slate-100">
             {rows.map(u => (
               <tr key={u.id} className="hover:bg-slate-50/70">
-                <td className="p-2"><input type="checkbox" disabled={isProtected(u)} checked={selected.has(u.id)} onChange={() => setSelected(prev => { const n = new Set(prev); n.has(u.id) ? n.delete(u.id) : n.add(u.id); return n; })} aria-label={`Select ${u.name}`} /></td>
+                <td className="p-2"><input type="checkbox" disabled={isProtected(u)} checked={selected.has(u.id)} onChange={() => setSelected(prev => { const n = new Set(prev); if (n.has(u.id)) n.delete(u.id); else n.add(u.id); return n; })} aria-label={`Select ${u.name}`} /></td>
                 <td className="p-2">
                   <button onClick={() => onViewProfile(u.id)} className="flex items-center gap-2.5 text-left">
                     <span className="relative"><img src={u.avatar || initialsAvatar(u.name)} alt="" className="w-9 h-9 rounded-full object-cover bg-slate-100" />{u.isOnline && <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white" />}</span>

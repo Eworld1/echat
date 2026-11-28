@@ -1,7 +1,7 @@
 import { LEGACY_API_URL, apiUrl } from './apiBase';
 import { MAX_VIDEO_UPLOAD_BYTES, UploadCancelledError, uploadToCloudinary } from './upload';
 
-const cloudinaryFolderFor = (file: File) => file.type.startsWith('video/') ? 'echat/videos' : file.type.startsWith('image/') ? 'echat/images' : 'echat/files';
+const cloudinaryFolderFor = (file: File) => file.type.startsWith('video/') ? 'echat/videos' : file.type.startsWith('image/') ? 'echat/images' : file.type.startsWith('audio/') ? 'echat/audio' : 'echat/files';
 import type { AdminAnalytics, AdminSystemInfo, AuditEntry } from '../types/admin';
 import type {
   User,
@@ -539,7 +539,7 @@ export const api = {
     images?: string[];
     imagesCount?: number;
     v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown };
-    mediaType?: 'image' | 'video';
+    mediaType?: 'image' | 'video' | 'audio';
     type?: 'post' | 'reel';
     thumbnailUrl?: string;
     mediaDuration?: number;
@@ -604,11 +604,11 @@ export const api = {
     return post;
   },
 
-  async commentPost(postId: string, content: string): Promise<Post> {
+  async commentPost(postId: string, content: string, audio?: { url: string; duration: number }): Promise<Post> {
     const res = await fetch(apiUrl(`/api/posts/${postId}/comment`), {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ content })
+      body: JSON.stringify(audio ? { content, audioUrl: audio.url, audioDuration: audio.duration } : { content })
     });
     const post = await readResponse<Post>(res, 'Failed to post comment');
     invalidateApiReadCache('posts');

@@ -95,7 +95,7 @@ class Database {
             return { path: file, raw };
           }
         }
-      } catch {}
+      } catch { /* ignore */ }
     }
     return null;
   }
@@ -796,7 +796,7 @@ class Database {
     authorId: string,
     content: string,
     mediaUrl?: string,
-    mediaType?: 'image' | 'video',
+    mediaType?: 'image' | 'video' | 'audio',
     feeling?: string,
     privacy: 'public' | 'friends' | 'only_me' = 'public',
     extras: { taggedUserIds?: string[]; sharedPostId?: string; mediaUrls?: string[]; images?: string[]; imagesCount?: number; v2?: Post['v2']; type?: 'post' | 'reel' | 'story'; isReel?: boolean; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number } = {}
@@ -863,7 +863,7 @@ class Database {
     return post;
   }
 
-  addComment(postId: string, authorId: string, content: string): { post: Post; comment: Comment } | null {
+  addComment(postId: string, authorId: string, content: string, audio?: { url: string; duration: number }): { post: Post; comment: Comment } | null {
     const post = this.getPostById(postId);
     if (!post) return null;
     if (!post.comments) post.comments = [];
@@ -873,7 +873,8 @@ class Database {
       authorId,
       content,
       createdAt: Date.now(),
-      likes: []
+      likes: [],
+      ...(audio ? { audioUrl: audio.url, audioDuration: audio.duration } : {})
     };
     post.comments.push(comment);
     if (post.authorId !== authorId) {

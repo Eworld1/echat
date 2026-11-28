@@ -466,11 +466,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Sync with Express and retain its signed proof for protected live controls.
       let liveAuthToken: string | undefined;
-      try { liveAuthToken = (await api.login({ email: cleanEmail, password })).liveAuthToken; } catch {}
+      try { liveAuthToken = (await api.login({ email: cleanEmail, password })).liveAuthToken; } catch { /* ignore */ }
       try {
         const registered = await api.register({ name: profile.name, email: cleanEmail, password, dob: profile.dob || '2000-01-01', id: profile.id, termsAccepted: true });
         liveAuthToken = registered.liveAuthToken || liveAuthToken;
-      } catch {}
+      } catch { /* ignore */ }
       if (liveAuthToken) localStorage.setItem('echat_live_auth', liveAuthToken);
       setUser(await withServerSocial(profile));
 
@@ -802,7 +802,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const quickSwitchUser = async (userId: string) => {
     setIsLoading(true);
     try {
-      let targetUser = await getUserById(userId);
+      const targetUser = await getUserById(userId);
       if (targetUser) {
         localStorage.setItem('echat_user_id', targetUser.id);
         localStorage.setItem('echat_token', targetUser.id);

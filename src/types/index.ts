@@ -28,13 +28,15 @@ export interface Comment {
   id: string; postId: string; authorId: string;
   author?: { id: string; name: string; avatar: string }; // FIX: optional partial
   content: string; createdAt: number; likes: string[];
+  /** Voice comment (Cloudinary URL) and its length in seconds. */
+  audioUrl?: string; audioDuration?: number;
 }
 
 export interface Post {
   id: string; authorId: string; author?: User; // FIX: optional
   type?: 'post' | 'reel' | 'story';
   isReel?: boolean; videoType?: string; aspectRatio?: number | string;
-  content: string; mediaUrl?: string; mediaUrls?: string[]; image?: string; images?: string[] | string | { url: string; id?: string; order?: number }[]; imagesCount?: number; v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown }; mediaType?: 'image' | 'video'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
+  content: string; mediaUrl?: string; mediaUrls?: string[]; image?: string; images?: string[] | string | { url: string; id?: string; order?: number }[]; imagesCount?: number; v2?: { feeling?: string; privacy?: 'public' | 'friends' | 'only_me'; [key: string]: unknown }; mediaType?: 'image' | 'video' | 'audio'; thumbnailUrl?: string; mediaDuration?: number; mediaSize?: number;
   feeling?: string; privacy: 'public' | 'friends' | 'only_me';
   reactions: Reaction[]; comments: Comment[]; sharesCount: number;
   viewsCount?: number; views?: string[]; isReported: boolean;
@@ -45,7 +47,7 @@ export interface Post {
   taggedUsers?: { id: string; name: string; avatar: string }[];
   sharedPostId?: string;
   /** Embedded original when this post is a re-share (null when the original was deleted/private). */
-  sharedPost?: { id: string; content: string; mediaUrl?: string; mediaType?: 'image' | 'video'; createdAt: number; author: { id?: string; name: string; avatar: string } } | null;
+  sharedPost?: { id: string; content: string; mediaUrl?: string; mediaType?: 'image' | 'video' | 'audio'; createdAt: number; author: { id?: string; name: string; avatar: string } } | null;
 }
 
 export interface Story {

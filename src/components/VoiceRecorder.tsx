@@ -111,7 +111,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSendVoice, onCan
         gainNodeRef.current.gain.value = boost ? 1.8 * playbackVolume / 100 : playbackVolume / 100;
         audioPlayerRef.current.volume = 1;
         void audioContextRef.current.resume();
-      } catch { }
+      } catch { /* ignore */ }
     }
     if (audioPlayerRef.current) {
       audioPlayerRef.current.onended = () => setIsPlaying(false);

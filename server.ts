@@ -1435,15 +1435,18 @@ app.post('/api/posts', (req: Request, res: Response) => {
         .slice(0, 20)
     : [];
 
-  const requestedType = type === 'reel' && mediaType === 'video' ? 'reel' : 'post';
+  const safeMediaType: 'image' | 'video' | 'audio' | undefined = mediaType === 'image' || mediaType === 'video' || mediaType === 'audio' ? mediaType : undefined;
+  if (safeMediaType === 'audio' && (!primaryMediaUrl || !/^https:\/\//i.test(primaryMediaUrl))) return res.status(400).json({ error: 'Voice post needs an uploaded audio file' });
+  if (safeMediaType === 'audio' && safeDuration !== undefined && safeDuration > 31) return res.status(400).json({ error: 'Voice posts can be up to 30 seconds' });
+  const requestedType = type === 'reel' && safeMediaType === 'video' ? 'reel' : 'post';
   const post = db.createPost(
     authUser.id,
     content || '',
     primaryMediaUrl,
-    mediaType,
+    safeMediaType,
     feeling,
     safePrivacy,
-    { taggedUserIds: cleanTaggedIds, mediaUrls, images: mediaType === 'image' ? mediaUrls : undefined, imagesCount: mediaType === 'image' ? mediaUrls.length || (primaryMediaUrl ? 1 : 0) : undefined, v2: v2 ? { feeling: typeof v2.feeling === 'string' ? v2.feeling.slice(0, 80) : undefined, privacy: safePrivacy } : undefined, type: requestedType, isReel: requestedType === 'reel', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
+    { taggedUserIds: cleanTaggedIds, mediaUrls, images: safeMediaType === 'image' ? mediaUrls : undefined, imagesCount: safeMediaType === 'image' ? mediaUrls.length || (primaryMediaUrl ? 1 : 0) : undefined, v2: v2 ? { feeling: typeof v2.feeling === 'string' ? v2.feeling.slice(0, 80) : undefined, privacy: safePrivacy } : undefined, type: requestedType, isReel: requestedType === 'reel', thumbnailUrl: safeThumbnail, mediaDuration: safeDuration, mediaSize: safeMediaSize }
   );
   if (actingPage) db.assignPostPageIdentity(post.id, actingPage.id);
 
@@ -1512,12 +1515,17 @@ app.post('/api/posts/:id/comment', (req: Request, res: Response) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ error: 'Not authenticated' });
 
-  const { content } = req.body;
-  if (!content || !content.trim()) {
+  const text = typeof req.body.content === 'string' ? req.body.content.trim() : '';
+  const audioUrl = typeof req.body.audioUrl === 'string' && /^https:\/\//i.test(req.body.audioUrl) ? req.body.audioUrl : '';
+  const audioDuration = Number(req.body.audioDuration);
+  if (!text && !audioUrl) {
     return res.status(400).json({ error: 'Comment content cannot be empty' });
   }
+  if (audioUrl && (!Number.isFinite(audioDuration) || audioDuration <= 0 || audioDuration > 31)) {
+    return res.status(400).json({ error: 'Voice comments can be up to 30 seconds' });
+  }
 
-  const result = db.addComment(req.params.id, authUser.id, content.trim());
+  const result = db.addComment(req.params.id, authUser.id, text, audioUrl ? { url: audioUrl, duration: Math.round(audioDuration) } : undefined);
   if (!result) return res.status(404).json({ error: 'Post not found' });
 
   const populated = populatePost(result.post);

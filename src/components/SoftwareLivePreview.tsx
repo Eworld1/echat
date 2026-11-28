@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-// @ts-ignore The SDK package is installed by Vercel's production install; local typings may be absent.
 import { Room, RoomEvent, Track } from 'livekit-client';
 import { api } from '../services/api';
 
